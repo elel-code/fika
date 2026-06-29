@@ -190,9 +190,10 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   preview dirty hash 反复走 layout/projection；旧的 scene lookup 入口只保留给测试和局部
   helper。
 - SceneFrame projection reuse：
-  主窗口 render / prewarm 先用一次 layout 生成 prepared projection layouts，visible slot
-  pool 直接消费其中的可见路径，随后 dirty key、damage snapshot、metadata/icon/text prewarm
-  和 `ShellScene::build_frame` 共享同一组 frame projections；`build_frame` 降为只读 scene +
+  主窗口 render / prewarm 先用 `prepare_frame_projection_layouts` 生成一次 prepared
+  projection layouts，visible slot pool 直接消费其中的可见路径，随后通过
+  `SceneFrameProjections` 把同一组 frame projections 传给 dirty key、damage snapshot、
+  metadata/icon/text prewarm 和 `ShellScene::build_frame`；`build_frame` 降为只读 scene +
   supplied projections，不再在 paint 准备阶段再次计算布局。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、

@@ -169,7 +169,7 @@ Dolphin reference:
 - Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp
 - Symbol: KItemListView::doLayout / updateVisibleItems / paint
 - Dolphin boundary: layout 阶段维护的可见 item/widget 集合会被 paint、role update 和局部更新复用；paint 不再为同一帧重新计算可见集合。
-- Fika mapping: src/main.rs::ShellScene::pane_projection_layouts / update_visible_slot_pools_for_projection_layouts / WgpuState::render / prewarm_scene_caches / ShellScene::build_frame；src/shell/render/frame.rs::prepare_scene_frame。
+- Fika mapping: src/main.rs::ShellScene::prepare_frame_projection_layouts / update_visible_slot_pools_for_projection_layouts / pane_projections_from_layouts / WgpuState::render / prewarm_scene_caches / ShellScene::build_frame；src/shell/render/frame.rs::SceneFrameProjections / prepare_scene_frame。
 - Divergence: Dolphin 的可见集合是长期 widget map；Fika 仍使用每帧临时 `ShellPaneProjection`，但现在先用一次 layout 产出 prepared projection layouts，visible slot pool 直接消费这份 layout 的可见路径，随后 dirty key、damage、metadata/icon/text prewarm 和 SceneFrame paint 共用同一组 projections，避免 visible slot 更新和主帧 build 阶段分别重跑 layout/projection。
 - Verification: cargo fmt；cargo check；cargo test prepared_pane_projections_match_direct_projection；cargo test render_dirty_key_with_projections_matches_scene_lookup；cargo test；git diff --check。
 ```

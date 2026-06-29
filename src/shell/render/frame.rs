@@ -29,6 +29,28 @@ pub(crate) struct SceneFrame {
     pub(crate) vertex_upload_stats: VertexBufferUploadStats,
 }
 
+pub(crate) struct SceneFrameProjections<'a> {
+    projections: Vec<ShellPaneProjection<'a>>,
+    layout_us: u128,
+}
+
+impl<'a> SceneFrameProjections<'a> {
+    pub(crate) fn new(projections: Vec<ShellPaneProjection<'a>>, layout_us: u128) -> Self {
+        Self {
+            projections,
+            layout_us,
+        }
+    }
+
+    pub(crate) fn projections(&self) -> &[ShellPaneProjection<'a>] {
+        &self.projections
+    }
+
+    pub(crate) fn layout_us(&self) -> u128 {
+        self.layout_us
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SceneFrameWorkPending {
     pub(crate) metadata: bool,
@@ -109,8 +131,7 @@ pub(crate) fn prepare_scene_frame(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     scene: &ShellScene,
-    projections: &[ShellPaneProjection<'_>],
-    projection_layout_us: u128,
+    frame_projections: &SceneFrameProjections<'_>,
     size: PhysicalSize<u32>,
     reason: &str,
 ) -> SceneFrame {
@@ -160,8 +181,8 @@ pub(crate) fn prepare_scene_frame(
             );
             let scene_frame = scene.build_frame(
                 size,
-                projections,
-                projection_layout_us,
+                frame_projections.projections(),
+                frame_projections.layout_us(),
                 &mut text_builder,
                 &mut icon_builder,
                 Some(&mut overlay_text_builder),
@@ -220,8 +241,8 @@ pub(crate) fn prepare_scene_frame(
             );
             let scene_frame = scene.build_frame(
                 size,
-                projections,
-                projection_layout_us,
+                frame_projections.projections(),
+                frame_projections.layout_us(),
                 &mut text_builder,
                 &mut icon_builder,
                 None,

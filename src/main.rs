@@ -303,7 +303,9 @@ use shell::render::damage_bounds::{DamageScissorRect, ShellRenderDamage, ShellRe
 use shell::render::damage_bounds::{damage_scissor_rect, full_surface_rect, rect_area};
 use shell::render::damage_snapshot::ShellRenderDamageSnapshot;
 use shell::render::dirty_key::ShellRenderDirtyKey;
-use shell::render::frame::{SceneFrame, prepare_dialog_frame, prepare_scene_frame};
+use shell::render::frame::{
+    SceneFrame, SceneFrameProjections, prepare_dialog_frame, prepare_scene_frame,
+};
 #[cfg(test)]
 use shell::render::gpu::upload_vertex_hash_for_test;
 use shell::render::gpu::{
@@ -2536,6 +2538,17 @@ struct ShellPreparedPaneProjection {
     geometry: ShellPaneGeometry,
     visible_items: Vec<ShellPreparedPaneVisibleItem>,
     scroll_metrics: ShellPaneScrollMetrics,
+}
+
+struct ShellPreparedFrameProjectionLayouts {
+    layouts: Vec<ShellPreparedPaneProjection>,
+    layout_us: u128,
+}
+
+impl ShellPreparedFrameProjectionLayouts {
+    fn layouts(&self) -> &[ShellPreparedPaneProjection] {
+        &self.layouts
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -8475,11 +8488,19 @@ impl ShellScene {
         self.pane_projection_from_prepared(prepared)
     }
 
-    fn pane_projection_layouts(&self, size: PhysicalSize<u32>) -> Vec<ShellPreparedPaneProjection> {
-        ShellPaneId::ALL
+    fn prepare_frame_projection_layouts(
+        &self,
+        size: PhysicalSize<u32>,
+    ) -> ShellPreparedFrameProjectionLayouts {
+        let projection_layout_start = Instant::now();
+        let layouts = ShellPaneId::ALL
             .into_iter()
             .filter_map(|kind| self.pane_projection_layout(kind, size))
-            .collect()
+            .collect();
+        ShellPreparedFrameProjectionLayouts {
+            layouts,
+            layout_us: projection_layout_start.elapsed().as_micros(),
+        }
     }
 
     fn pane_projection_layout(
@@ -8545,12 +8566,14 @@ impl ShellScene {
 
     fn pane_projections_from_layouts(
         &self,
-        layouts: Vec<ShellPreparedPaneProjection>,
-    ) -> Vec<ShellPaneProjection<'_>> {
-        layouts
+        layouts: ShellPreparedFrameProjectionLayouts,
+    ) -> SceneFrameProjections<'_> {
+        let projections = layouts
+            .layouts
             .into_iter()
             .filter_map(|prepared| self.pane_projection_from_prepared(prepared))
-            .collect()
+            .collect();
+        SceneFrameProjections::new(projections, layouts.layout_us)
     }
 
     fn update_visible_slot_pools_for_projection_layouts(
@@ -8582,8 +8605,8 @@ impl ShellScene {
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn update_visible_slot_pools(&mut self, size: PhysicalSize<u32>) -> ShellVisibleItemSlotStats {
-        let layouts = self.pane_projection_layouts(size);
-        self.update_visible_slot_pools_for_projection_layouts(&layouts)
+        let layouts = self.prepare_frame_projection_layouts(size);
+        self.update_visible_slot_pools_for_projection_layouts(layouts.layouts())
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -12847,16 +12870,15 @@ impl WgpuState {
         let total_start = Instant::now();
         let metadata_result_stats = scene.drain_metadata_role_results();
         let role_start = Instant::now();
-        let projection_layout_start = Instant::now();
-        let projection_layouts = scene.pane_projection_layouts(self.size);
-        scene.update_visible_slot_pools_for_projection_layouts(&projection_layouts);
-        let projections = scene.pane_projections_from_layouts(projection_layouts);
-        let projection_layout_us = projection_layout_start.elapsed().as_micros();
+        let projection_layouts = scene.prepare_frame_projection_layouts(self.size);
+        scene.update_visible_slot_pools_for_projection_layouts(projection_layouts.layouts());
+        let frame_projections = scene.pane_projections_from_layouts(projection_layouts);
         let _folder_preview_role_stats =
-            scene.update_folder_preview_roles_for_projections(&projections);
+            scene.update_folder_preview_roles_for_projections(frame_projections.projections());
         let folder_preview_results = scene.drain_folder_preview_role_results();
-        let metadata_role_stats = scene.prewarm_file_metadata_roles(&projections);
-        for projection in &projections {
+        let metadata_role_stats =
+            scene.prewarm_file_metadata_roles(frame_projections.projections());
+        for projection in frame_projections.projections() {
             if let Some(item) = projection.visible_items.first() {
                 let icon_size = item
                     .layout
@@ -12869,20 +12891,20 @@ impl WgpuState {
             }
         }
         let role_stats = scene.prewarm_visible_file_icon_roles(
-            &projections,
+            frame_projections.projections(),
             &mut self.icon_renderer.resolver,
             reason,
         );
         let scene_icon_raster_prewarm_stats = if visible_exact_icon_roles_enabled_for_frame(reason)
         {
             self.icon_renderer
-                .prewarm_small_directory_file_icon_rasters(&projections)
+                .prewarm_small_directory_file_icon_rasters(frame_projections.projections())
         } else {
             IconRasterPrewarmStats::default()
         };
         let scene_text_prewarm_stats = self.prewarm_text_labels(
             scene,
-            &projections,
+            frame_projections.projections(),
             text_label_prewarm_mode_for_scene_prewarm(reason),
         );
         self.frame_latency.observe_async_results(
@@ -12946,8 +12968,7 @@ impl WgpuState {
             &self.device,
             &self.queue,
             scene,
-            &projections,
-            projection_layout_us,
+            &frame_projections,
             self.size,
             reason,
         );
@@ -13166,13 +13187,11 @@ impl WgpuState {
         force_log: bool,
     ) -> ShellRenderOutcome {
         let metadata_result_stats = scene.drain_metadata_role_results();
-        let projection_layout_start = Instant::now();
-        let projection_layouts = scene.pane_projection_layouts(self.size);
-        scene.update_visible_slot_pools_for_projection_layouts(&projection_layouts);
-        let projections = scene.pane_projections_from_layouts(projection_layouts);
-        let projection_layout_us = projection_layout_start.elapsed().as_micros();
+        let projection_layouts = scene.prepare_frame_projection_layouts(self.size);
+        scene.update_visible_slot_pools_for_projection_layouts(projection_layouts.layouts());
+        let frame_projections = scene.pane_projections_from_layouts(projection_layouts);
         let _folder_preview_role_stats =
-            scene.update_folder_preview_roles_for_projections(&projections);
+            scene.update_folder_preview_roles_for_projections(frame_projections.projections());
         let folder_preview_results = scene.drain_folder_preview_role_results();
         let icon_resolve_results = self.icon_renderer.resolver.drain_results();
         let icon_raster_results = self
@@ -13182,11 +13201,14 @@ impl WgpuState {
         let thumbnail_results = self.icon_renderer.thumbnails.drain_results();
         let folder_preview_damage_rects = folder_preview_damage_rects_for_changes(
             scene,
-            &projections,
+            frame_projections.projections(),
             &folder_preview_results.changes,
         );
-        let dirty_key =
-            ShellRenderDirtyKey::from_scene_with_projections(scene, self.size, &projections);
+        let dirty_key = ShellRenderDirtyKey::from_scene_with_projections(
+            scene,
+            self.size,
+            frame_projections.projections(),
+        );
         let scene_read_ahead_pending = !scene.icon_role_read_ahead.borrow().is_empty()
             || scene.folder_preview_roles.borrow().has_pending();
         let non_folder_preview_async_results_changed = metadata_result_stats.applied > 0
@@ -13234,8 +13256,12 @@ impl WgpuState {
             }
             return ShellRenderOutcome::SkippedClean;
         }
-        let damage_snapshot =
-            ShellRenderDamageSnapshot::from_scene(scene, self.size, &projections, dirty_key);
+        let damage_snapshot = ShellRenderDamageSnapshot::from_scene(
+            scene,
+            self.size,
+            frame_projections.projections(),
+            dirty_key,
+        );
         let mut render_damage = ShellRenderDamage::between_with_async_damage(
             self.last_render_damage_snapshot.as_ref(),
             &damage_snapshot,
@@ -13249,7 +13275,8 @@ impl WgpuState {
         if render_damage.kind == ShellRenderDamageKind::Bounded && render_damage_scissor.is_none() {
             render_damage = ShellRenderDamage::full(self.size);
         }
-        let metadata_role_stats = scene.prewarm_file_metadata_roles(&projections);
+        let metadata_role_stats =
+            scene.prewarm_file_metadata_roles(frame_projections.projections());
         if metadata_role_stats.visible
             + metadata_role_stats.deferred
             + metadata_result_stats.results
@@ -13269,7 +13296,7 @@ impl WgpuState {
         }
         let text_prewarm_stats = self.prewarm_text_labels(
             scene,
-            &projections,
+            frame_projections.projections(),
             text_label_prewarm_mode_for_frame(reason),
         );
         if text_prewarm_stats.entries + text_prewarm_stats.read_ahead > 0
@@ -13295,7 +13322,7 @@ impl WgpuState {
 
         let prewarm_start = Instant::now();
         let prewarm_stats = scene.prewarm_visible_file_icon_roles(
-            &projections,
+            frame_projections.projections(),
             &mut self.icon_renderer.resolver,
             reason,
         );
@@ -13350,12 +13377,11 @@ impl WgpuState {
             &self.device,
             &self.queue,
             scene,
-            &projections,
-            projection_layout_us,
+            &frame_projections,
             self.size,
             reason,
         );
-        drop(projections);
+        drop(frame_projections);
         let prepare_us = prepare_start.elapsed().as_micros();
         let work_pending = scene_frame.work_pending(&mut self.icon_renderer, scene);
         if work_pending.any() {
@@ -20969,10 +20995,11 @@ mod tests {
         );
         let size = PhysicalSize::new(700, 320);
 
-        let layouts = scene.pane_projection_layouts(size);
-        scene.update_visible_slot_pools_for_projection_layouts(&layouts);
-        let projections = scene.pane_projections_from_layouts(layouts);
-        let prepared = projections
+        let layouts = scene.prepare_frame_projection_layouts(size);
+        scene.update_visible_slot_pools_for_projection_layouts(layouts.layouts());
+        let frame_projections = scene.pane_projections_from_layouts(layouts);
+        let prepared = frame_projections
+            .projections()
             .iter()
             .find(|projection| projection.geometry.kind == ShellPaneId::SLOT_0)
             .unwrap();
