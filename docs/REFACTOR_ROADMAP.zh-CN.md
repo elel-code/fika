@@ -66,6 +66,11 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   main window keyboard shortcut handling 迁入 `src/app_actions/keyboard.rs`，pointer hover /
   cursor handling 迁入 `src/app_actions/pointer.rs`，mouse wheel zoom/scroll scheduling
   迁入 `src/app_actions/scroll.rs`；`main.rs` 的 `window_event` 对应分支只保留事件路由。
+- 主窗口 pointer button action 边界：
+  trash conflict、task detail、properties、context/drop menu、toolbar、path bar、places、
+  item activation 和 pane selection 的点击语义已迁入 `src/app_actions/pointer.rs`；
+  `ApplicationHandler::window_event` 对主窗口点击只做参数转发，刷新/present 继续走
+  action outcome 调度。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。
@@ -88,6 +93,8 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - view 命令执行器：zoom、view mode、hidden、split pane、reload。
 - 剪贴板、设备操作、trash、paste、drop 等副作用进一步 request 化，并逐步接入
   async operation dispatcher。
+- 将 pointer button action 进一步拆成可测试的 route/intent 计算和 effect 应用两层，
+  为后续手势、拖拽动画和最小 damage 提供稳定输入语义。
 - 将 action outcome 从“立即应用”继续推进为可组合 request/result，便于 async
   completion、动画 timeline 和 render damage 共享同一套调度语义。
 
@@ -190,9 +197,8 @@ operation dispatcher。
 
 ## 当前推荐顺序
 
-1. Command / Action 层后续：把 main pointer button 分支中的 dialog/context/drop
-   activation、selection activation 和 toolbar/path-bar click routing 转成 action
-   request，并通过 action outcome 统一表现调度。
+1. Command / Action 层后续：把 pointer button 的 route/intent 计算从 `FikaWgpuApp`
+   effect 应用中拆出，并覆盖 toolbar/path-bar/menu/selection 的 focused tests。
 2. Async operation dispatcher：优先承接 trash / paste / drop / create / rename 等文件
    操作，把 completion 也映射为 action outcome。
 3. Animation registry：将 delete/reflow/hover 等 timeline 挂到 outcome 的 Queue /
