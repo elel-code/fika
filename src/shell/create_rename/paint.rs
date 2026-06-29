@@ -12,25 +12,14 @@ use crate::shell::metrics::{
     CREATE_DIALOG_TITLE_HEIGHT, RENAME_DIALOG_TITLE_HEIGHT, scaled_dialog_metric,
 };
 use crate::shell::popup::style::{
-    POPUP_BACKDROP, POPUP_BORDER, POPUP_BUTTON_PRIMARY, POPUP_BUTTON_PRIMARY_SOFT,
-    POPUP_BUTTON_SECONDARY, POPUP_BUTTON_WARNING, POPUP_DIVIDER, POPUP_FIELD_FOCUS, POPUP_HEADER,
-    POPUP_INPUT, POPUP_SURFACE, popup_body_text, popup_error_text, popup_inverse_text,
-    popup_title_text,
+    POPUP_BORDER, POPUP_BUTTON_PRIMARY, POPUP_BUTTON_PRIMARY_SOFT, POPUP_BUTTON_SECONDARY,
+    POPUP_BUTTON_WARNING, POPUP_DIVIDER, POPUP_FIELD_FOCUS, POPUP_HEADER, POPUP_INPUT,
+    POPUP_SURFACE, popup_body_text, popup_error_text, popup_inverse_text, popup_title_text,
 };
 use crate::{
     LabelAlignment, QuadVertex, TextFrameBuilder, push_clipped_rect_outline,
     push_clipped_rounded_rect, push_rect,
 };
-
-pub(crate) fn push_create_dialog_overlay(
-    dialog: &ShellCreateDialog,
-    scale: f32,
-    vertices: &mut Vec<QuadVertex>,
-    text: &mut TextFrameBuilder<'_>,
-    size: PhysicalSize<u32>,
-) {
-    push_create_dialog_surface(dialog, scale, vertices, text, size, Some(POPUP_BACKDROP));
-}
 
 pub(crate) fn push_create_dialog(
     dialog: &ShellCreateDialog,
@@ -39,7 +28,7 @@ pub(crate) fn push_create_dialog(
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    push_create_dialog_surface(dialog, scale, vertices, text, size, Some(POPUP_SURFACE));
+    push_create_dialog_surface(dialog, scale, vertices, text, size);
 }
 
 fn push_create_dialog_surface(
@@ -48,12 +37,8 @@ fn push_create_dialog_surface(
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
-    background: Option<[f32; 4]>,
 ) {
     let screen = screen_rect(size);
-    if let Some(background) = background {
-        push_rect(vertices, screen, background, size);
-    }
     let rect = create_dialog_rect_scaled(dialog, size, scale);
     let title_height = scaled_dialog_metric(CREATE_DIALOG_TITLE_HEIGHT, scale);
     let margin = scaled_dialog_metric(16.0, scale);
@@ -193,16 +178,6 @@ fn push_create_dialog_surface(
     }
 }
 
-pub(crate) fn push_rename_dialog_overlay(
-    dialog: &ShellRenameDialog,
-    scale: f32,
-    vertices: &mut Vec<QuadVertex>,
-    text: &mut TextFrameBuilder<'_>,
-    size: PhysicalSize<u32>,
-) {
-    push_rename_dialog_surface(dialog, scale, vertices, text, size, Some(POPUP_BACKDROP));
-}
-
 pub(crate) fn push_rename_dialog(
     dialog: &ShellRenameDialog,
     scale: f32,
@@ -210,7 +185,7 @@ pub(crate) fn push_rename_dialog(
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    push_rename_dialog_surface(dialog, scale, vertices, text, size, Some(POPUP_SURFACE));
+    push_rename_dialog_surface(dialog, scale, vertices, text, size);
 }
 
 fn push_rename_dialog_surface(
@@ -219,12 +194,8 @@ fn push_rename_dialog_surface(
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
-    background: Option<[f32; 4]>,
 ) {
     let screen = screen_rect(size);
-    if let Some(background) = background {
-        push_rect(vertices, screen, background, size);
-    }
     let rect = rename_dialog_rect_scaled(dialog, size, scale);
     let title_height = scaled_dialog_metric(RENAME_DIALOG_TITLE_HEIGHT, scale);
     let margin = scaled_dialog_metric(16.0, scale);

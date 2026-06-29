@@ -6,7 +6,6 @@ use winit::dpi::PhysicalSize;
 use crate::shell::context_menu::{
     ShellContextMenu, ShellContextSubmenu, context_menu_items, context_submenu_actions,
 };
-use crate::shell::create_rename::geometry::{create_dialog_rect_scaled, rename_dialog_rect_scaled};
 use crate::shell::drop_menu::{ShellDropMenu, ShellDropTarget, drop_menu_items};
 use crate::shell::location::ShellLocationDraft;
 use crate::shell::menu_geometry::{
@@ -14,8 +13,6 @@ use crate::shell::menu_geometry::{
     scaled_context_menu_metric,
 };
 use crate::shell::metrics::*;
-use crate::shell::open_with::ShellOpenWithChooser;
-use crate::shell::open_with::geometry::open_with_chooser_rect_scaled;
 use crate::shell::options::ShellViewMode;
 use crate::shell::pane::{ShellPaneId, ShellPaneProjection, ShellPaneState};
 use crate::shell::properties::ShellPropertiesOverlay;
@@ -54,10 +51,6 @@ impl ShellRenderDirtyKey {
                 include_location_changes: false,
                 include_properties_overlay_content: false,
                 include_properties_overlay_changes: false,
-                include_create_dialog_changes: false,
-                include_rename_dialog_changes: false,
-                include_open_with_chooser_content: false,
-                include_open_with_chooser_changes: false,
                 include_task_status_changes: false,
                 include_rubber_band: false,
                 include_folder_preview_roles: true,
@@ -99,10 +92,6 @@ impl ShellRenderDirtyKey {
                 include_location_changes: false,
                 include_properties_overlay_content: false,
                 include_properties_overlay_changes: false,
-                include_create_dialog_changes: false,
-                include_rename_dialog_changes: false,
-                include_open_with_chooser_content: false,
-                include_open_with_chooser_changes: false,
                 include_task_status_changes: false,
                 include_rubber_band: false,
                 include_folder_preview_roles: false,
@@ -136,7 +125,7 @@ impl ShellRenderDirtyKey {
         push_bool(&mut values, scene.dark_mode);
         push_u64(&mut values, scene.zoom_step as i64 as u64);
         push_f32(&mut values, scene.split_pane_left_fraction);
-        push_u64(&mut values, scene.item_reflow_dirty_value());
+        push_u64(&mut values, scene.animation_dirty_value());
 
         for pane_id in ShellPaneId::ALL {
             match scene.panes.get(pane_id) {
@@ -234,13 +223,6 @@ impl ShellRenderDirtyKey {
             scene.properties_overlay.as_ref(),
             options.include_properties_overlay_content,
         );
-        push_bool(&mut values, scene.create_dialog.is_some());
-        push_bool(&mut values, scene.rename_dialog.is_some());
-        push_open_with_chooser(
-            &mut values,
-            scene.open_with_chooser.as_ref(),
-            options.include_open_with_chooser_content,
-        );
         push_bool(&mut values, scene.trash_conflict_dialog.is_some());
         push_bool(&mut values, scene.task_detail_dialog.is_some());
         push_u64(&mut values, scene.task_statuses.len() as u64);
@@ -256,21 +238,6 @@ impl ShellRenderDirtyKey {
             scene.context_menu_actions,
             if options.include_properties_overlay_changes {
                 scene.properties_changes
-            } else {
-                0
-            },
-            if options.include_create_dialog_changes {
-                scene.create_changes
-            } else {
-                0
-            },
-            if options.include_rename_dialog_changes {
-                scene.rename_changes
-            } else {
-                0
-            },
-            if options.include_open_with_chooser_changes {
-                scene.open_with_changes
             } else {
                 0
             },
@@ -339,10 +306,6 @@ struct ShellRenderDirtyKeyOptions {
     include_location_changes: bool,
     include_properties_overlay_content: bool,
     include_properties_overlay_changes: bool,
-    include_create_dialog_changes: bool,
-    include_rename_dialog_changes: bool,
-    include_open_with_chooser_content: bool,
-    include_open_with_chooser_changes: bool,
     include_task_status_changes: bool,
     include_rubber_band: bool,
     include_folder_preview_roles: bool,
@@ -363,10 +326,6 @@ impl Default for ShellRenderDirtyKeyOptions {
             include_location_changes: true,
             include_properties_overlay_content: true,
             include_properties_overlay_changes: true,
-            include_create_dialog_changes: true,
-            include_rename_dialog_changes: true,
-            include_open_with_chooser_content: true,
-            include_open_with_chooser_changes: true,
             include_task_status_changes: true,
             include_rubber_band: true,
             include_folder_preview_roles: true,
@@ -540,21 +499,6 @@ fn hover_damage_rects(
         previous.properties_overlay_rect,
         current.properties_overlay_rect,
     );
-    push_stable_or_changed_damage_rect(
-        &mut rects,
-        previous.create_dialog_rect,
-        current.create_dialog_rect,
-    );
-    push_stable_or_changed_damage_rect(
-        &mut rects,
-        previous.rename_dialog_rect,
-        current.rename_dialog_rect,
-    );
-    push_stable_or_changed_damage_rect(
-        &mut rects,
-        previous.open_with_chooser_rect,
-        current.open_with_chooser_rect,
-    );
     push_stable_or_changed_damage_rect(&mut rects, previous.task_area_rect, current.task_area_rect);
     push_stable_or_changed_damage_rect(
         &mut rects,
@@ -592,9 +536,6 @@ pub(crate) struct ShellRenderDamageSnapshot {
     pub(crate) rubber_band_rect: Option<ViewRect>,
     pub(crate) location_draft_rect: Option<ViewRect>,
     pub(crate) properties_overlay_rect: Option<ViewRect>,
-    pub(crate) create_dialog_rect: Option<ViewRect>,
-    pub(crate) rename_dialog_rect: Option<ViewRect>,
-    pub(crate) open_with_chooser_rect: Option<ViewRect>,
     pub(crate) task_area_rect: Option<ViewRect>,
     pub(crate) task_detail_dialog_rect: Option<ViewRect>,
     size: PhysicalSize<u32>,
@@ -680,18 +621,6 @@ impl ShellRenderDamageSnapshot {
             .properties_overlay
             .as_ref()
             .map(|overlay| properties_overlay_rect_scaled(overlay, size, scene.ui_scale()));
-        let create_dialog_rect = scene
-            .create_dialog
-            .as_ref()
-            .map(|dialog| create_dialog_rect_scaled(dialog, size, scene.ui_scale()));
-        let rename_dialog_rect = scene
-            .rename_dialog
-            .as_ref()
-            .map(|dialog| rename_dialog_rect_scaled(dialog, size, scene.ui_scale()));
-        let open_with_chooser_rect = scene
-            .open_with_chooser
-            .as_ref()
-            .map(|chooser| open_with_chooser_rect_scaled(chooser, size, scene.ui_scale()));
         let task_area_rect = scene.places_task_area_rect(size);
         let task_detail_dialog_rect = scene.task_detail_dialog.as_ref().map(|_| {
             task_detail_dialog_rect_scaled(scene.task_statuses.len(), size, scene.ui_scale())
@@ -717,9 +646,6 @@ impl ShellRenderDamageSnapshot {
             rubber_band_rect,
             location_draft_rect,
             properties_overlay_rect,
-            create_dialog_rect,
-            rename_dialog_rect,
-            open_with_chooser_rect,
             task_area_rect,
             task_detail_dialog_rect,
             size,
@@ -1537,44 +1463,6 @@ fn push_properties_overlay(
                     push_hash(values, row.label);
                     push_hash(values, &row.value);
                 }
-            }
-        }
-        None => push_bool(values, false),
-    }
-}
-
-fn push_open_with_chooser(
-    values: &mut Vec<u64>,
-    chooser: Option<&ShellOpenWithChooser>,
-    include_content: bool,
-) {
-    match chooser {
-        Some(chooser) => {
-            push_bool(values, true);
-            if include_content {
-                push_hash(values, &chooser.path);
-                push_hash(values, &chooser.mime_type);
-                push_u64(values, chooser.applications.len() as u64);
-                for application in &chooser.applications {
-                    push_hash(values, &application.id);
-                    push_hash(values, &application.name);
-                    push_bool(values, application.is_default);
-                }
-                for categories in &chooser.application_categories {
-                    push_u64(values, categories.len() as u64);
-                    for category in categories {
-                        push_hash(values, category);
-                    }
-                }
-                push_hash(values, &chooser.query);
-                push_u64(values, chooser.expanded_categories.len() as u64);
-                for category in &chooser.expanded_categories {
-                    push_hash(values, category);
-                }
-                push_u64(values, chooser.selected_index as u64);
-                push_u64(values, chooser.scroll_row as u64);
-                push_bool(values, chooser.set_as_default);
-                push_hash(values, &chooser.error);
             }
         }
         None => push_bool(values, false),

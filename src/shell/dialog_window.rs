@@ -168,6 +168,40 @@ impl ShellDialogWindows {
         }
     }
 
+    pub(crate) fn request_redraw(&self, kind: ShellDialogWindowKind) -> bool {
+        self.get(kind).is_some_and(|window| {
+            window.request_redraw();
+            true
+        })
+    }
+
+    pub(crate) fn resize(&mut self, kind: ShellDialogWindowKind, size: PhysicalSize<u32>) -> bool {
+        self.get_mut(kind).is_some_and(|window| {
+            window.resize(size);
+            window.request_redraw();
+            true
+        })
+    }
+
+    pub(crate) fn set_cursor(
+        &mut self,
+        kind: ShellDialogWindowKind,
+        cursor_icon: CursorIcon,
+    ) -> bool {
+        self.get_mut(kind).is_some_and(|window| {
+            window.set_cursor(cursor_icon);
+            true
+        })
+    }
+
+    pub(crate) fn renderer_size(&self, kind: ShellDialogWindowKind) -> Option<PhysicalSize<u32>> {
+        self.get(kind).map(ShellDetachedDialogWindow::renderer_size)
+    }
+
+    pub(crate) fn scale_factor(&self, kind: ShellDialogWindowKind) -> Option<f32> {
+        self.get(kind).map(ShellDetachedDialogWindow::scale_factor)
+    }
+
     pub(crate) fn set(&mut self, kind: ShellDialogWindowKind, window: ShellDetachedDialogWindow) {
         debug_assert_eq!(window.kind(), kind);
         match kind {

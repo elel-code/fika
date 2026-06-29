@@ -17,35 +17,15 @@ use crate::shell::open_with::geometry::{
 };
 use crate::shell::open_with::{OpenWithTreeRow, ShellOpenWithChooser};
 use crate::shell::popup::style::{
-    POPUP_BACKDROP, POPUP_BORDER, POPUP_BUTTON_PRIMARY, POPUP_BUTTON_SECONDARY, POPUP_DIVIDER,
-    POPUP_FIELD_FOCUS, POPUP_HEADER, POPUP_INPUT, POPUP_MARKER_NEUTRAL, POPUP_SURFACE,
-    popup_body_text, popup_error_text, popup_inverse_text, popup_muted_text, popup_soft_text,
-    popup_title_text,
+    POPUP_BORDER, POPUP_BUTTON_PRIMARY, POPUP_BUTTON_SECONDARY, POPUP_DIVIDER, POPUP_FIELD_FOCUS,
+    POPUP_HEADER, POPUP_INPUT, POPUP_MARKER_NEUTRAL, POPUP_SURFACE, popup_body_text,
+    popup_error_text, popup_inverse_text, popup_muted_text, popup_soft_text, popup_title_text,
 };
 use crate::{
     IconDrawLayer, IconFrameBuilder, LabelAlignment, LabelWrap, QuadVertex, TextFrameBuilder,
     path_name_or_display, push_clipped_rect_outline, push_clipped_rounded_highlight,
     push_clipped_rounded_rect, push_rect, push_scrollbar,
 };
-
-pub(crate) fn push_open_with_chooser_overlay(
-    chooser: &ShellOpenWithChooser,
-    scale: f32,
-    vertices: &mut Vec<QuadVertex>,
-    text: &mut TextFrameBuilder<'_>,
-    icons: &mut IconFrameBuilder<'_>,
-    size: PhysicalSize<u32>,
-) {
-    push_open_with_chooser_surface(
-        chooser,
-        scale,
-        vertices,
-        text,
-        icons,
-        size,
-        Some(POPUP_BACKDROP),
-    );
-}
 
 pub(crate) fn push_open_with_chooser_dialog(
     chooser: &ShellOpenWithChooser,
@@ -55,15 +35,7 @@ pub(crate) fn push_open_with_chooser_dialog(
     icons: &mut IconFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    push_open_with_chooser_surface(
-        chooser,
-        scale,
-        vertices,
-        text,
-        icons,
-        size,
-        Some(POPUP_SURFACE),
-    );
+    push_open_with_chooser_surface(chooser, scale, vertices, text, icons, size);
 }
 
 fn push_open_with_chooser_surface(
@@ -73,7 +45,6 @@ fn push_open_with_chooser_surface(
     text: &mut TextFrameBuilder<'_>,
     icons: &mut IconFrameBuilder<'_>,
     size: PhysicalSize<u32>,
-    background: Option<[f32; 4]>,
 ) {
     let screen = ViewRect {
         x: 0.0,
@@ -81,9 +52,6 @@ fn push_open_with_chooser_surface(
         width: size.width.max(1) as f32,
         height: size.height.max(1) as f32,
     };
-    if let Some(background) = background {
-        push_rect(vertices, screen, background, size);
-    }
     let rect = open_with_chooser_rect_scaled(chooser, size, scale);
     let title_height = scaled_dialog_metric(OPEN_WITH_CHOOSER_TITLE_HEIGHT, scale);
     let margin = scaled_dialog_metric(16.0, scale);
