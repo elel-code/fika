@@ -615,6 +615,64 @@ impl FikaWgpuApp {
         self.dialog_windows.close(kind);
     }
 
+    fn close_dialog_state_and_window(&mut self, kind: ShellDialogWindowKind) -> bool {
+        let changed = match kind {
+            ShellDialogWindowKind::Create => self.scene.close_create_dialog(),
+            ShellDialogWindowKind::OpenWith => self.scene.close_open_with_chooser(),
+            ShellDialogWindowKind::Rename => self.scene.close_rename_dialog(),
+        };
+        self.close_dialog_window(kind);
+        changed
+    }
+
+    fn sync_dialog_window_for_kind(&mut self, kind: ShellDialogWindowKind) {
+        match kind {
+            ShellDialogWindowKind::Create => self.sync_create_dialog_window(),
+            ShellDialogWindowKind::OpenWith => self.sync_open_with_dialog_window(),
+            ShellDialogWindowKind::Rename => self.sync_rename_dialog_window(),
+        }
+    }
+
+    fn handle_common_dialog_window_event(
+        &mut self,
+        kind: ShellDialogWindowKind,
+        event: &WindowEvent,
+    ) -> bool {
+        match event {
+            WindowEvent::CloseRequested => {
+                if self.close_dialog_state_and_window(kind) {
+                    self.request_main_redraw();
+                }
+                true
+            }
+            WindowEvent::SurfaceResized(size) => {
+                self.dialog_windows.resize(kind, *size);
+                true
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let Some(scale_factor) = self.dialog_windows.scale_factor(kind) else {
+                    return true;
+                };
+                let size = self
+                    .renderer
+                    .as_ref()
+                    .map(|renderer| renderer.size)
+                    .or_else(|| self.dialog_windows.renderer_size(kind))
+                    .unwrap_or_else(|| PhysicalSize::new(1, 1));
+                if self.scene.set_scale_factor(scale_factor, size) {
+                    self.request_main_redraw();
+                }
+                self.sync_dialog_window_for_kind(kind);
+                true
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = *modifiers;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn create_dialog_title(&self) -> String {
         let Some(dialog) = self.scene.create_dialog.as_ref() else {
             return "Create New".to_string();
@@ -1160,35 +1218,10 @@ impl FikaWgpuApp {
     }
 
     fn create_dialog_window_event(&mut self, event_loop: &dyn ActiveEventLoop, event: WindowEvent) {
+        if self.handle_common_dialog_window_event(ShellDialogWindowKind::Create, &event) {
+            return;
+        }
         match event {
-            WindowEvent::CloseRequested => {
-                let changed = self.scene.close_create_dialog();
-                self.close_create_dialog_window();
-                if changed {
-                    self.request_main_redraw();
-                }
-            }
-            WindowEvent::SurfaceResized(size) => {
-                self.dialog_windows
-                    .resize(ShellDialogWindowKind::Create, size);
-            }
-            WindowEvent::ScaleFactorChanged { .. } => {
-                let Some(scale_factor) = self
-                    .dialog_windows
-                    .scale_factor(ShellDialogWindowKind::Create)
-                else {
-                    return;
-                };
-                if let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size)
-                    && self.scene.set_scale_factor(scale_factor, size)
-                {
-                    self.request_main_redraw();
-                }
-                self.sync_create_dialog_window();
-            }
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers;
-            }
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic: false,
@@ -1244,8 +1277,7 @@ impl FikaWgpuApp {
                 };
                 match self.scene.create_dialog_click_at_screen_point(point, size) {
                     CreateDialogClick::Outside | CreateDialogClick::Cancel => {
-                        if self.scene.close_create_dialog() {
-                            self.close_create_dialog_window();
+                        if self.close_dialog_state_and_window(ShellDialogWindowKind::Create) {
                             self.request_main_redraw();
                         }
                     }
@@ -1269,35 +1301,10 @@ impl FikaWgpuApp {
     }
 
     fn rename_dialog_window_event(&mut self, event_loop: &dyn ActiveEventLoop, event: WindowEvent) {
+        if self.handle_common_dialog_window_event(ShellDialogWindowKind::Rename, &event) {
+            return;
+        }
         match event {
-            WindowEvent::CloseRequested => {
-                let changed = self.scene.close_rename_dialog();
-                self.close_rename_dialog_window();
-                if changed {
-                    self.request_main_redraw();
-                }
-            }
-            WindowEvent::SurfaceResized(size) => {
-                self.dialog_windows
-                    .resize(ShellDialogWindowKind::Rename, size);
-            }
-            WindowEvent::ScaleFactorChanged { .. } => {
-                let Some(scale_factor) = self
-                    .dialog_windows
-                    .scale_factor(ShellDialogWindowKind::Rename)
-                else {
-                    return;
-                };
-                if let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size)
-                    && self.scene.set_scale_factor(scale_factor, size)
-                {
-                    self.request_main_redraw();
-                }
-                self.sync_rename_dialog_window();
-            }
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers;
-            }
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic: false,
@@ -1349,8 +1356,7 @@ impl FikaWgpuApp {
                 };
                 match self.scene.rename_dialog_click_at_screen_point(point, size) {
                     RenameDialogClick::Outside | RenameDialogClick::Cancel => {
-                        if self.scene.close_rename_dialog() {
-                            self.close_rename_dialog_window();
+                        if self.close_dialog_state_and_window(ShellDialogWindowKind::Rename) {
                             self.request_main_redraw();
                         }
                     }
@@ -1370,42 +1376,10 @@ impl FikaWgpuApp {
         event_loop: &dyn ActiveEventLoop,
         event: WindowEvent,
     ) {
+        if self.handle_common_dialog_window_event(ShellDialogWindowKind::OpenWith, &event) {
+            return;
+        }
         match event {
-            WindowEvent::CloseRequested => {
-                let changed = self.scene.close_open_with_chooser();
-                self.close_open_with_dialog_window();
-                if changed {
-                    self.request_main_redraw();
-                }
-            }
-            WindowEvent::SurfaceResized(size) => {
-                self.dialog_windows
-                    .resize(ShellDialogWindowKind::OpenWith, size);
-            }
-            WindowEvent::ScaleFactorChanged { .. } => {
-                let Some(scale_factor) = self
-                    .dialog_windows
-                    .scale_factor(ShellDialogWindowKind::OpenWith)
-                else {
-                    return;
-                };
-                let main_size = self
-                    .renderer
-                    .as_ref()
-                    .map(|renderer| renderer.size)
-                    .unwrap_or_else(|| {
-                        self.dialog_windows
-                            .renderer_size(ShellDialogWindowKind::OpenWith)
-                            .unwrap_or_else(|| PhysicalSize::new(1, 1))
-                    });
-                if self.scene.set_scale_factor(scale_factor, main_size) {
-                    self.request_main_redraw();
-                }
-                self.sync_open_with_dialog_window();
-            }
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers;
-            }
             WindowEvent::KeyboardInput {
                 event,
                 is_synthetic: false,
@@ -1489,8 +1463,7 @@ impl FikaWgpuApp {
                         .open_with_chooser_click_at_screen_point(point, size)
                     {
                         OpenWithChooserClick::Outside | OpenWithChooserClick::Cancel => {
-                            if self.scene.close_open_with_chooser() {
-                                self.close_open_with_dialog_window();
+                            if self.close_dialog_state_and_window(ShellDialogWindowKind::OpenWith) {
                                 self.request_main_redraw();
                             }
                         }
