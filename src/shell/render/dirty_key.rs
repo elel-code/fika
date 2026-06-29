@@ -308,7 +308,7 @@ impl ShellRenderDirtyKey {
             },
             scene.dnd_drop_requests,
             if options.include_task_status_changes {
-                scene.task_status_changes
+                scene.task_statuses.change_generation()
             } else {
                 0
             },

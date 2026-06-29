@@ -341,6 +341,7 @@ use shell::shortcuts::{
     reload_requested_for_key_parts, rename_command_for_key_parts, selection_command_for_key_parts,
     view_mode_for_key_parts, zoom_action_for_key, zoom_action_for_scroll_delta,
 };
+use shell::status::{ShellPaneStatus, ShellTaskStatusStore};
 #[cfg(test)]
 use shell::tasks::geometry::{
     task_detail_cancel_button_rect, task_detail_clear_button_rect, task_detail_dialog_rect,
@@ -2611,7 +2612,7 @@ struct ShellScene {
     place_press: Option<ShellPlacePress>,
     dnd_hover_target: Option<ShellDropTarget>,
     pending_drop_request: Option<ShellDropOperationRequest>,
-    task_statuses: VecDeque<ShellTaskStatus>,
+    task_statuses: ShellTaskStatusStore,
     rubber_band: Option<RubberBand>,
     animations: ShellAnimationRuntime,
     scale_factor: f32,
@@ -2644,7 +2645,6 @@ struct ShellScene {
     split_pane_changes: u64,
     dnd_hover_changes: u64,
     dnd_drop_requests: u64,
-    task_status_changes: u64,
 }
 
 impl ShellScene {
@@ -2726,7 +2726,7 @@ impl ShellScene {
             place_press: None,
             dnd_hover_target: None,
             pending_drop_request: None,
-            task_statuses: VecDeque::new(),
+            task_statuses: ShellTaskStatusStore::new(),
             rubber_band: None,
             animations: ShellAnimationRuntime::default(),
             scale_factor: 1.0,
@@ -2759,7 +2759,6 @@ impl ShellScene {
             split_pane_changes: 0,
             dnd_hover_changes: 0,
             dnd_drop_requests: 0,
-            task_status_changes: 0,
         })
     }
 
@@ -6423,12 +6422,7 @@ impl ShellScene {
     }
 
     fn record_task_status(&mut self, status: ShellTaskStatus) {
-        const MAX_TASK_STATUSES: usize = 4;
-        self.task_statuses.push_front(status);
-        while self.task_statuses.len() > MAX_TASK_STATUSES {
-            self.task_statuses.pop_back();
-        }
-        self.task_status_changes += 1;
+        self.task_statuses.record(status);
         if let Some(status) = self.task_statuses.front() {
             fika_log!(
                 "[fika-wgpu] task-status kind={:?} label={:?} privileged={} detail={:?} changes={}",
@@ -6436,24 +6430,13 @@ impl ShellScene {
                 status.label,
                 status.privileged as u8,
                 status.detail,
-                self.task_status_changes
+                self.task_statuses.change_generation()
             );
         }
     }
 
-    fn finish_task_status(&mut self, task_id: ShellTaskId, mut status: ShellTaskStatus) {
-        status.task_id = Some(task_id);
-        if let Some(existing) = self
-            .task_statuses
-            .iter_mut()
-            .find(|candidate| candidate.task_id == Some(task_id))
-        {
-            *existing = status;
-        } else {
-            self.record_task_status(status);
-            return;
-        }
-        self.task_status_changes += 1;
+    fn finish_task_status(&mut self, task_id: ShellTaskId, status: ShellTaskStatus) {
+        self.task_statuses.finish(task_id, status);
     }
 
     fn record_async_transfer_started(
@@ -6513,19 +6496,7 @@ impl ShellScene {
     }
 
     fn update_running_task_detail(&mut self, task_id: ShellTaskId, detail: String) -> bool {
-        let Some(status) = self
-            .task_statuses
-            .iter_mut()
-            .find(|status| status.task_id == Some(task_id))
-        else {
-            return false;
-        };
-        if status.kind != ShellTaskStatusKind::Running || status.detail == detail {
-            return false;
-        }
-        status.detail = detail;
-        self.task_status_changes += 1;
-        true
+        self.task_statuses.update_running_detail(task_id, detail)
     }
 
     fn apply_async_transfer_completion(
@@ -6670,7 +6641,7 @@ impl ShellScene {
         if self.task_detail_dialog.take().is_none() {
             return false;
         }
-        self.task_status_changes += 1;
+        self.task_statuses.mark_changed();
         true
     }
 
@@ -6678,38 +6649,26 @@ impl ShellScene {
         if self.task_statuses.is_empty() && self.task_detail_dialog.is_none() {
             return false;
         }
-        self.task_statuses
-            .retain(|status| status.kind == ShellTaskStatusKind::Running);
+        let statuses_changed = self.task_statuses.clear_finished();
+        let mut dialog_changed = false;
         if self.task_statuses.is_empty() {
-            self.task_detail_dialog = None;
+            dialog_changed = self.task_detail_dialog.take().is_some();
         }
-        self.task_status_changes += 1;
-        true
+        if dialog_changed && !statuses_changed {
+            self.task_statuses.mark_changed();
+        }
+        statuses_changed || dialog_changed
     }
 
     fn dismiss_task_status(&mut self, index: usize) -> (bool, Option<ShellTaskId>) {
-        if index >= self.task_statuses.len() {
+        let dismissal = self.task_statuses.dismiss(index);
+        if !dismissal.changed {
             return (false, None);
         }
-        let task_id = self.task_statuses[index].task_id;
-        if self.task_statuses[index].kind == ShellTaskStatusKind::Running
-            && self.task_statuses[index].cancellable
-        {
-            self.task_statuses[index] = ShellTaskStatus::cancelled(
-                "Task cancelling",
-                self.task_statuses[index].detail.clone(),
-                self.task_statuses[index].privileged,
-            );
-            self.task_statuses[index].task_id = task_id;
-            self.task_status_changes += 1;
-            return (true, task_id);
-        }
-        self.task_statuses.remove(index);
         if self.task_statuses.is_empty() {
             self.task_detail_dialog = None;
         }
-        self.task_status_changes += 1;
-        (true, None)
+        (true, dismissal.cancel_task_id)
     }
 
     fn task_detail_dialog_click_at_screen_point(
@@ -10122,19 +10081,54 @@ impl ShellScene {
             divider_color(self.dark_mode),
             size,
         );
-        let status = self.pane_status_text(pane, projection.visible_items.len());
-        text.push_label_aligned(
-            &status,
+        if projection.geometry.kind == self.active_pane() {
+            push_rect(
+                vertices,
+                ViewRect {
+                    x: rect.x,
+                    y: rect.y,
+                    width: self.scale_metric(3.0).max(1.0),
+                    height: rect.height,
+                },
+                [0.184, 0.435, 0.929, 1.0],
+                size,
+            );
+        }
+
+        let status = self.pane_status(pane, projection.visible_items.len());
+        let left_x = rect.x + self.scale_metric(12.0);
+        let qualifier = status.qualifier_text();
+        let right_width = if qualifier.is_empty() {
+            0.0
+        } else {
+            (rect.width * 0.44).min(self.scale_metric(260.0)).max(1.0)
+        };
+        text.push_label_aligned_no_wrap(
+            &status.primary,
             ViewRect {
-                x: rect.x + self.scale_metric(12.0),
+                x: left_x,
                 y: rect.y + self.scale_metric(5.0),
-                width: (rect.width - self.scale_metric(24.0)).max(1.0),
+                width: (rect.width - self.scale_metric(24.0) - right_width).max(1.0),
                 height: self.text_line_height(),
             },
             rect,
-            muted_text_color(self.dark_mode),
+            primary_text_color(self.dark_mode),
             LabelAlignment::Start,
         );
+        if !qualifier.is_empty() {
+            text.push_label_aligned_no_wrap(
+                &qualifier,
+                ViewRect {
+                    x: rect.right() - self.scale_metric(12.0) - right_width,
+                    y: rect.y + self.scale_metric(5.0),
+                    width: right_width,
+                    height: self.text_line_height(),
+                },
+                rect,
+                muted_text_color(self.dark_mode),
+                LabelAlignment::End,
+            );
+        }
     }
 
     fn push_app_toolbar(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
@@ -10632,13 +10626,9 @@ impl ShellScene {
                 primary_text_color(self.dark_mode),
                 LabelAlignment::Start,
             );
-            let detail = if status.privileged {
-                format!("{} | administrator", status.detail)
-            } else {
-                status.detail.clone()
-            };
+            let detail = status.detail_label();
             text.push_label_aligned(
-                &detail,
+                detail.as_ref(),
                 ViewRect {
                     x: text_x,
                     y: y + self.scale_metric(16.0),
@@ -10725,30 +10715,18 @@ impl ShellScene {
         );
     }
 
+    fn pane_status(&self, pane: ShellPaneView<'_>, visible_items: usize) -> ShellPaneStatus {
+        ShellPaneStatus::for_view(
+            pane,
+            visible_items,
+            self.show_hidden,
+            self.filter_active || !self.filter_pattern.is_empty(),
+        )
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     fn pane_status_text(&self, pane: ShellPaneView<'_>, visible_items: usize) -> String {
-        let total = pane.entries.len();
-        let selected = pane.selection.len();
-        let file_count = total.saturating_sub(pane.dir_count);
-        let mut status = if selected > 0 {
-            format!("{} selected", count_label(selected, "item", "items"))
-        } else {
-            format!(
-                "{}, {}, {}",
-                count_label(total, "item", "items"),
-                count_label(pane.dir_count, "folder", "folders"),
-                count_label(file_count, "file", "files")
-            )
-        };
-        if visible_items != total {
-            status.push_str(&format!(" | {visible_items} visible"));
-        }
-        if self.show_hidden {
-            status.push_str(" | hidden shown");
-        }
-        if self.filter_active || !self.filter_pattern.is_empty() {
-            status.push_str(&format!(" | {} matches", pane.filtered_entry_count()));
-        }
-        status
+        self.pane_status(pane, visible_items).plain_text()
     }
 
     fn active_pane_status_summary(&self) -> String {
@@ -16230,6 +16208,7 @@ impl TextAtlasFrameCache {
 enum LabelAlignment {
     Start,
     Center,
+    End,
 }
 
 impl LabelAlignment {
@@ -16237,6 +16216,7 @@ impl LabelAlignment {
         match self {
             Self::Start => Align::Left,
             Self::Center => Align::Center,
+            Self::End => Align::Right,
         }
     }
 }
@@ -19185,7 +19165,7 @@ mod tests {
             place_press: None,
             dnd_hover_target: None,
             pending_drop_request: None,
-            task_statuses: VecDeque::new(),
+            task_statuses: ShellTaskStatusStore::new(),
             rubber_band: None,
             animations: ShellAnimationRuntime::default(),
             scale_factor: 1.0,
@@ -19218,7 +19198,6 @@ mod tests {
             split_pane_changes: 0,
             dnd_hover_changes: 0,
             dnd_drop_requests: 0,
-            task_status_changes: 0,
         }
     }
 
@@ -21338,7 +21317,7 @@ mod tests {
     fn render_dirty_key_can_ignore_task_status_content_for_damage_detection() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
-        scene.task_statuses.push_back(ShellTaskStatus::running(
+        scene.task_statuses.record(ShellTaskStatus::running(
             1,
             "Copying",
             "1 of 3 items",
@@ -21348,8 +21327,11 @@ mod tests {
         let initial = ShellRenderDirtyKey::from_scene(&scene, size);
         let initial_hoverless = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
 
-        scene.task_statuses[0].detail = "2 of 3 items".to_string();
-        scene.task_status_changes += 1;
+        assert!(
+            scene
+                .task_statuses
+                .update_running_detail(1, "2 of 3 items".to_string())
+        );
         let changed = ShellRenderDirtyKey::from_scene(&scene, size);
         let changed_hoverless = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
 
@@ -21983,7 +21965,7 @@ mod tests {
     fn render_damage_bounds_task_status_content_transition() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(900, 420);
-        scene.task_statuses.push_back(ShellTaskStatus::running(
+        scene.task_statuses.record(ShellTaskStatus::running(
             1,
             "Copying",
             "1 of 3 items",
@@ -22001,8 +21983,11 @@ mod tests {
             ShellRenderDirtyKey::from_scene(&scene, size),
         );
 
-        scene.task_statuses[0].detail = "2 of 3 items".to_string();
-        scene.task_status_changes += 1;
+        assert!(
+            scene
+                .task_statuses
+                .update_running_detail(1, "2 of 3 items".to_string())
+        );
         let projections = ShellPaneId::ALL
             .into_iter()
             .filter_map(|kind| scene.pane_projection(kind, size))
@@ -31826,6 +31811,9 @@ text/plain=writer.desktop;\n",
             scene.pane_status_text(projection.view, projection.visible_items.len()),
             "3 items, 1 folder, 2 files"
         );
+        let status = scene.pane_status(projection.view, projection.visible_items.len());
+        assert_eq!(status.primary, "3 items, 1 folder, 2 files");
+        assert!(status.qualifiers.is_empty());
 
         assert!(
             scene.panes[ShellPaneId::SLOT_0]
@@ -31837,6 +31825,15 @@ text/plain=writer.desktop;\n",
             scene.pane_status_text(projection.view, projection.visible_items.len()),
             "1 item selected"
         );
+        let status = scene.pane_status(projection.view, projection.visible_items.len());
+        assert_eq!(status.primary, "1 item selected");
+        assert!(status.qualifiers.is_empty());
+
+        scene.show_hidden = true;
+        let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
+        let status = scene.pane_status(projection.view, projection.visible_items.len());
+        assert_eq!(status.primary, "1 item selected");
+        assert_eq!(status.qualifier_text(), "hidden shown");
     }
 
     #[test]

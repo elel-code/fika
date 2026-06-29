@@ -32,6 +32,7 @@ pub(crate) mod role_worker_queue;
 pub(crate) mod selection;
 pub(crate) mod service_menu;
 pub(crate) mod shortcuts;
+pub(crate) mod status;
 pub(crate) mod tasks;
 pub(crate) mod transfer;
 pub(crate) mod trash_conflict;

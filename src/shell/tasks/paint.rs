@@ -135,13 +135,9 @@ pub(crate) fn push_task_detail_dialog_overlay(
             popup_body_text(),
             LabelAlignment::Start,
         );
-        let detail = if status.privileged {
-            format!("{} | administrator", status.detail)
-        } else {
-            status.detail.clone()
-        };
+        let detail = status.detail_label();
         text.push_label_aligned(
-            &detail,
+            detail.as_ref(),
             ViewRect {
                 x: text_x,
                 y: row.y + scaled_dialog_metric(28.0, scale),
@@ -153,12 +149,7 @@ pub(crate) fn push_task_detail_dialog_overlay(
             LabelAlignment::Start,
         );
         text.push_label_aligned(
-            match status.kind {
-                ShellTaskStatusKind::Running => "Running",
-                ShellTaskStatusKind::Completed => "Completed",
-                ShellTaskStatusKind::Failed => "Failed",
-                ShellTaskStatusKind::Cancelled => "Cancelled",
-            },
+            status.kind.label(),
             ViewRect {
                 x: text_x,
                 y: row.y + scaled_dialog_metric(47.0, scale),

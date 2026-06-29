@@ -207,6 +207,15 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   保留 pane-level invalidation，同时限制为 8-entry LRU；这让 compact text widths、
   column widths 和 icons item heights 仍能复用滚动/重绘路径，但不会因窗口尺寸、缩放
   或目录切换长期积累多份整目录 `Arc<[f32]>`。
+- Status model 重写：
+  参考 Dolphin 的 `DolphinViewContainer::delayedStatusBarUpdate/updateStatusBar`、
+  `DolphinStatusBar::setDefaultText/showProgress` 和 `DolphinView::requestStatusBarText`
+  边界，Fika 新增 `src/shell/status.rs` 承载 pane status summary、task status store、
+  task detail label 和 change generation；`ShellScene` 只负责把 view/projection 输入
+  映射给 status model，绘制层消费 `ShellPaneStatus` 的 primary/qualifier 两段文本。
+  task status 的容量、finish/update/cancel/dismiss/clear 也集中到 `ShellTaskStatusStore`，
+  后续 async operation dispatcher 可以直接接管这个 store，而不是散落修改
+  `VecDeque + changes`。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口
