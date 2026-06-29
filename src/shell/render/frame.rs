@@ -3,7 +3,7 @@ use winit::dpi::PhysicalSize;
 
 use crate::shell::prewarm::icon_raster_miss_budget_for_frame;
 use crate::shell::render::gpu::VertexBufferUploadStats;
-use crate::shell::render::quad::QuadVertex;
+use crate::shell::render::quad::{QuadRenderer, QuadVertex};
 use crate::{
     IconFrameBuilder, IconFrameStats, IconRenderer, ShellScene, TextFrameBuilder, TextFrameStats,
     TextRenderer,
@@ -23,6 +23,23 @@ pub(crate) struct SceneFrame {
     pub(crate) text_stats: TextFrameStats,
     pub(crate) icon_stats: IconFrameStats,
     pub(crate) vertex_upload_stats: VertexBufferUploadStats,
+}
+
+pub(crate) struct DialogFrame {
+    pub(crate) text_stats: TextFrameStats,
+    pub(crate) icon_stats: IconFrameStats,
+    pub(crate) vertex_upload_stats: VertexBufferUploadStats,
+    pub(crate) swash_image_entries: usize,
+    pub(crate) swash_outline_entries: usize,
+    pub(crate) swash_reset: bool,
+    pub(crate) text_work_pending: bool,
+    pub(crate) icon_work_pending: bool,
+}
+
+impl DialogFrame {
+    pub(crate) fn work_pending(&self) -> bool {
+        self.text_work_pending || self.icon_work_pending
+    }
 }
 
 pub(crate) fn prepare_scene_frame(
@@ -155,5 +172,98 @@ pub(crate) fn prepare_scene_frame(
         scene_frame.text_stats.swash_resets = usize::from(text_swash_reset);
         scene_frame.vertex_upload_stats = vertex_upload_stats;
         scene_frame
+    }
+}
+
+pub(crate) fn prepare_dialog_frame(
+    text_renderer: &mut TextRenderer,
+    icon_renderer: &mut IconRenderer,
+    quad_renderer: &mut QuadRenderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout_size: PhysicalSize<u32>,
+    scale: f32,
+    reason: &str,
+    paint: impl FnOnce(
+        &mut Vec<QuadVertex>,
+        &mut TextFrameBuilder<'_>,
+        &mut IconFrameBuilder<'_>,
+        PhysicalSize<u32>,
+    ),
+) -> DialogFrame {
+    text_renderer.label_cache.begin_frame();
+    text_renderer.metrics_cache.begin_frame();
+    icon_renderer.raster_cache.begin_frame();
+    icon_renderer.role_raster_cache.begin_frame();
+    let icon_resolve_results = icon_renderer.resolver.drain_results();
+    let icon_raster_results = icon_renderer
+        .icon_rasters
+        .drain_results(&mut icon_renderer.raster_cache);
+    let thumbnail_results = icon_renderer.thumbnails.drain_results();
+
+    let (vertices, mut text_frame, mut icon_frame) = {
+        let text_pixels = text_renderer.take_staging_pixels();
+        let mut text_builder = TextFrameBuilder::new(
+            &mut text_renderer.font_system,
+            &mut text_renderer.swash_cache,
+            &mut text_renderer.text_buffer,
+            &mut text_renderer.label_cache,
+            &mut text_renderer.metrics_cache,
+            &mut text_renderer.atlas_cache,
+            layout_size,
+            scale,
+            text_pixels,
+        );
+        let mut icon_builder = IconFrameBuilder::new(
+            &mut icon_renderer.resolver,
+            &mut icon_renderer.thumbnails,
+            &mut icon_renderer.icon_rasters,
+            &mut icon_renderer.raster_cache,
+            &mut icon_renderer.role_raster_cache,
+            layout_size,
+            icon_raster_miss_budget_for_frame(reason),
+            0,
+            0,
+        );
+        let mut vertices = Vec::with_capacity(256);
+        paint(
+            &mut vertices,
+            &mut text_builder,
+            &mut icon_builder,
+            layout_size,
+        );
+        (vertices, text_builder.finish(), icon_builder.finish())
+    };
+
+    let text_stats = text_frame.stats;
+    let icon_stats = icon_frame.stats;
+    let text_work_pending = text_stats.deferred > 0;
+    let icon_work_pending = icon_stats.deferred > 0
+        || icon_stats.raster_deferred > 0
+        || icon_stats.thumbnail_deferred > 0
+        || icon_resolve_results > 0
+        || icon_raster_results > 0
+        || thumbnail_results > 0
+        || icon_renderer.resolver.has_pending()
+        || icon_renderer
+            .icon_rasters
+            .has_pending(&mut icon_renderer.raster_cache)
+        || icon_renderer.thumbnails.has_pending();
+
+    let mut vertex_upload_stats = quad_renderer.upload(device, queue, &vertices);
+    vertex_upload_stats.merge(icon_renderer.upload(device, queue, &mut icon_frame));
+    vertex_upload_stats.merge(text_renderer.upload(device, queue, &mut text_frame));
+    let (swash_image_entries, swash_outline_entries, swash_reset) =
+        text_renderer.trim_text_engine_caches();
+
+    DialogFrame {
+        text_stats,
+        icon_stats,
+        vertex_upload_stats,
+        swash_image_entries,
+        swash_outline_entries,
+        swash_reset,
+        text_work_pending,
+        icon_work_pending,
     }
 }

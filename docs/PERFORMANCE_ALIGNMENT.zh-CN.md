@@ -114,6 +114,18 @@ Dolphin reference:
 - Verification: cargo test surface_frame_context_keeps_dialog_suboptimal_recovery_local；cargo check；cargo test；git diff --check。
 ```
 
+### Detached dialog frame pipeline
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp
+- Symbol: KItemListView::paint
+- Dolphin boundary: view paint 入口只负责把已经准备好的 view/widget 内容交给 painter，窗口 backing surface、缓存 begin/end 和 expose/present 生命周期由 Qt 图形栈统一承载。
+- Fika mapping: src/shell/render/frame.rs::prepare_dialog_frame；src/main.rs::WgpuState::render_detached_dialog / encode_detached_dialog_pass。
+- Divergence: 无直接 Dolphin dialog+wGPU reference；Fika 的 detached dialog 仍需要显式维护 text/icon atlas、async icon result drain、vertex upload、swash cache trim 和 render pass encode，但这些阶段从具体 dialog window handler 中抽到共享 DialogFrame 边界，避免 Open With 搜索结果变化继续复制一整套上传/重绘管线。
+- Verification: cargo check；cargo test surface_frame_context_keeps_dialog_suboptimal_recovery_local；git diff --check。
+```
+
 ## Review 检查项
 
 - 变更是否包含本地 Dolphin 文件路径和 symbol？

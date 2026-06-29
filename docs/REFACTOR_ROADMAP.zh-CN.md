@@ -166,6 +166,13 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `submit_surface_frame`，surface texture view + command encoder 创建进入
   `begin_surface_frame_encoding`，后续 upload / render pass encode 可以继续按同一 frame
   surface 边界拆分。
+- Detached dialog frame pipeline：
+  Open With / Create / Rename detached dialog 的 text/icon cache begin-frame、异步 icon
+  result drain、frame builder setup、quad/icon/text upload 和 swash cache trim 进入
+  `src/shell/render/frame.rs::prepare_dialog_frame`，`WgpuState::render_detached_dialog`
+  只保留 surface acquire、work-pending redraw、render pass encode、present 和日志；dialog
+  paint 仍通过闭包注入，后续 search result diff、列表动画和 shared frame stats 可以直接挂到
+  `DialogFrame`。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

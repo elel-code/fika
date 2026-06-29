@@ -285,11 +285,10 @@ use shell::perf::{
 use shell::popup::style::*;
 use shell::prewarm::{
     IconRasterPrewarmStats, IconRolePrewarmStats, TextLabelPrewarmMode, TextLabelPrewarmStats,
-    default_text_raster_miss_budget, icon_raster_miss_budget_for_frame,
-    icon_role_prewarm_budget_for_frame, icon_role_read_ahead_queue_budget_for_frame,
-    text_label_prewarm_budget_for_mode, text_label_prewarm_mode_for_frame,
-    text_label_prewarm_mode_for_scene_prewarm, text_label_raster_miss_budget_for_mode,
-    visible_exact_icon_roles_enabled_for_frame,
+    default_text_raster_miss_budget, icon_role_prewarm_budget_for_frame,
+    icon_role_read_ahead_queue_budget_for_frame, text_label_prewarm_budget_for_mode,
+    text_label_prewarm_mode_for_frame, text_label_prewarm_mode_for_scene_prewarm,
+    text_label_raster_miss_budget_for_mode, visible_exact_icon_roles_enabled_for_frame,
 };
 use shell::privilege::{run_privileged_command_sync, should_attempt_privileged_operation};
 #[cfg(test)]
@@ -306,7 +305,7 @@ use shell::render::damage_bounds::{
 use shell::render::damage_bounds::{ShellRenderDamage, ShellRenderDamageKind};
 use shell::render::damage_snapshot::ShellRenderDamageSnapshot;
 use shell::render::dirty_key::ShellRenderDirtyKey;
-use shell::render::frame::{SceneFrame, prepare_scene_frame};
+use shell::render::frame::{SceneFrame, prepare_dialog_frame, prepare_scene_frame};
 #[cfg(test)]
 use shell::render::gpu::upload_vertex_hash_for_test;
 use shell::render::gpu::{
@@ -12695,6 +12694,39 @@ impl WgpuState {
         (view, encoder)
     }
 
+    fn encode_detached_dialog_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+    ) {
+        let [r, g, b, a] = POPUP_SURFACE;
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("fika-wgpu-detached-dialog-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: r as f64,
+                        g: g as f64,
+                        b: b as f64,
+                        a: a as f64,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.quad_renderer.draw(&mut pass);
+        self.icon_renderer.draw(&mut pass);
+        self.text_renderer.draw(&mut pass);
+        self.icon_renderer.draw_overlay(&mut pass);
+    }
+
     fn prewarm_scene_caches(&mut self, scene: &mut ShellScene, reason: &'static str) {
         let total_start = Instant::now();
         let metadata_result_stats = scene.drain_metadata_role_results();
@@ -12890,113 +12922,24 @@ impl WgpuState {
             return ShellRenderOutcome::NotReady;
         };
 
-        self.text_renderer.label_cache.begin_frame();
-        self.text_renderer.metrics_cache.begin_frame();
-        self.icon_renderer.raster_cache.begin_frame();
-        self.icon_renderer.role_raster_cache.begin_frame();
-        let icon_resolve_results = self.icon_renderer.resolver.drain_results();
-        let icon_raster_results = self
-            .icon_renderer
-            .icon_rasters
-            .drain_results(&mut self.icon_renderer.raster_cache);
-        let _thumbnail_results = self.icon_renderer.thumbnails.drain_results();
-
-        let (vertices, mut text_frame, mut icon_frame) = {
-            let text_pixels = self.text_renderer.take_staging_pixels();
-            let mut text_builder = TextFrameBuilder::new(
-                &mut self.text_renderer.font_system,
-                &mut self.text_renderer.swash_cache,
-                &mut self.text_renderer.text_buffer,
-                &mut self.text_renderer.label_cache,
-                &mut self.text_renderer.metrics_cache,
-                &mut self.text_renderer.atlas_cache,
-                layout_size,
-                scale,
-                text_pixels,
-            );
-            let mut icon_builder = IconFrameBuilder::new(
-                &mut self.icon_renderer.resolver,
-                &mut self.icon_renderer.thumbnails,
-                &mut self.icon_renderer.icon_rasters,
-                &mut self.icon_renderer.raster_cache,
-                &mut self.icon_renderer.role_raster_cache,
-                layout_size,
-                icon_raster_miss_budget_for_frame(reason),
-                0,
-                0,
-            );
-            let mut vertices = Vec::with_capacity(256);
-            paint(
-                &mut vertices,
-                &mut text_builder,
-                &mut icon_builder,
-                layout_size,
-            );
-            (vertices, text_builder.finish(), icon_builder.finish())
-        };
-
-        let text_stats = text_frame.stats;
-        let icon_stats = icon_frame.stats;
-        let text_work_pending = text_stats.deferred > 0;
-        let icon_work_pending = icon_stats.deferred > 0
-            || icon_stats.raster_deferred > 0
-            || icon_resolve_results > 0
-            || icon_raster_results > 0
-            || self.icon_renderer.resolver.has_pending()
-            || self
-                .icon_renderer
-                .icon_rasters
-                .has_pending(&mut self.icon_renderer.raster_cache);
-        if text_work_pending || icon_work_pending {
+        let dialog_frame = prepare_dialog_frame(
+            &mut self.text_renderer,
+            &mut self.icon_renderer,
+            &mut self.quad_renderer,
+            &self.device,
+            &self.queue,
+            layout_size,
+            scale,
+            reason,
+            paint,
+        );
+        if dialog_frame.work_pending() {
             window.request_redraw();
         }
 
-        let mut vertex_upload_stats =
-            self.quad_renderer
-                .upload(&self.device, &self.queue, &vertices);
-        vertex_upload_stats.merge(self.icon_renderer.upload(
-            &self.device,
-            &self.queue,
-            &mut icon_frame,
-        ));
-        vertex_upload_stats.merge(self.text_renderer.upload(
-            &self.device,
-            &self.queue,
-            &mut text_frame,
-        ));
-        let (swash_images, swash_outlines, swash_reset) =
-            self.text_renderer.trim_text_engine_caches();
-
         let (view, mut encoder) =
             self.begin_surface_frame_encoding(&frame, "fika-wgpu-detached-dialog-frame");
-        let [r, g, b, a] = POPUP_SURFACE;
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("fika-wgpu-detached-dialog-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: r as f64,
-                            g: g as f64,
-                            b: b as f64,
-                            a: a as f64,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.quad_renderer.draw(&mut pass);
-            self.icon_renderer.draw(&mut pass);
-            self.text_renderer.draw(&mut pass);
-            self.icon_renderer.draw_overlay(&mut pass);
-        }
+        self.encode_detached_dialog_pass(&mut encoder, &view);
         let presented_frame = self.submit_surface_frame(window, frame, encoder);
         if presented_frame == 1 || fika_frame_log_all_enabled() {
             fika_log!(
@@ -13007,15 +12950,15 @@ impl WgpuState {
                 self.size.width,
                 self.size.height,
                 scale,
-                icon_stats.icons,
-                icon_stats.deferred + icon_stats.raster_deferred,
-                text_stats.labels,
-                text_stats.deferred,
-                swash_images,
-                swash_outlines,
-                swash_reset as u8,
-                vertex_upload_stats.writes,
-                vertex_upload_stats.skips,
+                dialog_frame.icon_stats.icons,
+                dialog_frame.icon_stats.deferred + dialog_frame.icon_stats.raster_deferred,
+                dialog_frame.text_stats.labels,
+                dialog_frame.text_stats.deferred,
+                dialog_frame.swash_image_entries,
+                dialog_frame.swash_outline_entries,
+                dialog_frame.swash_reset as u8,
+                dialog_frame.vertex_upload_stats.writes,
+                dialog_frame.vertex_upload_stats.skips,
             );
         }
 
