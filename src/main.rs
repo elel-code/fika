@@ -81,6 +81,7 @@ fn fika_frame_log_all_enabled() -> bool {
     })
 }
 
+mod app_actions;
 mod shell;
 
 use shell::animation::ShellAnimationRuntime;
@@ -125,7 +126,8 @@ use shell::create_rename::{
     ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
 };
 use shell::dialog_window::{
-    ShellDetachedDialogWindow, ShellDialogWindowKind, ShellDialogWindowSpec, ShellDialogWindows,
+    ShellDetachedDialogWindow, ShellDialogWindowHostEvent, ShellDialogWindowKind,
+    ShellDialogWindowSpec, ShellDialogWindows,
 };
 use shell::directory_watch::ShellDirectoryWatcherRuntime;
 use shell::dolphin::item_paint::{dolphin_item_paint, dolphin_selection_core_rect};
@@ -190,14 +192,15 @@ use shell::open_with::OpenWithDefaultUpdate;
 use shell::open_with::OpenWithTreeRow;
 use shell::open_with::geometry::{
     open_with_chooser_click_at_point, open_with_chooser_list_rect_scaled,
-    open_with_chooser_query_rect_scaled, open_with_chooser_rect_scaled,
+    open_with_chooser_query_contains_point, open_with_chooser_rect_scaled,
     open_with_chooser_scrollbar_rects_scaled, open_with_chooser_visible_row_count,
     open_with_chooser_window_size_scaled, open_with_scroll_delta_rows,
 };
 #[cfg(test)]
 use shell::open_with::geometry::{
     open_with_chooser_default_checkbox_rect, open_with_chooser_list_rect,
-    open_with_chooser_open_button_rect, open_with_chooser_rect,
+    open_with_chooser_open_button_rect, open_with_chooser_query_rect_scaled,
+    open_with_chooser_rect,
 };
 use shell::open_with::launch::{
     chooser_for_context_target, launch_request_for_chooser, launch_request_for_context_application,
@@ -234,14 +237,15 @@ use shell::properties::geometry::properties_overlay_rect;
 use shell::properties::geometry::properties_overlay_rect_scaled;
 use shell::properties::{ShellPropertiesOverlay, property_row};
 #[cfg(test)]
-use shell::render::damage::{
-    DamageScissorRect, damage_scissor_rect, folder_preview_damage_rects_for_changed_keys,
-    full_surface_rect, rect_area,
+use shell::render::damage::folder_preview_damage_rects_for_changed_keys;
+use shell::render::damage::folder_preview_damage_rects_for_changes;
+#[cfg(test)]
+use shell::render::damage_bounds::{
+    DamageScissorRect, damage_scissor_rect, full_surface_rect, rect_area,
 };
-use shell::render::damage::{
-    ShellRenderDamage, ShellRenderDamageKind, ShellRenderDamageSnapshot, ShellRenderDirtyKey,
-    folder_preview_damage_rects_for_changes,
-};
+use shell::render::damage_bounds::{ShellRenderDamage, ShellRenderDamageKind};
+use shell::render::damage_snapshot::ShellRenderDamageSnapshot;
+use shell::render::dirty_key::ShellRenderDirtyKey;
 use shell::render::frame::{SceneFrame, prepare_scene_frame};
 #[cfg(test)]
 use shell::render::gpu::upload_vertex_hash_for_test;
@@ -265,19 +269,19 @@ use shell::selection::{
 };
 use shell::service_menu::ServiceMenuLaunchRequest;
 use shell::shortcuts::{
-    CreateCommand, FileKeyboardCommand, FilterCommand, LocationCommand, OpenWithCommand,
-    PathNavigationAction, RenameCommand, SelectionCommand, ZoomAction,
-    create_command_for_key_event, dark_mode_toggle_requested_for_key_event,
-    escape_requested_for_key_event, file_keyboard_command_for_key_event,
-    filter_command_for_key_event, hidden_toggle_requested_for_key_event, is_activation_key,
-    location_command_for_key_event, navigation_action_for_key, open_with_command_for_key_event,
-    path_navigation_action_for_key, path_navigation_action_for_mouse_button,
-    reload_requested_for_key_event, rename_command_for_key_event, selection_command_for_key_event,
-    view_mode_for_key_event, zoom_action_for_key_event, zoom_action_for_scroll_delta,
+    CreateCommand, FilterCommand, LocationCommand, OpenWithCommand, PathNavigationAction,
+    RenameCommand, SelectionCommand, ZoomAction, create_command_for_key_event,
+    dark_mode_toggle_requested_for_key_event, escape_requested_for_key_event,
+    file_keyboard_command_for_key_event, filter_command_for_key_event,
+    hidden_toggle_requested_for_key_event, is_activation_key, location_command_for_key_event,
+    navigation_action_for_key, open_with_command_for_key_event, path_navigation_action_for_key,
+    path_navigation_action_for_mouse_button, reload_requested_for_key_event,
+    rename_command_for_key_event, selection_command_for_key_event, view_mode_for_key_event,
+    zoom_action_for_key_event, zoom_action_for_scroll_delta,
 };
 #[cfg(test)]
 use shell::shortcuts::{
-    create_command_for_key_parts, dark_mode_toggle_requested_for_key_parts,
+    FileKeyboardCommand, create_command_for_key_parts, dark_mode_toggle_requested_for_key_parts,
     file_keyboard_command_for_key_parts, filter_command_for_key_parts,
     hidden_toggle_requested_for_key_parts, location_command_for_key_parts,
     reload_requested_for_key_parts, rename_command_for_key_parts, selection_command_for_key_parts,
@@ -638,38 +642,36 @@ impl FikaWgpuApp {
         kind: ShellDialogWindowKind,
         event: &WindowEvent,
     ) -> bool {
+        let Some(event) = self.dialog_windows.handle_window_event(kind, event) else {
+            return false;
+        };
         match event {
-            WindowEvent::CloseRequested => {
+            ShellDialogWindowHostEvent::CloseRequested => {
                 if self.close_dialog_state_and_window(kind) {
                     self.request_main_redraw();
                 }
                 true
             }
-            WindowEvent::SurfaceResized(size) => {
-                self.dialog_windows.resize(kind, *size);
-                true
-            }
-            WindowEvent::ScaleFactorChanged { .. } => {
-                let Some(scale_factor) = self.dialog_windows.scale_factor(kind) else {
-                    return true;
-                };
+            ShellDialogWindowHostEvent::SurfaceResized => true,
+            ShellDialogWindowHostEvent::ScaleFactorChanged {
+                scale_factor,
+                renderer_size,
+            } => {
                 let size = self
                     .renderer
                     .as_ref()
                     .map(|renderer| renderer.size)
-                    .or_else(|| self.dialog_windows.renderer_size(kind))
-                    .unwrap_or_else(|| PhysicalSize::new(1, 1));
+                    .unwrap_or(renderer_size);
                 if self.scene.set_scale_factor(scale_factor, size) {
                     self.request_main_redraw();
                 }
                 self.sync_dialog_window_for_kind(kind);
                 true
             }
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = *modifiers;
+            ShellDialogWindowHostEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
                 true
             }
-            _ => false,
         }
     }
 
@@ -2319,272 +2321,6 @@ impl FikaWgpuApp {
             && let Some(window) = self.window.as_ref()
         {
             window.request_redraw();
-        }
-    }
-
-    fn perform_context_menu_action(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        command: ShellContextMenuCommand,
-    ) {
-        let action = match command {
-            ShellContextMenuCommand::Builtin(action) => action,
-            ShellContextMenuCommand::SetViewMode(view_mode) => {
-                if let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size)
-                    && self.set_user_view_mode(view_mode, size)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
-                }
-                return;
-            }
-            ShellContextMenuCommand::CreateEntry { kind, privileged } => {
-                if self
-                    .scene
-                    .open_create_dialog_from_context_with_kind(kind, privileged)
-                {
-                    self.ensure_create_dialog_window(event_loop);
-                    self.request_main_redraw();
-                }
-                return;
-            }
-            ShellContextMenuCommand::RunServiceMenuAction { action_id } => {
-                self.run_context_service_menu_action(action_id);
-                return;
-            }
-            ShellContextMenuCommand::OpenWithApplication { desktop_id } => {
-                self.open_context_target_with_application(desktop_id);
-                return;
-            }
-            ShellContextMenuCommand::OpenSubmenu(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            }
-        };
-        match action {
-            ShellContextMenuAction::OpenWith => {
-                if self
-                    .scene
-                    .open_open_with_chooser_from_context(&self.mime_applications)
-                {
-                    self.ensure_open_with_dialog_window(event_loop);
-                    self.request_main_redraw();
-                }
-            }
-            ShellContextMenuAction::Refresh => self.reload_scene_path(event_loop),
-            ShellContextMenuAction::ToggleHiddenFiles => {
-                let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-                    return;
-                };
-                if self.toggle_user_hidden_visibility(size) {
-                    self.scene.record_task_status(ShellTaskStatus::completed(
-                        if self.scene.show_hidden {
-                            "Hidden Files Shown"
-                        } else {
-                            "Hidden Files Hidden"
-                        },
-                        "Current view updated",
-                        false,
-                    ));
-                    self.present_scene_change(event_loop, "context-toggle-hidden");
-                }
-            }
-            ShellContextMenuAction::SplitPane | ShellContextMenuAction::OpenInNewPane => {
-                self.open_context_target_in_split_pane(event_loop, action.as_str());
-            }
-            ShellContextMenuAction::SelectAll => {
-                let _ = self
-                    .scene
-                    .apply_selection_command(SelectionCommand::SelectAll);
-                self.scene.record_task_status(ShellTaskStatus::completed(
-                    "Selected All",
-                    self.scene.active_pane_status_summary(),
-                    false,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            ShellContextMenuAction::Properties => {
-                if self.scene.open_properties_overlay_from_context()
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
-                }
-            }
-            ShellContextMenuAction::CreateNew => {
-                if self.scene.open_create_dialog_from_context() {
-                    self.ensure_create_dialog_window(event_loop);
-                    self.request_main_redraw();
-                }
-            }
-            ShellContextMenuAction::Rename => {
-                if self.scene.open_rename_dialog_from_context(false) {
-                    self.ensure_rename_dialog_window(event_loop);
-                    self.request_main_redraw();
-                }
-            }
-            ShellContextMenuAction::RenameAsAdministrator => {
-                if self.scene.open_rename_dialog_from_context(true) {
-                    self.ensure_rename_dialog_window(event_loop);
-                    self.request_main_redraw();
-                }
-            }
-            ShellContextMenuAction::AddToPlaces => self.add_context_target_to_places(event_loop),
-            ShellContextMenuAction::AddNetworkFolder => self.open_add_network_folder_input(),
-            ShellContextMenuAction::RemovePlace => self.remove_context_place(event_loop),
-            ShellContextMenuAction::RestoreFromTrash
-            | ShellContextMenuAction::DeletePermanently
-            | ShellContextMenuAction::EmptyTrash => {
-                self.perform_trash_view_context_action(event_loop, action)
-            }
-            ShellContextMenuAction::MoveToTrash => {
-                self.move_context_target_to_trash(event_loop, false)
-            }
-            ShellContextMenuAction::MoveToTrashAsAdministrator => {
-                self.move_context_target_to_trash(event_loop, true)
-            }
-            ShellContextMenuAction::Copy | ShellContextMenuAction::Cut => {
-                match self.scene.context_target_file_clipboard_request(action) {
-                    Ok(Some(request)) => self.store_file_clipboard_request(&request),
-                    Ok(None) => {
-                        fika_log!(
-                            "[fika-wgpu] clipboard-export-error role={} target=none",
-                            action.as_str()
-                        );
-                        self.scene.record_task_status(ShellTaskStatus::failed(
-                            "Clipboard failed",
-                            "No file target",
-                            false,
-                        ));
-                    }
-                    Err(error) => {
-                        fika_log!(
-                            "[fika-wgpu] clipboard-export-error role={} {error}",
-                            action.as_str()
-                        );
-                        self.scene.record_task_status(ShellTaskStatus::failed(
-                            "Clipboard failed",
-                            error,
-                            false,
-                        ));
-                    }
-                }
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            ShellContextMenuAction::CopyLocation => {
-                match self.scene.context_target_copy_location_request() {
-                    Some(request) => {
-                        if let Some(clipboard) = self.clipboard.as_ref() {
-                            match clipboard.store_text(&request.text) {
-                                Ok(()) => self.scene.record_copy_location(&request),
-                                Err(error) => {
-                                    fika_log!(
-                                        "[fika-wgpu] copy-location-error path={} error={error}",
-                                        request.path.display()
-                                    );
-                                    self.scene.record_task_status(ShellTaskStatus::failed(
-                                        "Copy Location failed",
-                                        format!("{}: {error}", request.path.display()),
-                                        false,
-                                    ));
-                                }
-                            }
-                        } else {
-                            fika_log!(
-                                "[fika-wgpu] copy-location-error path={} error=clipboard-unavailable",
-                                request.path.display()
-                            );
-                            self.scene.record_task_status(ShellTaskStatus::failed(
-                                "Copy Location failed",
-                                format!("Clipboard is unavailable for {}", request.path.display()),
-                                false,
-                            ));
-                        }
-                    }
-                    None => {
-                        fika_log!("[fika-wgpu] copy-location-error target=none");
-                        self.scene.record_task_status(ShellTaskStatus::failed(
-                            "Copy Location failed",
-                            "No target",
-                            false,
-                        ));
-                    }
-                }
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            ShellContextMenuAction::MountDevice
-            | ShellContextMenuAction::UnmountDevice
-            | ShellContextMenuAction::EjectDevice
-            | ShellContextMenuAction::SafelyRemoveDevice => {
-                self.perform_device_context_action(event_loop, action)
-            }
-            ShellContextMenuAction::Paste => self.paste_from_clipboard(event_loop, false),
-            ShellContextMenuAction::PasteAsAdministrator => {
-                self.paste_from_clipboard(event_loop, true)
-            }
-            ShellContextMenuAction::ViewMode => {}
-        }
-    }
-
-    fn perform_file_keyboard_command(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        command: FileKeyboardCommand,
-    ) {
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        match command {
-            FileKeyboardCommand::Copy | FileKeyboardCommand::Cut => {
-                let role = match command {
-                    FileKeyboardCommand::Copy => FileClipboardRole::Copy,
-                    FileKeyboardCommand::Cut => FileClipboardRole::Cut,
-                    _ => unreachable!(),
-                };
-                match self.scene.active_file_clipboard_request(role) {
-                    Ok(Some(request)) => self.store_file_clipboard_request(&request),
-                    Ok(None) => fika_log!(
-                        "[fika-wgpu] clipboard-export-error role={} target=none",
-                        file_clipboard_role_as_str(role)
-                    ),
-                    Err(error) => fika_log!(
-                        "[fika-wgpu] clipboard-export-error role={} {error}",
-                        file_clipboard_role_as_str(role)
-                    ),
-                }
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            FileKeyboardCommand::Paste => self.paste_from_clipboard_into_active_pane(event_loop),
-            FileKeyboardCommand::Rename => {
-                if self.scene.open_rename_dialog_from_active_selection(false) {
-                    self.ensure_rename_dialog_window(event_loop);
-                    self.request_main_redraw();
-                }
-            }
-            FileKeyboardCommand::Delete => match self.scene.delete_active_selection(size) {
-                Ok(true) => self.present_scene_change(event_loop, "delete-selection"),
-                Ok(false) => {}
-                Err(error) => {
-                    fika_log!("[fika-wgpu] delete-error {error}");
-                    self.scene.record_task_status(ShellTaskStatus::failed(
-                        "Move to Trash failed",
-                        error,
-                        false,
-                    ));
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
-                }
-            },
         }
     }
 
@@ -5508,8 +5244,7 @@ impl ShellScene {
         let Some(chooser) = self.open_with_chooser.as_ref() else {
             return CursorIcon::Default;
         };
-        let rect = open_with_chooser_rect_scaled(chooser, size, self.ui_scale());
-        if open_with_chooser_query_rect_scaled(rect, self.ui_scale()).contains(point) {
+        if open_with_chooser_query_contains_point(chooser, point, size, self.ui_scale()) {
             CursorIcon::Text
         } else {
             CursorIcon::Default

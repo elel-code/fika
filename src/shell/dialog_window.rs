@@ -1,5 +1,6 @@
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::PhysicalSize;
+use winit::event::{Modifiers, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Theme, Window, WindowAttributes, WindowId};
 
@@ -137,6 +138,17 @@ impl ShellDetachedDialogWindow {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ShellDialogWindowHostEvent {
+    CloseRequested,
+    SurfaceResized,
+    ScaleFactorChanged {
+        scale_factor: f32,
+        renderer_size: PhysicalSize<u32>,
+    },
+    ModifiersChanged(Modifiers),
+}
+
 #[derive(Default)]
 pub(crate) struct ShellDialogWindows {
     create: Option<ShellDetachedDialogWindow>,
@@ -198,8 +210,29 @@ impl ShellDialogWindows {
         self.get(kind).map(ShellDetachedDialogWindow::renderer_size)
     }
 
-    pub(crate) fn scale_factor(&self, kind: ShellDialogWindowKind) -> Option<f32> {
-        self.get(kind).map(ShellDetachedDialogWindow::scale_factor)
+    pub(crate) fn handle_window_event(
+        &mut self,
+        kind: ShellDialogWindowKind,
+        event: &WindowEvent,
+    ) -> Option<ShellDialogWindowHostEvent> {
+        match event {
+            WindowEvent::CloseRequested => Some(ShellDialogWindowHostEvent::CloseRequested),
+            WindowEvent::SurfaceResized(size) => {
+                self.resize(kind, *size);
+                Some(ShellDialogWindowHostEvent::SurfaceResized)
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                self.get(kind)
+                    .map(|window| ShellDialogWindowHostEvent::ScaleFactorChanged {
+                        scale_factor: window.scale_factor(),
+                        renderer_size: window.renderer_size(),
+                    })
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                Some(ShellDialogWindowHostEvent::ModifiersChanged(*modifiers))
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn set(&mut self, kind: ShellDialogWindowKind, window: ShellDetachedDialogWindow) {

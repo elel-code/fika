@@ -1,0 +1,172 @@
+# 架构 Refactor Roadmap
+
+本文档记录 Fika shell 后续架构拆分路线。目标是为性能优化、动画扩展、独立窗口
+dialog、render damage 和异步操作持续演进提供稳定边界。
+
+## 原则
+
+- 每一步只移动一个明确边界，避免把行为改动混进结构调整。
+- 保持测试先行的回归 gate：`cargo fmt`、`cargo check`、`cargo test`、
+  `git diff --check`。
+- 性能相关变更遵循 `docs/PERFORMANCE_ALIGNMENT.zh-CN.md`，需要 Dolphin
+  reference 时必须写明本地源码路径和 Fika 映射。
+- 新抽象必须减少重复、收缩 `main.rs` 职责，或为动画/render/operation 后续扩展
+  提供明确挂载点。
+- 不保留长期兼容式双路径；迁移完成后应清理旧 overlay、旧 dirty key、旧事件分支。
+
+## 已完成边界
+
+- 独立 dialog window host：
+  `src/shell/dialog_window.rs` 管理 dialog window 创建、同步、关闭、cursor、resize、
+  renderer size、scale factor 和 window id 路由。
+- Create / Rename / Open With 独立窗口化：
+  旧的主窗口 overlay fallback 已移除，dialog 内容变化不再污染主窗口 render dirty /
+  damage。
+- 动画 runtime 初始边界：
+  item reflow 动画从 `main.rs` 移入 `src/shell/animation.rs`，主循环只依赖
+  active、deadline、dirty、prune 接口。
+- Dialog window 通用事件：
+  common close / resize / scale / modifiers 路径已从具体 dialog handler 中抽出。
+- Render dirty / damage 三层拆分：
+  `src/shell/render/dirty_key.rs` 负责 dirty key，`damage_snapshot.rs` 负责采样
+  render 可见状态，`damage_bounds.rs` 负责比较 snapshot 并生成 damage bounds；
+  `damage.rs` 仅保留 folder preview 异步结果到 damage rect 的映射。
+- Command / Action 分类层初始边界：
+  `src/shell/action.rs` 负责 context menu command plan、context menu action dispatch
+  和 file keyboard command 的纯分类；`FikaWgpuApp` 暂时保留副作用执行，后续可以
+  继续拆执行器。
+- Command / Action 执行器第一步：
+  `src/app_actions.rs` 承载 context menu 和 file keyboard command 的副作用执行；
+  `main.rs` 的 window event handler 保持调用入口，但不再内联这两段长业务分支。
+- Open With query hit testing 收敛：
+  search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
+  cursor 判断不再直接拼 query rect。
+
+## 下一步队列
+
+### 1. Command / Action 层
+
+目标：把 `FikaWgpuApp` 中的用户命令执行路径拆出，使 window event handler 只负责把
+输入转换为 action。
+
+候选拆分：
+- context menu / drop menu action dispatcher。
+- 文件命令执行器：rename、create、delete、trash、paste、open。
+- view 命令执行器：zoom、view mode、hidden、split pane、reload。
+- 剪贴板、设备操作、trash 操作等副作用执行 request 化。
+
+完成标准：
+- `ApplicationHandler::window_event` 中的业务分支减少。
+- command 函数不直接依赖 `WindowEvent`。
+- 测试仍覆盖现有用户工作流。
+
+### 2. Render Surface / Frame Pipeline
+
+目标：把主窗口和 detached dialog 的 frame acquire、text/icon cache begin-frame、
+upload、present、logging 管线抽成共享 render surface 层。
+
+候选拆分：
+- surface acquire / recover / validation error。
+- text/icon frame builder setup。
+- vertex/icon/text upload merge。
+- render pass encode / present。
+
+完成标准：
+- `WgpuState::render_detached_dialog` 不再手写一整套 frame pipeline。
+- 主窗口 render 与 dialog render 共享 recover/present 错误策略。
+- 日志仍能区分 main frame 和 dialog frame。
+
+### 3. ShellScene Hit Testing / Layout 边界
+
+目标：把 `ShellScene` 中和具体 UI 区域绑定的 hit testing、rect 计算逐步移入对应模块。
+
+优先模块：
+- Open With hit testing / cursor。
+- Create / Rename hit testing。
+- Places sidebar hit testing。
+- Task detail dialog hit testing。
+
+完成标准：
+- `ShellScene` 暴露较少的 `*_at_screen_point` 手写入口。
+- geometry / hit test 和 paint 使用同一套模块内 rect API。
+- 测试从“直接改字段”逐步转向 fixture builder 和模块 API。
+
+### 4. Render Dirty / Damage 后续收敛
+
+目标：在已完成文件拆分基础上，继续收缩跨层依赖和测试直接字段访问。
+
+候选清理：
+- 把 `ShellRenderDamageSnapshot` 测试访问字段逐步改为断言 helper。
+- 把 folder preview damage rect 映射迁到更明确的文件名。
+- 将 `damage_snapshot.rs` 内部的 context/drop menu 采样 helper 与对应 UI 模块共享
+  rect API。
+
+完成标准：
+- dirty key 不依赖 damage bounds helper。
+- snapshot 只采集 render 可见状态。
+- bounds 只比较 snapshot 并输出 damage。
+
+### 5. Animation Registry
+
+目标：把 `ShellAnimationRuntime` 从 item reflow 专用 runtime 扩展为可挂载多个 timeline
+的 animation registry。
+
+候选动画：
+- delete fade / scale。
+- surviving item reflow。
+- hover / selection transition。
+- Places reorder transition。
+- dialog enter / exit transition。
+
+完成标准：
+- 主循环只查询 animation runtime 的 next deadline 和 dirty value。
+- 每种动画有独立 key、生命周期和可测试的 easing。
+- render damage 能基于动画 dirty value 做最小 invalidation。
+
+### 6. Async Operation Dispatcher
+
+目标：把 `FikaWgpuApp` 中的 async task spawn、completion drain、task status 更新拆到
+operation dispatcher。
+
+候选操作：
+- trash / restore / delete permanently / empty trash。
+- create / rename privileged fallback。
+- paste / transfer。
+- open with / set default app。
+
+完成标准：
+- `FikaWgpuApp` 只提交 operation request 并应用 completion。
+- operation runtime 管理 task id、controller、status 文案和 cancellation。
+- Empty Trash 等性能敏感路径保留 compio 优先实现。
+
+### 7. Test Fixture Builder
+
+目标：减少测试直接构造 `ShellScene` 字段导致的迁移成本。
+
+候选 builder：
+- `TestShellSceneBuilder`
+- pane / entries / places / dialogs / task statuses presets。
+- damage snapshot helper。
+
+完成标准：
+- 新测试不再手写完整 `ShellScene` 字段。
+- 迁移字段时主要改 builder，而不是批量改测试。
+
+## 当前推荐顺序
+
+1. Command / Action 层第一批：context menu 和 file keyboard command。
+2. ShellScene hit testing 模块化。
+3. Render surface / frame pipeline。
+4. Animation registry。
+5. Async operation dispatcher。
+6. Test fixture builder 穿插进行。
+7. Render dirty / damage 后续收敛穿插进行。
+
+## 每步提交前验证
+
+```bash
+cargo fmt
+cargo check
+cargo test
+git diff --check
+```

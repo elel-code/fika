@@ -264,6 +264,16 @@ pub(crate) fn open_with_scroll_delta_rows(delta_y: f32, scale_factor: f32) -> Op
     Some(if delta_y > 0.0 { rows } else { -rows })
 }
 
+pub(crate) fn open_with_chooser_query_contains_point(
+    chooser: &ShellOpenWithChooser,
+    point: ViewPoint,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> bool {
+    let rect = open_with_chooser_rect_scaled(chooser, size, scale_factor);
+    open_with_chooser_query_rect_scaled(rect, scale_factor).contains(point)
+}
+
 pub(crate) fn open_with_chooser_click_at_point(
     chooser: &ShellOpenWithChooser,
     point: ViewPoint,
