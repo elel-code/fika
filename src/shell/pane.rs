@@ -271,6 +271,7 @@ pub(crate) trait ShellVisibleSlotItem {
     fn visible_slot_path(&self) -> Option<&Path>;
     fn visible_slot_id(&self) -> u64;
     fn set_visible_slot_id(&mut self, slot_id: u64);
+    fn release_visible_slot_path(&mut self) {}
 }
 
 #[derive(Clone, Debug, Default)]
@@ -413,13 +414,15 @@ impl ShellVisibleItemSlotPool {
         }
 
         for item in visible_items.iter_mut() {
-            if item.visible_slot_id() != 0 {
-                continue;
-            }
-            let Some(path) = item.visible_slot_path() else {
-                continue;
+            let slot_id = if item.visible_slot_id() != 0 {
+                item.visible_slot_id()
+            } else {
+                item.visible_slot_path()
+                    .and_then(|path| self.slot_for_path(path))
+                    .unwrap_or_default()
             };
-            item.set_visible_slot_id(self.slot_for_path(path).unwrap_or_default());
+            item.set_visible_slot_id(slot_id);
+            item.release_visible_slot_path();
         }
 
         ShellVisibleItemSlotStats {

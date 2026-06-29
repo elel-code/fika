@@ -198,8 +198,15 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - Visible slot assignment 融合：
   `ShellVisibleItemSlotPool::update_visible_items` 支持 borrowed path 输入，prepared
   projection layout 通过 `ShellVisibleSlotItem` 更新 visible slot pool 后把 slot id 写回
-  visible item；最终 `ShellPaneProjection` 优先使用已分配 slot id，减少 frame projection
-  构建中的路径克隆和全量重复 slot lookup。
+  visible item 并释放临时 path；`ShellLayout::for_each_visible_item` 直接填充 prepared
+  items，避免同帧再保留一份中间 `Vec<ItemLayout>`；最终 `ShellPaneProjection` 优先使用
+  已分配 slot id，减少 frame projection 构建中的路径克隆、全量重复 slot lookup 和短生命周期
+  内存峰值。
+- Layout size-hint cache 内存上限：
+  `CompactLayoutCache` 与 `IconsLayoutHeightCache` 统一落到 `BoundedLayoutCache`，
+  保留 pane-level invalidation，同时限制为 8-entry LRU；这让 compact text widths、
+  column widths 和 icons item heights 仍能复用滚动/重绘路径，但不会因窗口尺寸、缩放
+  或目录切换长期积累多份整目录 `Arc<[f32]>`。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

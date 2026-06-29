@@ -1,5 +1,6 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use fika_core::{CompactLayout, IconsLayout, ItemLayout, ViewPoint, ViewRect, ViewSize};
@@ -25,32 +26,101 @@ pub(crate) struct CompactLayoutCacheValue {
     pub(crate) column_widths: Arc<[f32]>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug)]
+struct BoundedLayoutCache<K, V> {
+    entries: HashMap<K, V>,
+    recency: VecDeque<K>,
+    max_entries: usize,
+}
+
+impl<K, V> BoundedLayoutCache<K, V>
+where
+    K: Copy + Eq + Hash,
+    V: Clone,
+{
+    fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            recency: VecDeque::new(),
+            max_entries,
+        }
+    }
+
+    fn get(&mut self, key: &K) -> Option<V> {
+        let value = self.entries.get(key).cloned()?;
+        self.touch(*key);
+        Some(value)
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        self.entries.insert(key, value);
+        self.touch(key);
+        self.prune();
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
+        self.entries.retain(|key, _| keep(key));
+        self.recency.retain(|key| self.entries.contains_key(key));
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.recency.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn touch(&mut self, key: K) {
+        self.recency.retain(|candidate| candidate != &key);
+        self.recency.push_back(key);
+    }
+
+    fn prune(&mut self) {
+        while self.entries.len() > self.max_entries {
+            let Some(key) = self.recency.pop_front() else {
+                break;
+            };
+            self.entries.remove(&key);
+        }
+    }
+}
+
 pub(crate) struct CompactLayoutCache {
-    entries: RefCell<HashMap<CompactLayoutCacheKey, CompactLayoutCacheValue>>,
+    cache: RefCell<BoundedLayoutCache<CompactLayoutCacheKey, CompactLayoutCacheValue>>,
+}
+
+impl Default for CompactLayoutCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CompactLayoutCache {
+    const MAX_ENTRIES: usize = 8;
+
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            cache: RefCell::new(BoundedLayoutCache::new(Self::MAX_ENTRIES)),
+        }
     }
 
     pub(crate) fn get(&self, key: &CompactLayoutCacheKey) -> Option<CompactLayoutCacheValue> {
-        self.entries.borrow().get(key).cloned()
+        self.cache.borrow_mut().get(key)
     }
 
     pub(crate) fn insert(&self, key: CompactLayoutCacheKey, value: CompactLayoutCacheValue) {
-        self.entries.borrow_mut().insert(key, value);
+        self.cache.borrow_mut().insert(key, value);
     }
 
     pub(crate) fn invalidate_pane(&self, pane_index: usize) {
-        self.entries
-            .borrow_mut()
-            .retain(|key, _| key.pane != pane_index);
+        self.cache.borrow_mut().retain(|key| key.pane != pane_index);
     }
 
     pub(crate) fn clear(&self) {
-        self.entries.borrow_mut().clear();
+        self.cache.borrow_mut().clear();
     }
 }
 
@@ -71,21 +141,30 @@ pub(crate) struct IconsLayoutHeightCacheValue {
     pub(crate) item_heights: Arc<[f32]>,
 }
 
-#[derive(Default)]
 pub(crate) struct IconsLayoutHeightCache {
-    entries: RefCell<HashMap<IconsLayoutHeightCacheKey, IconsLayoutHeightCacheValue>>,
+    cache: RefCell<BoundedLayoutCache<IconsLayoutHeightCacheKey, IconsLayoutHeightCacheValue>>,
+}
+
+impl Default for IconsLayoutHeightCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl IconsLayoutHeightCache {
+    const MAX_ENTRIES: usize = 8;
+
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            cache: RefCell::new(BoundedLayoutCache::new(Self::MAX_ENTRIES)),
+        }
     }
 
     pub(crate) fn get(
         &self,
         key: &IconsLayoutHeightCacheKey,
     ) -> Option<IconsLayoutHeightCacheValue> {
-        self.entries.borrow().get(key).cloned()
+        self.cache.borrow_mut().get(key)
     }
 
     pub(crate) fn insert(
@@ -93,22 +172,20 @@ impl IconsLayoutHeightCache {
         key: IconsLayoutHeightCacheKey,
         value: IconsLayoutHeightCacheValue,
     ) {
-        self.entries.borrow_mut().insert(key, value);
+        self.cache.borrow_mut().insert(key, value);
     }
 
     pub(crate) fn invalidate_pane(&self, pane_index: usize) {
-        self.entries
-            .borrow_mut()
-            .retain(|key, _| key.pane != pane_index);
+        self.cache.borrow_mut().retain(|key| key.pane != pane_index);
     }
 
     pub(crate) fn clear(&self) {
-        self.entries.borrow_mut().clear();
+        self.cache.borrow_mut().clear();
     }
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.entries.borrow().len()
+        self.cache.borrow().len()
     }
 }
 
@@ -141,7 +218,7 @@ pub(crate) fn navigation_target(
         ShellLayout::Compact(layout) => {
             let rows = layout.rows_per_column().max(1);
             let row = current % rows;
-            let page_stride = layout.visible_items().len().max(rows).max(1);
+            let page_stride = layout.visible_item_count().max(rows).max(1);
             Some(match action {
                 NavigationAction::Left => current.saturating_sub(rows),
                 NavigationAction::Right => (current + rows).min(last),
@@ -166,7 +243,7 @@ pub(crate) fn navigation_target(
             })
         }
         ShellLayout::Details(layout) => {
-            let page_stride = layout.visible_items().len().max(1);
+            let page_stride = layout.visible_item_count().max(1);
             Some(match action {
                 NavigationAction::Left | NavigationAction::Up => current.saturating_sub(1),
                 NavigationAction::Right | NavigationAction::Down => (current + 1).min(last),
@@ -203,12 +280,31 @@ impl ShellLayout {
         }
     }
 
-    pub(crate) fn visible_items(&self) -> Vec<ItemLayout> {
+    pub(crate) fn visible_item_count(&self) -> usize {
         match self {
-            Self::Icons(layout) => layout.visible_items().collect(),
-            Self::Compact(layout) => layout.visible_items(),
-            Self::Details(layout) => layout.visible_items(),
+            Self::Icons(layout) => layout.visible_items().count(),
+            Self::Compact(layout) => layout.visible_item_count(),
+            Self::Details(layout) => layout.visible_item_count(),
         }
+    }
+
+    pub(crate) fn for_each_visible_item(&self, mut visit: impl FnMut(ItemLayout)) {
+        match self {
+            Self::Icons(layout) => {
+                for item in layout.visible_items() {
+                    visit(item);
+                }
+            }
+            Self::Compact(layout) => layout.for_each_visible_item(visit),
+            Self::Details(layout) => layout.for_each_visible_item(visit),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn visible_items(&self) -> Vec<ItemLayout> {
+        let mut items = Vec::with_capacity(self.visible_item_count());
+        self.for_each_visible_item(|item| items.push(item));
+        items
     }
 
     pub(crate) fn hit_test_content_point(&self, point: ViewPoint) -> Option<usize> {
@@ -255,11 +351,25 @@ impl ShellCompactLayout {
             .item_with_required_text_width(index, self.text_widths.get(index).copied())
     }
 
-    pub(crate) fn visible_items(&self) -> Vec<ItemLayout> {
-        self.layout
+    fn visible_item_count(&self) -> usize {
+        self.layout.visible_items().count()
+    }
+
+    fn for_each_visible_item(&self, mut visit: impl FnMut(ItemLayout)) {
+        for item in self
+            .layout
             .visible_items()
             .filter_map(|item| self.item(item.model_index))
-            .collect()
+        {
+            visit(item);
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn visible_items(&self) -> Vec<ItemLayout> {
+        let mut items = Vec::with_capacity(self.visible_item_count());
+        self.for_each_visible_item(|item| items.push(item));
+        items
     }
 
     fn hit_test_content_point(&self, point: ViewPoint) -> Option<usize> {
@@ -355,10 +465,17 @@ impl DetailsLayout {
         })
     }
 
-    pub(crate) fn visible_items(&self) -> Vec<ItemLayout> {
-        self.visible_row_range()
+    fn visible_item_count(&self) -> usize {
+        self.visible_row_range().len()
+    }
+
+    fn for_each_visible_item(&self, mut visit: impl FnMut(ItemLayout)) {
+        for item in self
+            .visible_row_range()
             .filter_map(|index| self.item(index))
-            .collect()
+        {
+            visit(item);
+        }
     }
 
     fn hit_test_content_point(&self, point: ViewPoint) -> Option<usize> {
@@ -388,5 +505,25 @@ impl DetailsLayout {
             .max(0.0) as usize
             + 1;
         start.min(self.item_count)..end.min(self.item_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_layout_cache_prunes_least_recently_used_entry() {
+        let mut cache = BoundedLayoutCache::new(2);
+        cache.insert(1usize, "one");
+        cache.insert(2usize, "two");
+
+        assert_eq!(cache.get(&1), Some("one"));
+        cache.insert(3usize, "three");
+
+        assert_eq!(cache.get(&2), None);
+        assert_eq!(cache.get(&1), Some("one"));
+        assert_eq!(cache.get(&3), Some("three"));
+        assert_eq!(cache.len(), 2);
     }
 }

@@ -182,8 +182,20 @@ Dolphin reference:
 - Symbol: KItemListView::updateVisibleItems / m_visibleItems
 - Dolphin boundary: visible item/widget 集合在可见项更新阶段分配和复用 widget identity，paint 阶段直接使用已经维护好的 visible item，不再为每个 item 重新查找 identity。
 - Fika mapping: src/main.rs::ShellScene::update_visible_slot_pools_for_projection_layouts；src/shell/pane.rs::ShellVisibleItemSlotPool::update_visible_item_slots / ShellVisibleSlotItem；src/main.rs::ShellScene::pane_projection_from_prepared。
-- Divergence: Dolphin 以 widget 对象长期承载 identity；Fika 仍使用 path keyed visible slot pool。现在 slot pool 直接消费 prepared projection layout 中的 borrowed path，并通过 `ShellVisibleSlotItem` 把 slot id 写回 prepared visible item；已有可见项在同一次 hash lookup 中拿到 slot id，新出现的 item 只在分配 slot 后补一次 lookup，最终 projection 构建时优先使用已分配 slot id，避免 retained visible item 的 `PathBuf` 克隆和全量二次 slot hash lookup。
+- Divergence: Dolphin 以 widget 对象长期承载 identity；Fika 仍使用 path keyed visible slot pool。现在 slot pool 直接消费 prepared projection layout 中的 borrowed path，并通过 `ShellVisibleSlotItem` 把 slot id 写回 prepared visible item；已有可见项在同一次 hash lookup 中拿到 slot id，新出现的 item 只在分配 slot 后补一次 lookup，随后立即释放 prepared visible item 的临时 `PathBuf`。同时 projection layout 改为用 `ShellLayout::for_each_visible_item` 直接填充 prepared items，不再先物化一份 `Vec<ItemLayout>`，最终 projection 构建时优先使用已分配 slot id，降低 retained visible item 的路径克隆、全量二次 slot hash lookup 和同帧峰值内存。
 - Verification: cargo fmt；cargo check；cargo test prepared_pane_projections_match_direct_projection；cargo test；git diff --check。
+```
+
+### Layout size-hint cache bounded memory
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/private/kitemlistsizehintresolver.cpp
+- Symbol: KItemListSizeHintResolver::updateCache / clearCache / itemsInserted / itemsRemoved / itemsMoved / itemsChanged
+- Dolphin boundary: size hint cache 是 view/model 维度的一份 logicalHeightHintCache；model 结构变化时就地更新或清空，不会为每次尺寸/缩放变化长期保留多份整目录高度数组。
+- Fika mapping: src/shell/pane_layout.rs::BoundedLayoutCache / CompactLayoutCache / IconsLayoutHeightCache；src/main.rs::ShellScene::pane_compact_layout / pane_icons_layout。
+- Divergence: Dolphin 的 size hint resolver 绑定 Qt item view 和 model 生命周期；Fika 仍按 pane、item_count、尺寸、缩放等 key 缓存 compact text widths、column widths 和 icons item heights。现在这两类 layout cache 使用 8-entry LRU 上限并保留 pane invalidation，避免窗口尺寸/缩放反复变化后把多份大目录 `Arc<[f32]>` 常驻内存。
+- Verification: cargo fmt；cargo check；cargo test bounded_layout_cache_prunes_least_recently_used_entry；cargo test prepared_pane_projections_match_direct_projection；cargo test pane_visible_slot_pools_are_addressed_by_pane_id；cargo test render_dirty_key_with_projections_matches_scene_lookup；cargo test；git diff --check。
 ```
 
 ## Review 检查项

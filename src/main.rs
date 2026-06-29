@@ -2547,6 +2547,10 @@ impl ShellVisibleSlotItem for ShellPreparedPaneVisibleItem {
     fn set_visible_slot_id(&mut self, slot_id: u64) {
         self.slot_id = slot_id;
     }
+
+    fn release_visible_slot_path(&mut self) {
+        self.path = None;
+    }
 }
 
 struct ShellPreparedPaneProjection {
@@ -8525,21 +8529,18 @@ impl ShellScene {
             geometry.content.width,
             geometry.content.height,
         );
-        let visible_items = layout
-            .visible_items()
-            .into_iter()
-            .map(|layout| {
-                let path = view
-                    .filtered_indexes
-                    .get(layout.model_index)
-                    .and_then(|entry_index| self.entry_path_for_pane_view(view, *entry_index));
-                ShellPreparedPaneVisibleItem {
-                    layout,
-                    path,
-                    slot_id: 0,
-                }
-            })
-            .collect();
+        let mut visible_items = Vec::with_capacity(layout.visible_item_count());
+        layout.for_each_visible_item(|layout| {
+            let path = view
+                .filtered_indexes
+                .get(layout.model_index)
+                .and_then(|entry_index| self.entry_path_for_pane_view(view, *entry_index));
+            visible_items.push(ShellPreparedPaneVisibleItem {
+                layout,
+                path,
+                slot_id: 0,
+            });
+        });
         let scroll_metrics = ShellPaneScrollMetrics::new(layout.content_size(), geometry.content);
         Some(ShellPreparedPaneProjection {
             geometry,
@@ -21008,6 +21009,13 @@ mod tests {
 
         let mut layouts = scene.prepare_frame_projection_layouts(size);
         scene.update_visible_slot_pools_for_projection_layouts(&mut layouts);
+        assert!(
+            layouts
+                .layouts
+                .iter()
+                .flat_map(|projection| &projection.visible_items)
+                .all(|item| item.path.is_none())
+        );
         let frame_projections = scene.pane_projections_from_layouts(layouts);
         let prepared = frame_projections
             .projections()
