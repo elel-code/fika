@@ -260,9 +260,7 @@ impl FikaWgpuApp {
             MainLeftPointerButtonIntent::ContextMenu => {
                 self.activate_or_close_context_menu(event_loop, point, size)
             }
-            MainLeftPointerButtonIntent::DropMenu => {
-                self.activate_or_close_drop_menu(event_loop, point, size)
-            }
+            MainLeftPointerButtonIntent::DropMenu => self.activate_or_close_drop_menu(point, size),
             MainLeftPointerButtonIntent::OpenTaskDetail => {
                 let changed = self
                     .scene
@@ -367,14 +365,12 @@ impl FikaWgpuApp {
 
     fn activate_or_close_drop_menu(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
         point: crate::ViewPoint,
         size: winit::dpi::PhysicalSize<u32>,
     ) -> ShellActionOutcome {
         let request = self.scene.activate_or_close_drop_menu_request(point, size);
         if let Some(request) = request {
-            self.perform_drop_operation_request(event_loop, request);
-            ShellActionOutcome::None
+            self.perform_drop_operation_request(request)
         } else {
             ShellActionOutcome::Redraw
         }

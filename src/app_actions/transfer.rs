@@ -141,18 +141,16 @@ impl FikaWgpuApp {
 
     pub(crate) fn perform_drop_operation_request(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
         request: ShellDropOperationRequest,
-    ) {
+    ) -> ShellActionOutcome {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
+            return ShellActionOutcome::None;
         };
         if !request.privileged {
             if let Err(error) = self.scene.validate_drop_operation_request(&request) {
                 self.scene
                     .record_task_status(ShellTaskStatus::failed("Drop failed", error, false));
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-                return;
+                return ShellActionOutcome::Redraw;
             }
             self.start_async_transfer(
                 ShellAsyncTransferSource::Drop,
@@ -162,14 +160,11 @@ impl FikaWgpuApp {
                 request.mode.label(),
                 false,
             );
-            self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-            return;
+            return ShellActionOutcome::Redraw;
         }
         match self.scene.perform_drop_operation_request(&request, size) {
-            Ok(result) if result.changed() => {
-                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("dnd-drop"));
-            }
-            Ok(_) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
+            Ok(result) if result.changed() => ShellActionOutcome::Present("dnd-drop"),
+            Ok(_) => ShellActionOutcome::Redraw,
             Err(error) => {
                 fika_log!("[fika-wgpu] dnd-transfer-error {error}");
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -181,7 +176,7 @@ impl FikaWgpuApp {
                     error,
                     request.privileged,
                 ));
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
+                ShellActionOutcome::Redraw
             }
         }
     }

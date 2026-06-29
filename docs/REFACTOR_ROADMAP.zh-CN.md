@@ -104,6 +104,9 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   external DnD enter / move / drop / leave 入口改为返回 `ShellActionOutcome`，主窗口事件
   循环统一 apply outcome；drop source 选择规则抽为 focused tested helper。drop request
   的文件操作执行仍保留在现有 transfer 路径，后续再接入 async operation dispatcher。
+- Drop operation outcome 返回：
+  drop menu 激活后的 `perform_drop_operation_request` 不再直接 present/redraw，而是返回
+  `ShellActionOutcome`；pointer route 将 DnD 执行结果交回统一表现调度。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。
