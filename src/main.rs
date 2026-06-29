@@ -1710,16 +1710,20 @@ impl ApplicationHandler for FikaWgpuApp {
                 self.handle_main_pointer_left();
             }
             WindowEvent::DragEntered { paths, position } => {
-                self.external_drag_entered(paths, position);
+                let outcome = self.external_drag_entered(paths, position);
+                self.apply_window_action_outcome(outcome);
             }
             WindowEvent::DragMoved { position } => {
-                self.external_drag_moved(position);
+                let outcome = self.external_drag_moved(position);
+                self.apply_window_action_outcome(outcome);
             }
             WindowEvent::DragDropped { paths, position } => {
-                self.external_drag_dropped(paths, position);
+                let outcome = self.external_drag_dropped(paths, position);
+                self.apply_window_action_outcome(outcome);
             }
             WindowEvent::DragLeft { .. } => {
-                self.external_drag_left();
+                let outcome = self.external_drag_left();
+                self.apply_window_action_outcome(outcome);
             }
             WindowEvent::PointerButton {
                 state,

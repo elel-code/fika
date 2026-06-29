@@ -100,6 +100,10 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   task detail modal 对 pointer move 的输入屏蔽决策进入 `pointer_route.rs`，`pointer.rs`
   只收集 snapshot 并执行 cursor / hover effect；后续 drag、hover damage、动画 dirty
   可以继续挂到同一 route/effect 结构。
+- External drag outcome 返回：
+  external DnD enter / move / drop / leave 入口改为返回 `ShellActionOutcome`，主窗口事件
+  循环统一 apply outcome；drop source 选择规则抽为 focused tested helper。drop request
+  的文件操作执行仍保留在现有 transfer 路径，后续再接入 async operation dispatcher。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。

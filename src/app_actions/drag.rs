@@ -12,9 +12,9 @@ impl FikaWgpuApp {
         &mut self,
         paths: Vec<PathBuf>,
         position: PhysicalPosition<f64>,
-    ) {
+    ) -> ShellActionOutcome {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
+            return ShellActionOutcome::None;
         };
         let point = view_point_from_physical_position(position);
         let changed = self.scene.begin_external_drag(paths, point, size);
@@ -31,32 +31,31 @@ impl FikaWgpuApp {
                 .map(ShellDropTarget::kind)
                 .unwrap_or("none")
         );
-        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
+        ShellActionOutcome::redraw_if(changed)
     }
 
-    pub(crate) fn external_drag_moved(&mut self, position: PhysicalPosition<f64>) {
+    pub(crate) fn external_drag_moved(
+        &mut self,
+        position: PhysicalPosition<f64>,
+    ) -> ShellActionOutcome {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
+            return ShellActionOutcome::None;
         };
         let point = view_point_from_physical_position(position);
         let changed = self.scene.update_external_drag(point, size);
-        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
+        ShellActionOutcome::redraw_if(changed)
     }
 
     pub(crate) fn external_drag_dropped(
         &mut self,
         paths: Vec<PathBuf>,
         position: PhysicalPosition<f64>,
-    ) {
+    ) -> ShellActionOutcome {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
+            return ShellActionOutcome::None;
         };
         let point = view_point_from_physical_position(position);
-        let sources = if paths.is_empty() {
-            self.scene.external_drag_sources().unwrap_or_default()
-        } else {
-            paths
-        };
+        let sources = external_drag_drop_sources(paths, self.scene.external_drag_sources());
         match self.scene.finish_external_drag(sources, point, size) {
             Ok(changed) => {
                 fika_log!(
@@ -68,19 +67,56 @@ impl FikaWgpuApp {
                         .map(|menu| menu.target.kind())
                         .unwrap_or("none")
                 );
-                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
+                ShellActionOutcome::redraw_if(changed)
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] external-dnd-error {error}");
                 self.scene
                     .record_task_status(ShellTaskStatus::failed("Drop failed", error, false));
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
+                ShellActionOutcome::Redraw
             }
         }
     }
 
-    pub(crate) fn external_drag_left(&mut self) {
+    pub(crate) fn external_drag_left(&mut self) -> ShellActionOutcome {
         let changed = self.scene.clear_external_drag();
-        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
+        ShellActionOutcome::redraw_if(changed)
+    }
+}
+
+fn external_drag_drop_sources(
+    event_paths: Vec<PathBuf>,
+    tracked_sources: Option<Vec<PathBuf>>,
+) -> Vec<PathBuf> {
+    if event_paths.is_empty() {
+        tracked_sources.unwrap_or_default()
+    } else {
+        event_paths
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drop_sources_prefer_drop_event_paths() {
+        let event_paths = vec![PathBuf::from("/tmp/drop.txt")];
+        let tracked = Some(vec![PathBuf::from("/tmp/enter.txt")]);
+
+        assert_eq!(
+            external_drag_drop_sources(event_paths, tracked),
+            vec![PathBuf::from("/tmp/drop.txt")]
+        );
+    }
+
+    #[test]
+    fn drop_sources_fall_back_to_tracked_enter_paths() {
+        let tracked = Some(vec![PathBuf::from("/tmp/enter.txt")]);
+
+        assert_eq!(
+            external_drag_drop_sources(Vec::new(), tracked),
+            vec![PathBuf::from("/tmp/enter.txt")]
+        );
     }
 }
