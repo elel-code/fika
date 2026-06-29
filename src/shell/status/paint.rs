@@ -40,20 +40,27 @@ pub(crate) fn push_pane_status_bar(
         paint.size,
     );
     if paint.active {
-        push_rect(
+        let mark_width = scale_metric(3.0, paint.scale).max(2.0);
+        let mark_height = (paint.rect.height - scale_metric(12.0, paint.scale))
+            .max(scale_metric(10.0, paint.scale))
+            .min(paint.rect.height);
+        push_clipped_rounded_rect(
             vertices,
             ViewRect {
-                x: paint.rect.x,
-                y: paint.rect.y,
-                width: scale_metric(3.0, paint.scale).max(1.0),
-                height: paint.rect.height,
+                x: paint.rect.x + scale_metric(6.0, paint.scale),
+                y: paint.rect.y + (paint.rect.height - mark_height) / 2.0,
+                width: mark_width,
+                height: mark_height,
             },
+            paint.rect,
+            mark_width / 2.0,
             paint.theme.accent(),
             paint.size,
         );
     }
 
-    let left_x = paint.rect.x + scale_metric(12.0, paint.scale);
+    let left_x = paint.rect.x + scale_metric(16.0, paint.scale);
+    let text_y = paint.rect.y + (paint.rect.height - paint.line_height) / 2.0;
     let qualifier = paint.status.qualifier_text();
     let zoom_visible = paint.rect.width >= scale_metric(460.0, paint.scale);
     let zoom_width = if zoom_visible {
@@ -83,9 +90,9 @@ pub(crate) fn push_pane_status_bar(
         &paint.status.primary,
         ViewRect {
             x: left_x,
-            y: paint.rect.y + scale_metric(5.0, paint.scale),
+            y: text_y,
             width: (paint.rect.width
-                - scale_metric(24.0, paint.scale)
+                - scale_metric(28.0, paint.scale)
                 - right_width
                 - zoom_width
                 - if zoom_visible {
@@ -112,7 +119,7 @@ pub(crate) fn push_pane_status_bar(
                         0.0
                     }
                     - right_width,
-                y: paint.rect.y + scale_metric(5.0, paint.scale),
+                y: text_y,
                 width: right_width,
                 height: paint.line_height,
             },
@@ -129,13 +136,35 @@ fn push_zoom_indicator(
     paint: &PaneStatusBarPaint<'_>,
     rect: ViewRect,
 ) {
-    let label_width = scale_metric(42.0, paint.scale);
-    let gap = scale_metric(9.0, paint.scale);
-    let track_height = scale_metric(4.0, paint.scale).max(2.0);
+    let radius = rect.height / 2.0;
+    push_clipped_rounded_rect(
+        vertices,
+        rect,
+        paint.rect,
+        radius,
+        paint.theme.divider(),
+        paint.size,
+    );
+    let Some(inner) = inset_rect(rect, scale_metric(1.0, paint.scale)) else {
+        return;
+    };
+    push_clipped_rounded_rect(
+        vertices,
+        inner,
+        paint.rect,
+        (radius - scale_metric(1.0, paint.scale)).max(1.0),
+        paint.theme.field(),
+        paint.size,
+    );
+
+    let padding = scale_metric(8.0, paint.scale);
+    let label_width = scale_metric(38.0, paint.scale);
+    let gap = scale_metric(8.0, paint.scale);
+    let track_height = scale_metric(5.0, paint.scale).max(2.0);
     let track = ViewRect {
-        x: rect.x + label_width + gap,
-        y: rect.y + (rect.height - track_height) / 2.0,
-        width: (rect.width - label_width - gap).max(1.0),
+        x: inner.x + padding + label_width + gap,
+        y: inner.y + (inner.height - track_height) / 2.0,
+        width: (inner.width - padding * 2.0 - label_width - gap).max(1.0),
         height: track_height,
     };
     let scrollbar = paint.theme.scrollbar();
@@ -160,26 +189,38 @@ fn push_zoom_indicator(
         paint.theme.accent(),
         paint.size,
     );
-    let thumb_size = scale_metric(8.0, paint.scale).max(4.0);
+    let thumb_outer_size = scale_metric(12.0, paint.scale).max(6.0);
     let thumb_center_x = track.x + track.width * fraction;
+    let thumb_outer = ViewRect {
+        x: (thumb_center_x - thumb_outer_size / 2.0)
+            .clamp(track.x, track.right() - thumb_outer_size),
+        y: track.y + (track.height - thumb_outer_size) / 2.0,
+        width: thumb_outer_size,
+        height: thumb_outer_size,
+    };
     push_clipped_rounded_rect(
         vertices,
-        ViewRect {
-            x: (thumb_center_x - thumb_size / 2.0).clamp(track.x, track.right() - thumb_size),
-            y: track.y + (track.height - thumb_size) / 2.0,
-            width: thumb_size,
-            height: thumb_size,
-        },
+        thumb_outer,
         paint.rect,
-        thumb_size / 2.0,
-        paint.theme.accent(),
+        thumb_outer_size / 2.0,
+        paint.theme.divider(),
         paint.size,
     );
+    if let Some(thumb_inner) = inset_rect(thumb_outer, scale_metric(2.0, paint.scale)) {
+        push_clipped_rounded_rect(
+            vertices,
+            thumb_inner,
+            paint.rect,
+            thumb_inner.width.min(thumb_inner.height) / 2.0,
+            paint.theme.accent(),
+            paint.size,
+        );
+    }
     text.push_label_aligned_no_wrap(
         &format!("{}%", paint.zoom_percent),
         ViewRect {
-            x: rect.x,
-            y: rect.y,
+            x: inner.x + padding,
+            y: rect.y + (rect.height - paint.line_height) / 2.0,
             width: label_width,
             height: paint.line_height,
         },

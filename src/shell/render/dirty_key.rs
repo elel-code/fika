@@ -140,7 +140,10 @@ impl ShellRenderDirtyKey {
         push_bool(&mut values, scene.dark_mode);
         push_u64(&mut values, scene.zoom_step as i64 as u64);
         push_f32(&mut values, scene.split_pane_left_fraction);
-        push_u64(&mut values, scene.animation_dirty_value());
+        push_u64(
+            &mut values,
+            scene.animation_dirty_value_with_hover(options.include_hover),
+        );
         push_u64(
             &mut values,
             if options.include_text_caret_blink {

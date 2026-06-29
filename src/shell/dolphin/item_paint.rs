@@ -4,8 +4,8 @@ use crate::shell::options::ShellViewMode;
 
 use super::style::{
     BREEZE_FOCUS_PEN_WIDTH, BREEZE_ITEM_ROUNDNESS, DolphinItemPalette, UiColor,
-    details_row_background_color_for_palette, item_background_color_for_palette,
-    item_focus_color_for_palette,
+    details_row_background_color_for_palette,
+    item_background_color_for_palette_with_hover_progress, item_focus_color_for_palette,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,6 +68,34 @@ pub(crate) fn dolphin_item_paint_with_palette(
     scale: f32,
     palette: DolphinItemPalette,
 ) -> DolphinItemPaint {
+    dolphin_item_paint_with_palette_and_hover_progress(
+        view_mode,
+        item_rect,
+        visual_rect,
+        content_rect,
+        selected,
+        hovered,
+        current,
+        alternate,
+        scale,
+        palette,
+        1.0,
+    )
+}
+
+pub(crate) fn dolphin_item_paint_with_palette_and_hover_progress(
+    view_mode: ShellViewMode,
+    item_rect: ViewRect,
+    visual_rect: ViewRect,
+    content_rect: ViewRect,
+    selected: bool,
+    hovered: bool,
+    current: bool,
+    alternate: bool,
+    scale: f32,
+    palette: DolphinItemPalette,
+    hover_progress: f32,
+) -> DolphinItemPaint {
     let radius = BREEZE_ITEM_ROUNDNESS * scale.max(1.0);
     let highlight_rect = match view_mode {
         ShellViewMode::Details => item_rect,
@@ -86,13 +114,23 @@ pub(crate) fn dolphin_item_paint_with_palette(
         ShellViewMode::Details => (selected || hovered).then(|| DolphinItemFill {
             rect: highlight_rect,
             radius: 0.0,
-            color: item_background_color_for_palette(selected, hovered, palette),
+            color: item_background_color_for_palette_with_hover_progress(
+                selected,
+                hovered,
+                palette,
+                hover_progress,
+            ),
         }),
         ShellViewMode::Compact | ShellViewMode::Icons => {
             (selected || hovered).then(|| DolphinItemFill {
                 rect: highlight_rect,
                 radius,
-                color: item_background_color_for_palette(selected, hovered, palette),
+                color: item_background_color_for_palette_with_hover_progress(
+                    selected,
+                    hovered,
+                    palette,
+                    hover_progress,
+                ),
             })
         }
     };

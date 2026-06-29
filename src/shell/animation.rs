@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use fika_core::ViewRect;
 
 use crate::shell::metrics::{
-    ITEM_REFLOW_ANIMATION_DURATION, ITEM_REFLOW_ANIMATION_FRAME, TEXT_CARET_BLINK_INTERVAL,
+    HOVER_ANIMATION_DURATION, HOVER_ANIMATION_FRAME, ITEM_REFLOW_ANIMATION_DURATION,
+    ITEM_REFLOW_ANIMATION_FRAME, TEXT_CARET_BLINK_INTERVAL,
 };
 use crate::shell::pane::ShellPaneId;
 
@@ -49,6 +50,7 @@ impl ShellItemReflowTransition {
 #[derive(Default)]
 pub(crate) struct ShellAnimationRuntime {
     item_reflow_transitions: Vec<ShellItemReflowTransition>,
+    hover: ShellHoverAnimationRuntime,
     text_caret_blink: ShellTextCaretBlinkRuntime,
     generation: u64,
 }
@@ -104,11 +106,35 @@ impl ShellAnimationRuntime {
         self.item_reflow_transitions
             .iter()
             .any(|transition| transition.active(now))
+            || self.hover.active_at(now)
     }
 
     pub(crate) fn next_frame_deadline(&self) -> Option<Instant> {
-        self.active()
-            .then_some(Instant::now() + ITEM_REFLOW_ANIMATION_FRAME)
+        let now = Instant::now();
+        let mut deadline = None;
+        if self
+            .item_reflow_transitions
+            .iter()
+            .any(|transition| transition.active(now))
+        {
+            deadline = Some(now + ITEM_REFLOW_ANIMATION_FRAME);
+        }
+        if self.hover.active_at(now) {
+            deadline = Some(
+                deadline
+                    .map(|current| current.min(now + HOVER_ANIMATION_FRAME))
+                    .unwrap_or(now + HOVER_ANIMATION_FRAME),
+            );
+        }
+        deadline
+    }
+
+    pub(crate) fn start_hover_transition(&mut self) {
+        self.hover.start();
+    }
+
+    pub(crate) fn hover_factor(&self) -> f32 {
+        self.hover.factor()
     }
 
     pub(crate) fn reset_text_caret_blink(&mut self) {
@@ -128,15 +154,16 @@ impl ShellAnimationRuntime {
     }
 
     pub(crate) fn prune_finished(&mut self) -> bool {
+        let hover_pruned = self.hover.prune_finished();
         if self.item_reflow_transitions.is_empty() {
-            return false;
+            return hover_pruned;
         }
         let now = Instant::now();
         let old_len = self.item_reflow_transitions.len();
         self.item_reflow_transitions
             .retain(|transition| transition.active(now));
         if self.item_reflow_transitions.len() == old_len {
-            return false;
+            return hover_pruned;
         }
         self.bump_generation();
         true
@@ -150,7 +177,16 @@ impl ShellAnimationRuntime {
         self.bump_generation();
     }
 
-    pub(crate) fn dirty_value(&self) -> u64 {
+    pub(crate) fn dirty_value_with_hover(&self, include_hover: bool) -> u64 {
+        let item_dirty = self.item_reflow_dirty_value();
+        if include_hover {
+            item_dirty ^ self.hover.dirty_value().rotate_left(17)
+        } else {
+            item_dirty
+        }
+    }
+
+    fn item_reflow_dirty_value(&self) -> u64 {
         if self.item_reflow_transitions.is_empty() {
             return self.generation << 32;
         }
@@ -181,6 +217,71 @@ impl ShellAnimationRuntime {
 
 pub(crate) fn item_reflow_rect_moved(from: ViewRect, to: ViewRect) -> bool {
     (from.x - to.x).abs() >= 0.5 || (from.y - to.y).abs() >= 0.5
+}
+
+#[derive(Clone, Debug)]
+struct ShellHoverAnimationRuntime {
+    started: Instant,
+    active: bool,
+    generation: u64,
+}
+
+impl Default for ShellHoverAnimationRuntime {
+    fn default() -> Self {
+        Self {
+            started: Instant::now(),
+            active: false,
+            generation: 0,
+        }
+    }
+}
+
+impl ShellHoverAnimationRuntime {
+    fn start(&mut self) {
+        self.started = Instant::now();
+        self.active = true;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn factor(&self) -> f32 {
+        self.factor_at(Instant::now())
+    }
+
+    fn factor_at(&self, now: Instant) -> f32 {
+        if !self.active {
+            return 1.0;
+        }
+        let elapsed = now.saturating_duration_since(self.started);
+        if elapsed >= HOVER_ANIMATION_DURATION {
+            return 1.0;
+        }
+        let duration = HOVER_ANIMATION_DURATION.as_secs_f32().max(f32::EPSILON);
+        let t = (elapsed.as_secs_f32() / duration).clamp(0.0, 1.0);
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    fn active_at(&self, now: Instant) -> bool {
+        self.active && now.saturating_duration_since(self.started) < HOVER_ANIMATION_DURATION
+    }
+
+    fn prune_finished(&mut self) -> bool {
+        if !self.active || self.active_at(Instant::now()) {
+            return false;
+        }
+        self.active = false;
+        self.generation = self.generation.wrapping_add(1);
+        true
+    }
+
+    fn dirty_value(&self) -> u64 {
+        if !self.active {
+            return self.generation << 32;
+        }
+        let now = Instant::now();
+        let frame_ms = HOVER_ANIMATION_FRAME.as_millis().max(1) as u64;
+        let frame = now.saturating_duration_since(self.started).as_millis() as u64 / frame_ms;
+        (self.generation << 32) ^ frame
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -275,5 +376,23 @@ mod tests {
         );
         assert!(blink.next_deadline(true).is_some());
         assert!(blink.next_deadline(false).is_none());
+    }
+
+    #[test]
+    fn hover_animation_eases_to_full_factor_and_prunes() {
+        let mut hover = ShellHoverAnimationRuntime::default();
+        assert_eq!(hover.factor_at(hover.started), 1.0);
+        assert!(!hover.active_at(hover.started));
+
+        hover.start();
+        let started = hover.started;
+        assert!(hover.active_at(started));
+        assert_eq!(hover.factor_at(started), 0.0);
+        assert!(hover.factor_at(started + HOVER_ANIMATION_DURATION / 2) > 0.0);
+        assert_eq!(hover.factor_at(started + HOVER_ANIMATION_DURATION), 1.0);
+
+        hover.started = Instant::now() - HOVER_ANIMATION_DURATION;
+        assert!(hover.prune_finished());
+        assert!(!hover.active);
     }
 }

@@ -370,15 +370,42 @@ pub(crate) fn push_fallback_file_icon(
             palette.file_fold,
             size,
         );
-        for row in 0..3 {
-            let line_width = body.width * if row == 2 { 0.36 } else { 0.52 };
+        push_fallback_file_glyph(vertices, entry, body, content_clip, palette, size);
+    }
+}
+
+fn push_fallback_file_glyph(
+    vertices: &mut Vec<QuadVertex>,
+    entry: &Entry,
+    body: ViewRect,
+    content_clip: ViewRect,
+    palette: FallbackIconPalette,
+    size: PhysicalSize<u32>,
+) {
+    let mime = entry.mime_type.as_deref().unwrap_or_default();
+    if mime.starts_with("image/") {
+        let dot = body.width.min(body.height) * 0.12;
+        push_clipped_rounded_rect(
+            vertices,
+            ViewRect {
+                x: body.x + body.width * 0.60,
+                y: body.y + body.height * 0.36,
+                width: dot,
+                height: dot,
+            },
+            content_clip,
+            dot / 2.0,
+            palette.file_stripe,
+            size,
+        );
+        for step in 0..3 {
             push_clipped_rounded_rect(
                 vertices,
                 ViewRect {
-                    x: body.x + body.width * 0.18,
-                    y: body.y + body.height * 0.42 + row as f32 * body.height * 0.14,
-                    width: line_width,
-                    height: (body.height * 0.045).max(1.0),
+                    x: body.x + body.width * (0.18 + step as f32 * 0.12),
+                    y: body.y + body.height * (0.68 - step as f32 * 0.08),
+                    width: body.width * 0.18,
+                    height: (body.height * 0.055).max(1.0),
                 },
                 content_clip,
                 (body.height * 0.025).max(1.0),
@@ -386,6 +413,41 @@ pub(crate) fn push_fallback_file_icon(
                 size,
             );
         }
+        return;
+    }
+    if mime.starts_with("video/") || mime.starts_with("audio/") {
+        for step in 0..3 {
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: body.x + body.width * (0.24 + step as f32 * 0.12),
+                    y: body.y + body.height * (0.42 + step as f32 * 0.08),
+                    width: body.width * 0.18,
+                    height: (body.height * 0.08).max(1.0),
+                },
+                content_clip,
+                (body.height * 0.035).max(1.0),
+                palette.file_stripe,
+                size,
+            );
+        }
+        return;
+    }
+    for row in 0..3 {
+        let line_width = body.width * if row == 2 { 0.36 } else { 0.52 };
+        push_clipped_rounded_rect(
+            vertices,
+            ViewRect {
+                x: body.x + body.width * 0.18,
+                y: body.y + body.height * 0.42 + row as f32 * body.height * 0.14,
+                width: line_width,
+                height: (body.height * 0.045).max(1.0),
+            },
+            content_clip,
+            (body.height * 0.025).max(1.0),
+            palette.file_stripe,
+            size,
+        );
     }
 }
 

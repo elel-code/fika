@@ -64,6 +64,22 @@ pub(crate) fn item_background_color_for_palette(
     }
 }
 
+pub(crate) fn item_background_color_for_palette_with_hover_progress(
+    selected: bool,
+    hovered: bool,
+    palette: DolphinItemPalette,
+    hover_progress: f32,
+) -> UiColor {
+    if !hovered {
+        return item_background_color_for_palette(selected, false, palette);
+    }
+    let progress = hover_progress.clamp(0.0, 1.0);
+    let mut target = item_background_color_for_palette(selected, true, palette);
+    let base = item_background_color_for_palette(selected, false, palette);
+    target[3] = base[3] + (target[3] - base[3]) * progress;
+    target
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn details_row_background_color(
     selected: bool,
@@ -104,6 +120,15 @@ pub(crate) fn place_row_background_color_for_palette(
     palette: DolphinItemPalette,
 ) -> UiColor {
     item_background_color_for_palette(active, hovered, palette)
+}
+
+pub(crate) fn place_row_background_color_for_palette_with_hover_progress(
+    active: bool,
+    hovered: bool,
+    palette: DolphinItemPalette,
+    hover_progress: f32,
+) -> UiColor {
+    item_background_color_for_palette_with_hover_progress(active, hovered, palette, hover_progress)
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -150,6 +175,27 @@ mod tests {
         assert_eq!(
             place_row_background_color(true, false),
             item_background_color(true, false)
+        );
+    }
+
+    #[test]
+    fn hover_progress_eases_background_alpha_without_affecting_selection_base() {
+        let palette = DolphinItemPalette::light();
+        assert_eq!(
+            item_background_color_for_palette_with_hover_progress(false, true, palette, 0.0),
+            [0.188, 0.220, 0.259, 0.0]
+        );
+        assert_eq!(
+            item_background_color_for_palette_with_hover_progress(false, true, palette, 1.0),
+            [0.188, 0.220, 0.259, 0.06]
+        );
+        assert_eq!(
+            item_background_color_for_palette_with_hover_progress(true, true, palette, 0.0),
+            [0.239, 0.502, 0.710, 0.32]
+        );
+        assert_eq!(
+            item_background_color_for_palette_with_hover_progress(true, true, palette, 1.0),
+            [0.239, 0.502, 0.710, 0.40]
         );
     }
 

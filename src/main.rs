@@ -185,9 +185,12 @@ use shell::dialog_window::{
     ShellDialogWindowSpec, ShellDialogWindows,
 };
 use shell::directory_watch::ShellDirectoryWatcherRuntime;
-use shell::dolphin::item_paint::{dolphin_item_paint_with_palette, dolphin_selection_core_rect};
+use shell::dolphin::item_paint::{
+    dolphin_item_paint_with_palette_and_hover_progress, dolphin_selection_core_rect,
+};
 use shell::dolphin::style::{
-    BREEZE_ITEM_ROUNDNESS, DolphinItemPalette, place_row_background_color_for_palette,
+    BREEZE_ITEM_ROUNDNESS, DolphinItemPalette,
+    place_row_background_color_for_palette_with_hover_progress,
 };
 use shell::dolphin::text::{
     compact_entry_text_width, dolphin_elide_filename_to_width,
@@ -2995,8 +2998,16 @@ impl ShellScene {
         self.animations.prune_finished()
     }
 
-    fn animation_dirty_value(&self) -> u64 {
-        self.animations.dirty_value()
+    fn animation_dirty_value_with_hover(&self, include_hover: bool) -> u64 {
+        self.animations.dirty_value_with_hover(include_hover)
+    }
+
+    fn start_hover_animation(&mut self) {
+        self.animations.start_hover_transition();
+    }
+
+    fn hover_animation_factor(&self) -> f32 {
+        self.animations.hover_factor()
     }
 
     fn reset_text_caret_blink(&mut self) {
@@ -9861,7 +9872,12 @@ impl ShellScene {
         );
         let current = projection.geometry.kind == self.active_pane()
             && projection.view.selection.focus == Some(entry_index);
-        let paint = dolphin_item_paint_with_palette(
+        let hover_progress = if hovered {
+            self.hover_animation_factor()
+        } else {
+            1.0
+        };
+        let paint = dolphin_item_paint_with_palette_and_hover_progress(
             projection.view.view_mode,
             item_rect,
             visual_rect,
@@ -9872,6 +9888,7 @@ impl ShellScene {
             entry_index % 2 == 1,
             self.ui_scale(),
             item_palette,
+            hover_progress,
         );
 
         if let Some(background) = paint.alternate_background {
@@ -10730,6 +10747,11 @@ impl ShellScene {
             if row.y < panel.bottom() && row.bottom() > panel.y {
                 let active = active_place == Some(index);
                 let hovered = self.hovered_place == Some(index);
+                let hover_progress = if hovered {
+                    self.hover_animation_factor()
+                } else {
+                    1.0
+                };
                 let dnd_hovered = matches!(
                     self.dnd_hover_target,
                     Some(ShellDropTarget::Place {
@@ -10743,7 +10765,12 @@ impl ShellScene {
                         row,
                         panel,
                         self.scale_metric(BREEZE_ITEM_ROUNDNESS),
-                        place_row_background_color_for_palette(active, hovered, item_palette),
+                        place_row_background_color_for_palette_with_hover_progress(
+                            active,
+                            hovered,
+                            item_palette,
+                            hover_progress,
+                        ),
                         size,
                     );
                     let rail_width = self.scale_metric(3.0).max(2.0);
@@ -10766,7 +10793,12 @@ impl ShellScene {
                         row,
                         panel,
                         self.scale_metric(BREEZE_ITEM_ROUNDNESS),
-                        place_row_background_color_for_palette(active, hovered, item_palette),
+                        place_row_background_color_for_palette_with_hover_progress(
+                            active,
+                            hovered,
+                            item_palette,
+                            hover_progress,
+                        ),
                         size,
                     );
                 }
@@ -12462,13 +12494,20 @@ impl ShellScene {
         }
         self.keyboard_navigation += 1;
         self.ensure_index_visible_in_pane(pane_id, target, size);
-        self.hovered_place = self
+        let next_hovered_place = self
             .pointer
             .and_then(|point| self.place_index_at_screen_point(point, size));
-        self.hovered_item = self
+        let next_hovered_item = self
             .pointer
-            .filter(|_| self.hovered_place.is_none())
+            .filter(|_| next_hovered_place.is_none())
             .and_then(|point| self.pane_item_at_screen_point(point, size));
+        let hover_changed =
+            self.hovered_item != next_hovered_item || self.hovered_place != next_hovered_place;
+        self.hovered_place = next_hovered_place;
+        self.hovered_item = next_hovered_item;
+        if hover_changed {
+            self.start_hover_animation();
+        }
         let new_scroll = self.pane_scroll_offset(pane_id).unwrap_or((0.0, 0.0));
 
         selection_changed
@@ -12492,6 +12531,9 @@ impl ShellScene {
         let changed = self.hovered_place != place_hit || self.hovered_item != item_hit;
         self.hovered_place = place_hit;
         self.hovered_item = item_hit;
+        if changed {
+            self.start_hover_animation();
+        }
         changed
     }
 
@@ -12499,6 +12541,9 @@ impl ShellScene {
         self.hit_tests += 1;
         let changed = self.hovered_item != hovered_item;
         self.hovered_item = hovered_item;
+        if changed {
+            self.start_hover_animation();
+        }
         changed
     }
 
@@ -12506,6 +12551,9 @@ impl ShellScene {
         self.hit_tests += 1;
         let changed = self.hovered_place != hovered_place;
         self.hovered_place = hovered_place;
+        if changed {
+            self.start_hover_animation();
+        }
         changed
     }
 
@@ -17793,7 +17841,16 @@ fn icon_theme_names() -> Vec<String> {
             }
         }
     }
+    push_default_icon_theme_fallbacks(&mut themes);
+    themes
+}
+
+fn push_default_icon_theme_fallbacks(themes: &mut Vec<String>) {
     for fallback in [
+        "bloom",
+        "bloom-dark",
+        "deepin",
+        "deepin-dark",
         "breeze",
         "breeze-dark",
         "Papirus",
@@ -17802,9 +17859,8 @@ fn icon_theme_names() -> Vec<String> {
         "Adwaita",
         "hicolor",
     ] {
-        push_unique_icon_theme(&mut themes, fallback);
+        push_unique_icon_theme(themes, fallback);
     }
-    themes
 }
 
 fn configured_icon_theme_names() -> Vec<String> {
@@ -18970,7 +19026,7 @@ mod tests {
         assert_eq!(transition.pane, ShellPaneId::SLOT_0);
         assert!(transition.moved());
         assert!(scene.animation_active());
-        assert_ne!(scene.animation_dirty_value(), 0);
+        assert_ne!(scene.animation_dirty_value_with_hover(true), 0);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -26135,6 +26191,21 @@ mod tests {
         assert_eq!(icon_cache_size(48.0), 48);
         assert_eq!(icon_cache_size(64.0), 64);
         assert_eq!(icon_cache_size(250.0), 256);
+    }
+
+    #[test]
+    fn default_icon_theme_fallbacks_prefer_deepin_before_breeze() {
+        let mut themes = Vec::new();
+        push_default_icon_theme_fallbacks(&mut themes);
+
+        assert_eq!(themes[0], "bloom");
+        assert_eq!(themes[1], "bloom-dark");
+        assert_eq!(themes[2], "deepin");
+        assert_eq!(themes[3], "deepin-dark");
+        assert!(
+            themes.iter().position(|theme| theme == "deepin").unwrap()
+                < themes.iter().position(|theme| theme == "breeze").unwrap()
+        );
     }
 
     #[test]
