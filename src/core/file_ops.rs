@@ -810,14 +810,49 @@ pub fn permanently_delete_trash_paths(paths: &[PathBuf]) -> FileActionSummary {
 }
 
 pub fn empty_trash() -> FileActionSummary {
+    empty_trash_in_dirs(trash_files_dir(), trash_info_dir(), trashrc_path())
+}
+
+fn empty_trash_in_dirs(
+    files_dir: PathBuf,
+    info_dir: PathBuf,
+    trashrc_path: PathBuf,
+) -> FileActionSummary {
     let mut summary = FileActionSummary::default();
-    let files_dir = trash_files_dir();
+    let Some(trash_dir) = files_dir.parent().map(Path::to_path_buf) else {
+        summary.failures.push(format!(
+            "{}: Trash files directory has no parent",
+            files_dir.display()
+        ));
+        return summary;
+    };
+
     if !path_exists(&files_dir) {
-        let _ = set_trash_status_empty(true);
+        if path_exists(&info_dir) {
+            match swap_trash_dir_for_emptying(&trash_dir, &info_dir, "info") {
+                Ok(old_info_dir) => {
+                    if let Err(err) = fs::create_dir_all(&info_dir) {
+                        summary
+                            .failures
+                            .push(format!("{}: {err}", info_dir.display()));
+                        let _ = fs::rename(&old_info_dir, &info_dir);
+                        return summary;
+                    }
+                    spawn_trash_emptying_cleanup(vec![old_info_dir]);
+                }
+                Err(err) => {
+                    summary
+                        .failures
+                        .push(format!("{}: {err}", info_dir.display()));
+                    return summary;
+                }
+            }
+        }
+        let _ = write_trash_status_empty_at(&trashrc_path, true);
         return summary;
     }
 
-    let entries = match fs::read_dir(&files_dir) {
+    let entries = match read_dir_entries(&files_dir) {
         Ok(entries) => entries,
         Err(err) => {
             summary
@@ -827,19 +862,70 @@ pub fn empty_trash() -> FileActionSummary {
         }
     };
 
-    for entry in entries {
-        match entry {
-            Ok(entry) => match permanently_delete_trash_path(&entry.path()) {
-                Ok(record) => summary.successes.push(record),
-                Err(err) => summary
-                    .failures
-                    .push(format!("{}: {err}", entry.path().display())),
-            },
-            Err(err) => summary.failures.push(format!("trash entry: {err}")),
-        }
+    let mut successes = Vec::with_capacity(entries.len());
+    for (entry_path, _) in &entries {
+        successes.push(TrashRecord {
+            original_path: entry_path.clone(),
+            trash_path: entry_path.clone(),
+        });
     }
-    remove_orphan_trashinfo_files(&mut summary);
-    let _ = sync_trash_status_empty();
+
+    let info_exists = path_exists(&info_dir);
+    let old_info_dir = if info_exists {
+        match swap_trash_dir_for_emptying(&trash_dir, &info_dir, "info") {
+            Ok(path) => Some(path),
+            Err(err) => {
+                summary
+                    .failures
+                    .push(format!("{}: {err}", info_dir.display()));
+                return summary;
+            }
+        }
+    } else {
+        None
+    };
+    let old_files_dir = match swap_trash_dir_for_emptying(&trash_dir, &files_dir, "files") {
+        Ok(path) => path,
+        Err(err) => {
+            if let Some(old_info_dir) = old_info_dir.as_ref() {
+                let _ = fs::rename(old_info_dir, &info_dir);
+            }
+            summary
+                .failures
+                .push(format!("{}: {err}", files_dir.display()));
+            return summary;
+        }
+    };
+
+    if let Err(err) = fs::create_dir_all(&files_dir) {
+        summary
+            .failures
+            .push(format!("{}: {err}", files_dir.display()));
+        let _ = fs::rename(&old_files_dir, &files_dir);
+        if let Some(old_info_dir) = old_info_dir.as_ref() {
+            let _ = fs::rename(old_info_dir, &info_dir);
+        }
+        return summary;
+    }
+    if let Err(err) = fs::create_dir_all(&info_dir) {
+        summary
+            .failures
+            .push(format!("{}: {err}", info_dir.display()));
+        let _ = remove_path_if_present(&files_dir);
+        let _ = fs::rename(&old_files_dir, &files_dir);
+        if let Some(old_info_dir) = old_info_dir.as_ref() {
+            let _ = fs::rename(old_info_dir, &info_dir);
+        }
+        return summary;
+    }
+
+    let _ = write_trash_status_empty_at(&trashrc_path, true);
+    summary.successes = successes;
+    let mut cleanup_paths = vec![old_files_dir];
+    if let Some(old_info_dir) = old_info_dir {
+        cleanup_paths.push(old_info_dir);
+    }
+    spawn_trash_emptying_cleanup(cleanup_paths);
     summary
 }
 
@@ -900,11 +986,8 @@ async fn empty_trash_in_dirs_async(
 
     let mut successes = Vec::with_capacity(entries.len());
     for (entry_path, _) in &entries {
-        let original_path = trash_original_path_in_dir_async(entry_path, &info_dir)
-            .await
-            .unwrap_or_else(|_| entry_path.clone());
         successes.push(TrashRecord {
-            original_path,
+            original_path: entry_path.clone(),
             trash_path: entry_path.clone(),
         });
     }
@@ -979,6 +1062,24 @@ async fn swap_trash_dir_for_emptying_async(
             continue;
         }
         match compio::fs::rename(path, &destination).await {
+            Ok(()) => return Ok(destination),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not reserve Trash emptying directory",
+    ))
+}
+
+fn swap_trash_dir_for_emptying(trash_dir: &Path, path: &Path, prefix: &str) -> io::Result<PathBuf> {
+    for attempt in 0..32_u8 {
+        let destination = trash_emptying_temp_path(trash_dir, prefix, attempt);
+        if path_exists(&destination) {
+            continue;
+        }
+        match fs::rename(path, &destination) {
             Ok(()) => return Ok(destination),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(err),
@@ -1629,9 +1730,13 @@ async fn read_link_async(path: &Path) -> io::Result<PathBuf> {
     compio_blocking_io(move || fs::read_link(path)).await
 }
 
-async fn read_file_to_string_async(path: &Path) -> io::Result<String> {
-    let path = path.to_path_buf();
-    compio_blocking_io(move || fs::read_to_string(path)).await
+fn read_dir_entries(path: &Path) -> io::Result<Vec<(PathBuf, OsString)>> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        entries.push((entry.path(), entry.file_name()));
+    }
+    Ok(entries)
 }
 
 async fn read_dir_entries_async(path: &Path) -> io::Result<Vec<(PathBuf, OsString)>> {
@@ -1941,60 +2046,18 @@ fn remove_trashinfo(trash_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn remove_orphan_trashinfo_files(summary: &mut FileActionSummary) {
-    let info_dir = trash_info_dir();
-    let Ok(entries) = fs::read_dir(&info_dir) else {
-        return;
-    };
-    for entry in entries {
-        match entry {
-            Ok(entry) => {
-                let path = entry.path();
-                if path.extension().and_then(|extension| extension.to_str()) == Some("trashinfo")
-                    && let Err(err) = fs::remove_file(&path)
-                {
-                    summary.failures.push(format!("{}: {err}", path.display()));
-                }
-            }
-            Err(err) => summary
-                .failures
-                .push(format!("trash metadata entry: {err}")),
-        }
-    }
-}
-
 fn trash_original_path(trash_path: &Path) -> Result<PathBuf, String> {
     trash_metadata(trash_path).map(|metadata| metadata.original_path)
 }
 
-async fn trash_original_path_in_dir_async(
-    trash_path: &Path,
-    info_dir: &Path,
-) -> Result<PathBuf, String> {
-    trash_metadata_in_dir_async(trash_path, info_dir)
-        .await
-        .map(|metadata| metadata.original_path)
-}
-
 pub fn trash_metadata(trash_path: &Path) -> Result<TrashMetadata, String> {
-    let info_path =
-        trash_info_path(trash_path).ok_or_else(|| "trash item has no metadata name".to_string())?;
-    let contents = fs::read_to_string(&info_path).map_err(|err| {
-        format!(
-            "failed to read trash metadata {}: {err}",
-            info_path.display()
-        )
-    })?;
-    trash_metadata_from_info(&contents)
+    trash_metadata_in_dir(trash_path, &trash_info_dir())
 }
 
-async fn trash_metadata_in_dir_async(
-    trash_path: &Path,
-    info_dir: &Path,
-) -> Result<TrashMetadata, String> {
+fn trash_metadata_in_dir(trash_path: &Path, info_dir: &Path) -> Result<TrashMetadata, String> {
     let info_path = trash_info_path_in_dir(trash_path, info_dir)
         .ok_or_else(|| "trash item has no metadata name".to_string())?;
-    let contents = read_file_to_string_async(&info_path).await.map_err(|err| {
+    let contents = fs::read_to_string(&info_path).map_err(|err| {
         format!(
             "failed to read trash metadata {}: {err}",
             info_path.display()
@@ -3062,7 +3125,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(summary.successes.len(), 1);
-        assert_eq!(summary.successes[0].original_path, original);
+        assert_eq!(summary.successes[0].original_path, trash_path);
+        assert!(summary.failures.is_empty());
+        assert!(fs::read_dir(&files_dir).unwrap().next().is_none());
+        assert!(fs::read_dir(&info_dir).unwrap().next().is_none());
+        assert!(trash_status_empty_at(&trashrc));
+
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn empty_trash_sync_uses_swap_emptying_path() {
+        let temp = test_dir("empty-trash-sync");
+        let files_dir = temp.join("Trash").join("files");
+        let info_dir = temp.join("Trash").join("info");
+        let trashrc = temp.join("config").join("trashrc");
+        fs::create_dir_all(files_dir.join("nested")).unwrap();
+        fs::create_dir_all(&info_dir).unwrap();
+
+        let original = temp.join("original.txt");
+        let trash_path = files_dir.join("nested");
+        fs::write(trash_path.join("child.txt"), b"trashed").unwrap();
+        fs::write(info_dir.join("nested.trashinfo"), trashinfo(&original)).unwrap();
+        fs::write(
+            info_dir.join("orphan.trashinfo"),
+            trashinfo(&temp.join("orphan.txt")),
+        )
+        .unwrap();
+        write_trash_status_empty_at(&trashrc, false).unwrap();
+
+        let summary = empty_trash_in_dirs(files_dir.clone(), info_dir.clone(), trashrc.clone());
+
+        assert_eq!(summary.successes.len(), 1);
+        assert_eq!(summary.successes[0].original_path, trash_path);
         assert!(summary.failures.is_empty());
         assert!(fs::read_dir(&files_dir).unwrap().next().is_none());
         assert!(fs::read_dir(&info_dir).unwrap().next().is_none());

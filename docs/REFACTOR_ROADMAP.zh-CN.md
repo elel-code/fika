@@ -141,6 +141,17 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。
+- Open With query 输入语义：
+  search box 的 hover 语义从单一 text cursor 扩展为 text/action/default 三类命中，
+  可点击 row / button / checkbox 会使用 pointer cursor；query 点击落点不再按输入框总宽
+  平均折算字符，而是复用 Dolphin 文本宽度估算按 glyph 宽度选择最近 caret 边界，点击文本
+  尾部空白区域会稳定落到末尾。
+- Empty Trash fast-swap 路径统一：
+  async empty trash 已走 compio 优先的 Trash/files 与 Trash/info 目录 swap + 立刻重建空目录
+  + 后台 cleanup 模式；同步 `empty_trash()` 也收敛到同一套 swap 语义，不再保留逐项删除
+  的兼容慢路径，避免后续执行入口绕回阻塞 UI 的实现。Empty 操作结果只需要数量和刷新
+  Trash，不再逐个读取 `.trashinfo` 还原 original path，减少大垃圾桶场景下 swap 前的小文件
+  I/O。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

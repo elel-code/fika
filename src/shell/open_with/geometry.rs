@@ -4,10 +4,11 @@ use winit::dpi::PhysicalSize;
 use crate::shell::metrics::{
     OPEN_WITH_CHOOSER_BUTTON_GAP, OPEN_WITH_CHOOSER_BUTTON_HEIGHT, OPEN_WITH_CHOOSER_BUTTON_WIDTH,
     OPEN_WITH_CHOOSER_MAX_ROWS, OPEN_WITH_CHOOSER_QUERY_HEIGHT, OPEN_WITH_CHOOSER_ROW_HEIGHT,
-    OPEN_WITH_CHOOSER_TITLE_HEIGHT, OPEN_WITH_CHOOSER_WIDTH, scaled_dialog_metric,
+    OPEN_WITH_CHOOSER_TITLE_HEIGHT, OPEN_WITH_CHOOSER_WIDTH, TEXT_FONT_SIZE, TEXT_LINE_HEIGHT,
+    normalized_scale_factor, scaled_dialog_metric,
 };
 
-use super::{OpenWithChooserClick, ShellOpenWithChooser};
+use super::{OpenWithChooserClick, OpenWithChooserPointerRole, ShellOpenWithChooser};
 
 #[cfg(test)]
 pub(crate) fn open_with_chooser_rect(
@@ -94,10 +95,10 @@ pub(crate) fn open_with_chooser_query_text_rect_scaled(
         + scaled_dialog_metric(14.0, scale_factor);
     ViewRect {
         x: search_icon_right + scaled_dialog_metric(8.0, scale_factor),
-        y: query.y + (query.height - scaled_dialog_metric(18.0, scale_factor)) / 2.0,
+        y: query.y + (query.height - scaled_dialog_metric(TEXT_LINE_HEIGHT, scale_factor)) / 2.0,
         width: (query.right() - search_icon_right - scaled_dialog_metric(18.0, scale_factor))
             .max(1.0),
-        height: scaled_dialog_metric(18.0, scale_factor),
+        height: scaled_dialog_metric(TEXT_LINE_HEIGHT, scale_factor),
     }
 }
 
@@ -274,7 +275,10 @@ pub(crate) fn open_with_chooser_click_at_point(
     }
     if open_with_chooser_query_rect_scaled(rect, scale_factor).contains(point) {
         let text_rect = open_with_chooser_query_text_rect_scaled(rect, scale_factor);
-        let cursor = chooser.query_cursor_for_text_offset(point.x - text_rect.x, text_rect.width);
+        let cursor = chooser.query_cursor_for_text_offset(
+            point.x - text_rect.x,
+            TEXT_FONT_SIZE * normalized_scale_factor(scale_factor),
+        );
         return OpenWithChooserClick::Query(cursor);
     }
     let list = open_with_chooser_list_rect_scaled(rect, chooser, scale_factor);
@@ -288,4 +292,42 @@ pub(crate) fn open_with_chooser_click_at_point(
         }
     }
     OpenWithChooserClick::Inside
+}
+
+pub(crate) fn open_with_chooser_pointer_role_at_point(
+    chooser: &ShellOpenWithChooser,
+    point: ViewPoint,
+    size: PhysicalSize<u32>,
+    scale_factor: f32,
+) -> OpenWithChooserPointerRole {
+    let rect = open_with_chooser_rect_scaled(chooser, size, scale_factor);
+    if !rect.contains(point) {
+        return OpenWithChooserPointerRole::Default;
+    }
+    if open_with_chooser_query_contains_point(chooser, point, size, scale_factor) {
+        return OpenWithChooserPointerRole::Text;
+    }
+    if open_with_chooser_cancel_button_rect_scaled(rect, scale_factor).contains(point) {
+        return OpenWithChooserPointerRole::Action;
+    }
+    if open_with_chooser_open_button_rect_scaled(rect, scale_factor).contains(point)
+        && chooser.selected_application().is_some()
+    {
+        return OpenWithChooserPointerRole::Action;
+    }
+    if open_with_chooser_default_checkbox_rect_scaled(rect, chooser, scale_factor).contains(point) {
+        return OpenWithChooserPointerRole::Action;
+    }
+
+    let list = open_with_chooser_list_rect_scaled(rect, chooser, scale_factor);
+    if list.contains(point) {
+        let visible_row = ((point.y - list.y)
+            / scaled_dialog_metric(OPEN_WITH_CHOOSER_ROW_HEIGHT, scale_factor))
+        .floor() as usize;
+        if chooser.scroll_row + visible_row < chooser.tree_row_count() {
+            return OpenWithChooserPointerRole::Action;
+        }
+    }
+
+    OpenWithChooserPointerRole::Default
 }

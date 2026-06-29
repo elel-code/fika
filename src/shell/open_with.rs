@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use fika_core::{DesktopLaunchPlan, MimeApplication, MimeApplicationCache};
 
+use crate::shell::dolphin::text::estimated_text_cursor_for_offset;
 use crate::shell::metrics::OPEN_WITH_CHOOSER_MAX_ROWS;
 use crate::shell::shortcuts::OpenWithCommand;
 
@@ -171,23 +172,8 @@ impl ShellOpenWithChooser {
         old != *self
     }
 
-    pub(crate) fn query_cursor_for_text_offset(&self, offset_x: f32, text_width: f32) -> usize {
-        if self.query.is_empty() {
-            return 0;
-        }
-        let char_count = self.query.chars().count();
-        if char_count == 0 {
-            return 0;
-        }
-        if text_width <= 0.0 || offset_x <= 0.0 {
-            return 0;
-        }
-        if offset_x >= text_width {
-            return self.query.len();
-        }
-        let char_index =
-            ((offset_x / text_width).clamp(0.0, 1.0) * char_count as f32).round() as usize;
-        query_cursor_for_char_index(&self.query, char_index.min(char_count))
+    pub(crate) fn query_cursor_for_text_offset(&self, offset_x: f32, font_size: f32) -> usize {
+        estimated_text_cursor_for_offset(&self.query, offset_x, font_size)
     }
 
     pub(crate) fn set_query_cursor(&mut self, cursor: usize) -> bool {
@@ -410,17 +396,6 @@ fn next_open_with_query_boundary(value: &str, cursor: usize) -> Option<usize> {
         .or(Some(value.len()))
 }
 
-fn query_cursor_for_char_index(value: &str, char_index: usize) -> usize {
-    if char_index == 0 {
-        return 0;
-    }
-    value
-        .char_indices()
-        .nth(char_index)
-        .map(|(index, _)| index)
-        .unwrap_or(value.len())
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OpenWithTreeRow {
     Category {
@@ -551,6 +526,13 @@ pub(crate) enum OpenWithChooserClick {
     ToggleDefault,
     Query(usize),
     Row(usize),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum OpenWithChooserPointerRole {
+    Default,
+    Text,
+    Action,
 }
 
 pub(crate) fn open_with_applications_for_mime(

@@ -193,7 +193,9 @@ use shell::dolphin::text::{
     icons_entry_text_line_count, required_compact_item_width,
 };
 #[cfg(test)]
-use shell::dolphin::text::{dolphin_text_available_width, dolphin_wrapped_filename_line_count};
+use shell::dolphin::text::{
+    dolphin_text_available_width, dolphin_wrapped_filename_line_count, estimated_text_cursor_x,
+};
 use shell::dolphin::{
     dolphin_icon_size_for_zoom_level, shell_dolphin_deferred_all_indexes,
     shell_dolphin_read_ahead_indexes, visible_layout_range_for_projection,
@@ -249,7 +251,7 @@ use shell::open_with::OpenWithDefaultUpdate;
 use shell::open_with::OpenWithTreeRow;
 use shell::open_with::geometry::{
     open_with_chooser_click_at_point, open_with_chooser_list_rect_scaled,
-    open_with_chooser_query_contains_point, open_with_chooser_rect_scaled,
+    open_with_chooser_pointer_role_at_point, open_with_chooser_rect_scaled,
     open_with_chooser_scrollbar_rects_scaled, open_with_chooser_visible_row_count,
     open_with_chooser_window_size_scaled, open_with_scroll_delta_rows,
 };
@@ -257,13 +259,13 @@ use shell::open_with::geometry::{
 use shell::open_with::geometry::{
     open_with_chooser_default_checkbox_rect, open_with_chooser_list_rect,
     open_with_chooser_open_button_rect, open_with_chooser_query_rect_scaled,
-    open_with_chooser_rect,
+    open_with_chooser_query_text_rect_scaled, open_with_chooser_rect,
 };
 use shell::open_with::launch::{
     chooser_for_context_target, launch_request_for_chooser, launch_request_for_context_application,
 };
 use shell::open_with::{
-    OpenWithChooserClick, OpenWithLaunchRequest, ShellOpenWithChooser,
+    OpenWithChooserClick, OpenWithChooserPointerRole, OpenWithLaunchRequest, ShellOpenWithChooser,
     open_with_applications_for_mime,
 };
 use shell::options::{ShellViewMode, parse_start_options};
@@ -4032,10 +4034,10 @@ impl ShellScene {
         let Some(chooser) = self.open_with_chooser.as_ref() else {
             return CursorIcon::Default;
         };
-        if open_with_chooser_query_contains_point(chooser, point, size, self.ui_scale()) {
-            CursorIcon::Text
-        } else {
-            CursorIcon::Default
+        match open_with_chooser_pointer_role_at_point(chooser, point, size, self.ui_scale()) {
+            OpenWithChooserPointerRole::Text => CursorIcon::Text,
+            OpenWithChooserPointerRole::Action => CursorIcon::Pointer,
+            OpenWithChooserPointerRole::Default => CursorIcon::Default,
         }
     }
 
@@ -26445,6 +26447,30 @@ text/plain=writer.desktop;\n",
                 size,
             ),
             OpenWithChooserClick::Query("pain".len())
+        );
+        let query_text = open_with_chooser_query_text_rect_scaled(rect, 1.0);
+        let query_tail = estimated_text_cursor_x("pain", "pain".len(), TEXT_FONT_SIZE);
+        assert_eq!(
+            scene.open_with_chooser_click_at_screen_point(
+                ViewPoint {
+                    x: query_text.x + query_tail + 12.0,
+                    y: query.y + query.height / 2.0,
+                },
+                size,
+            ),
+            OpenWithChooserClick::Query("pain".len())
+        );
+        let list = open_with_chooser_list_rect(rect, scene.open_with_chooser.as_ref().unwrap());
+        scene.set_pointer(
+            ViewPoint {
+                x: list.x + 4.0,
+                y: list.y + 4.0,
+            },
+            size,
+        );
+        assert_eq!(
+            scene.open_with_chooser_cursor_icon(size),
+            CursorIcon::Pointer
         );
         assert!(scene.set_open_with_query_cursor(0));
         assert_eq!(scene.open_with_chooser.as_ref().unwrap().query_cursor, 0);
