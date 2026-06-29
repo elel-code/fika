@@ -22,6 +22,74 @@ pub(crate) struct PaneStatusBarPaint<'a> {
     pub(crate) size: PhysicalSize<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct StatusZoomIndicatorRects {
+    pub(crate) outer: ViewRect,
+    pub(crate) inner: ViewRect,
+    pub(crate) label: ViewRect,
+    pub(crate) track: ViewRect,
+    pub(crate) filled: ViewRect,
+    pub(crate) thumb_outer: ViewRect,
+}
+
+pub(crate) fn pane_status_zoom_indicator_rects(
+    rect: ViewRect,
+    scale: f32,
+    line_height: f32,
+    zoom_fraction: f32,
+) -> Option<StatusZoomIndicatorRects> {
+    if rect.width < scale_metric(460.0, scale) {
+        return None;
+    }
+    let zoom_width = scale_metric(132.0, scale);
+    let right_edge = rect.right() - scale_metric(12.0, scale);
+    let outer = ViewRect {
+        x: right_edge - zoom_width,
+        y: rect.y + (rect.height - scale_metric(18.0, scale)) / 2.0,
+        width: zoom_width,
+        height: scale_metric(18.0, scale),
+    };
+    let inner = inset_rect(outer, scale_metric(1.0, scale))?;
+    let padding = scale_metric(8.0, scale);
+    let label_width = scale_metric(38.0, scale);
+    let gap = scale_metric(8.0, scale);
+    let track_height = scale_metric(5.0, scale).max(2.0);
+    let track = ViewRect {
+        x: inner.x + padding + label_width + gap,
+        y: inner.y + (inner.height - track_height) / 2.0,
+        width: (inner.width - padding * 2.0 - label_width - gap).max(1.0),
+        height: track_height,
+    };
+    let fraction = zoom_fraction.clamp(0.0, 1.0);
+    let filled = ViewRect {
+        width: (track.width * fraction).max(track_height),
+        ..track
+    };
+    let thumb_outer_size = scale_metric(12.0, scale).max(6.0);
+    let thumb_center_x = track.x + track.width * fraction;
+    let thumb_outer = ViewRect {
+        x: (thumb_center_x - thumb_outer_size / 2.0)
+            .clamp(track.x, track.right() - thumb_outer_size),
+        y: track.y + (track.height - thumb_outer_size) / 2.0,
+        width: thumb_outer_size,
+        height: thumb_outer_size,
+    };
+    let label = ViewRect {
+        x: inner.x + padding,
+        y: outer.y + (outer.height - line_height) / 2.0,
+        width: label_width,
+        height: line_height,
+    };
+    Some(StatusZoomIndicatorRects {
+        outer,
+        inner,
+        label,
+        track,
+        filled,
+        thumb_outer,
+    })
+}
+
 pub(crate) fn push_pane_status_bar(
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
@@ -62,21 +130,16 @@ pub(crate) fn push_pane_status_bar(
     let left_x = paint.rect.x + scale_metric(16.0, paint.scale);
     let text_y = paint.rect.y + (paint.rect.height - paint.line_height) / 2.0;
     let qualifier = paint.status.qualifier_text();
-    let zoom_visible = paint.rect.width >= scale_metric(460.0, paint.scale);
-    let zoom_width = if zoom_visible {
-        scale_metric(132.0, paint.scale)
-    } else {
-        0.0
-    };
+    let zoom_layout = pane_status_zoom_indicator_rects(
+        paint.rect,
+        paint.scale,
+        paint.line_height,
+        paint.zoom_fraction,
+    );
+    let zoom_width = zoom_layout.map(|layout| layout.outer.width).unwrap_or(0.0);
     let right_edge = paint.rect.right() - scale_metric(12.0, paint.scale);
-    if zoom_visible {
-        let zoom_rect = ViewRect {
-            x: right_edge - zoom_width,
-            y: paint.rect.y + (paint.rect.height - scale_metric(18.0, paint.scale)) / 2.0,
-            width: zoom_width,
-            height: scale_metric(18.0, paint.scale),
-        };
-        push_zoom_indicator(vertices, text, &paint, zoom_rect);
+    if let Some(zoom_layout) = zoom_layout {
+        push_zoom_indicator(vertices, text, &paint, zoom_layout);
     }
     let right_width = if qualifier.is_empty() {
         0.0
@@ -95,7 +158,7 @@ pub(crate) fn push_pane_status_bar(
                 - scale_metric(28.0, paint.scale)
                 - right_width
                 - zoom_width
-                - if zoom_visible {
+                - if zoom_layout.is_some() {
                     scale_metric(10.0, paint.scale)
                 } else {
                     0.0
@@ -113,7 +176,7 @@ pub(crate) fn push_pane_status_bar(
             ViewRect {
                 x: right_edge
                     - zoom_width
-                    - if zoom_visible {
+                    - if zoom_layout.is_some() {
                         scale_metric(10.0, paint.scale)
                     } else {
                         0.0
@@ -134,8 +197,9 @@ fn push_zoom_indicator(
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     paint: &PaneStatusBarPaint<'_>,
-    rect: ViewRect,
+    layout: StatusZoomIndicatorRects,
 ) {
+    let rect = layout.outer;
     let radius = rect.height / 2.0;
     push_clipped_rounded_rect(
         vertices,
@@ -145,9 +209,7 @@ fn push_zoom_indicator(
         paint.theme.divider(),
         paint.size,
     );
-    let Some(inner) = inset_rect(rect, scale_metric(1.0, paint.scale)) else {
-        return;
-    };
+    let inner = layout.inner;
     push_clipped_rounded_rect(
         vertices,
         inner,
@@ -157,16 +219,8 @@ fn push_zoom_indicator(
         paint.size,
     );
 
-    let padding = scale_metric(8.0, paint.scale);
-    let label_width = scale_metric(38.0, paint.scale);
-    let gap = scale_metric(8.0, paint.scale);
-    let track_height = scale_metric(5.0, paint.scale).max(2.0);
-    let track = ViewRect {
-        x: inner.x + padding + label_width + gap,
-        y: inner.y + (inner.height - track_height) / 2.0,
-        width: (inner.width - padding * 2.0 - label_width - gap).max(1.0),
-        height: track_height,
-    };
+    let track = layout.track;
+    let track_height = track.height;
     let scrollbar = paint.theme.scrollbar();
     push_clipped_rounded_rect(
         vertices,
@@ -176,33 +230,20 @@ fn push_zoom_indicator(
         scrollbar.track,
         paint.size,
     );
-    let fraction = paint.zoom_fraction.clamp(0.0, 1.0);
-    let filled = ViewRect {
-        width: (track.width * fraction).max(track_height),
-        ..track
-    };
     push_clipped_rounded_rect(
         vertices,
-        filled,
+        layout.filled,
         paint.rect,
         track_height / 2.0,
         paint.theme.accent(),
         paint.size,
     );
-    let thumb_outer_size = scale_metric(12.0, paint.scale).max(6.0);
-    let thumb_center_x = track.x + track.width * fraction;
-    let thumb_outer = ViewRect {
-        x: (thumb_center_x - thumb_outer_size / 2.0)
-            .clamp(track.x, track.right() - thumb_outer_size),
-        y: track.y + (track.height - thumb_outer_size) / 2.0,
-        width: thumb_outer_size,
-        height: thumb_outer_size,
-    };
+    let thumb_outer = layout.thumb_outer;
     push_clipped_rounded_rect(
         vertices,
         thumb_outer,
         paint.rect,
-        thumb_outer_size / 2.0,
+        thumb_outer.height / 2.0,
         paint.theme.divider(),
         paint.size,
     );
@@ -218,12 +259,7 @@ fn push_zoom_indicator(
     }
     text.push_label_aligned_no_wrap(
         &format!("{}%", paint.zoom_percent),
-        ViewRect {
-            x: inner.x + padding,
-            y: rect.y + (rect.height - paint.line_height) / 2.0,
-            width: label_width,
-            height: paint.line_height,
-        },
+        layout.label,
         paint.rect,
         paint.theme.muted_text(),
         LabelAlignment::End,

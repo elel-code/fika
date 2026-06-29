@@ -348,7 +348,8 @@ use shell::shortcuts::{
     view_mode_for_key_parts, zoom_action_for_key, zoom_action_for_scroll_delta,
 };
 use shell::status::paint::{
-    PaneStatusBarPaint, PlacesTaskAreaPaint, push_pane_status_bar as push_status_pane_bar,
+    PaneStatusBarPaint, PlacesTaskAreaPaint, StatusZoomIndicatorRects,
+    pane_status_zoom_indicator_rects, push_pane_status_bar as push_status_pane_bar,
     push_places_task_area as push_status_places_task_area,
 };
 use shell::status::{ShellPaneStatus, ShellTaskStatusStore};
@@ -501,6 +502,9 @@ enum ScrollbarDragTarget {
     Places,
     PlacesResize,
     SplitPaneResize,
+    StatusZoom {
+        pane: ShellPaneId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3267,9 +3271,32 @@ impl ShellScene {
             ZoomAction::In => self.zoom_step + 1,
             ZoomAction::Out => self.zoom_step - 1,
             ZoomAction::Reset => 0,
-        }
-        .clamp(ZOOM_STEP_MIN, ZOOM_STEP_MAX);
+        };
+        self.set_zoom_step(next_step, size, true)
+    }
 
+    fn set_zoom_fraction(
+        &mut self,
+        fraction: f32,
+        size: PhysicalSize<u32>,
+        clear_scrollbar_drag: bool,
+    ) -> bool {
+        let span = (DOLPHIN_ZOOM_LEVEL_MAX - DOLPHIN_ZOOM_LEVEL_MIN).max(1) as f32;
+        let level = DOLPHIN_ZOOM_LEVEL_MIN + (fraction.clamp(0.0, 1.0) * span).round() as i32;
+        self.set_zoom_step(
+            level - DOLPHIN_ZOOM_LEVEL_DEFAULT,
+            size,
+            clear_scrollbar_drag,
+        )
+    }
+
+    fn set_zoom_step(
+        &mut self,
+        next_step: i32,
+        size: PhysicalSize<u32>,
+        clear_scrollbar_drag: bool,
+    ) -> bool {
+        let next_step = next_step.clamp(ZOOM_STEP_MIN, ZOOM_STEP_MAX);
         if next_step == self.zoom_step {
             return false;
         }
@@ -3280,7 +3307,9 @@ impl ShellScene {
             .borrow_mut()
             .clear_request_lifecycle();
         self.rubber_band = None;
-        self.scrollbar_drag = None;
+        if clear_scrollbar_drag {
+            self.scrollbar_drag = None;
+        }
         self.zoom_changes += 1;
         let active_pane = self.active_pane();
         if let Some(index) = self
@@ -4289,6 +4318,12 @@ impl ShellScene {
         }) {
             return CursorIcon::ColResize;
         }
+        if self
+            .scrollbar_drag
+            .is_some_and(|drag| matches!(drag.target, ScrollbarDragTarget::StatusZoom { .. }))
+        {
+            return CursorIcon::Pointer;
+        }
         if self.scrollbar_drag.is_some() {
             return CursorIcon::Default;
         }
@@ -4309,6 +4344,7 @@ impl ShellScene {
         }
         if self.places_toggle_contains_screen_point(point, size)
             || self.split_view_button_at_screen_point(point, size)
+            || self.status_zoom_contains_screen_point(point, size)
             || self
                 .toolbar_view_mode_badge_rect(size)
                 .is_some_and(|rect| rect.contains(point))
@@ -11780,6 +11816,45 @@ impl ShellScene {
         }
     }
 
+    fn status_zoom_indicator_rects_for_pane(
+        &self,
+        pane: ShellPaneId,
+        size: PhysicalSize<u32>,
+    ) -> Option<StatusZoomIndicatorRects> {
+        let geometry = self.pane_geometry(pane, size)?;
+        pane_status_zoom_indicator_rects(
+            geometry.status_bar,
+            self.ui_scale(),
+            self.text_line_height(),
+            self.zoom_fraction(),
+        )
+    }
+
+    fn status_zoom_indicator_rects_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<(ShellPaneId, StatusZoomIndicatorRects)> {
+        ShellPaneId::ALL.into_iter().find_map(|pane| {
+            let rects = self.status_zoom_indicator_rects_for_pane(pane, size)?;
+            rects.outer.contains(point).then_some((pane, rects))
+        })
+    }
+
+    fn status_zoom_contains_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
+        self.status_zoom_indicator_rects_at_screen_point(point, size)
+            .is_some()
+    }
+
+    fn status_zoom_control_rects_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> Option<(ShellPaneId, StatusZoomIndicatorRects)> {
+        self.status_zoom_indicator_rects_at_screen_point(point, size)
+            .filter(|(_, rects)| status_zoom_control_contains_point(*rects, point))
+    }
+
     fn clamp_scroll(&mut self, size: PhysicalSize<u32>) {
         self.clamp_pane_scroll(ShellPaneId::SLOT_0, size);
         self.clamp_pane_scroll(ShellPaneId::SLOT_1, size);
@@ -12093,6 +12168,24 @@ impl ShellScene {
             return Some(self.update_scrollbar_drag(point, size));
         }
 
+        if let Some((pane, rects)) = self.status_zoom_control_rects_at_screen_point(point, size) {
+            if rects.label.contains(point) {
+                self.pointer = Some(point);
+                return Some(self.set_zoom_step(0, size, true));
+            }
+            let thumb_center_offset = if rects.thumb_outer.contains(point) {
+                point.x - (rects.thumb_outer.x + rects.thumb_outer.width / 2.0)
+            } else {
+                0.0
+            };
+            self.scrollbar_drag = Some(ScrollbarDrag {
+                target: ScrollbarDragTarget::StatusZoom { pane },
+                grab_offset: thumb_center_offset,
+            });
+            self.pointer = Some(point);
+            return Some(self.update_scrollbar_drag(point, size));
+        }
+
         if let Some((pane, axis, _track, thumb)) = self.content_scrollbar_hit_at_point(point, size)
         {
             let grab_offset = match axis {
@@ -12143,6 +12236,12 @@ impl ShellScene {
         {
             return true;
         }
+        if self
+            .status_zoom_control_rects_at_screen_point(point, size)
+            .is_some()
+        {
+            return true;
+        }
         self.content_scrollbar_hit_at_point(point, size).is_some()
     }
 
@@ -12184,6 +12283,7 @@ impl ShellScene {
             .open_with_chooser
             .as_ref()
             .map(|chooser| chooser.scroll_row);
+        let old_zoom_step = self.zoom_step;
 
         match drag.target {
             ScrollbarDragTarget::OpenWith => {
@@ -12218,6 +12318,14 @@ impl ShellScene {
             ScrollbarDragTarget::SplitPaneResize => {
                 let desired_left_width = point.x - self.content_origin_x(size) - drag.grab_offset;
                 self.set_split_pane_left_width_px(desired_left_width, size);
+            }
+            ScrollbarDragTarget::StatusZoom { pane } => {
+                if let Some(rects) = self.status_zoom_indicator_rects_for_pane(pane, size) {
+                    let thumb_center_x = point.x - drag.grab_offset;
+                    let fraction =
+                        ((thumb_center_x - rects.track.x) / rects.track.width).clamp(0.0, 1.0);
+                    self.set_zoom_fraction(fraction, size, false);
+                }
             }
             ScrollbarDragTarget::Places => {
                 if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
@@ -12298,6 +12406,7 @@ impl ShellScene {
                     .map(|chooser| chooser.scroll_row),
             )
             .is_some_and(|(old_scroll, new_scroll)| old_scroll != new_scroll);
+        let zoom_changed = self.zoom_step != old_zoom_step;
         if places_changed {
             self.places_scroll_changes += 1;
         }
@@ -12312,6 +12421,7 @@ impl ShellScene {
             || split_content_changed
             || places_changed
             || open_with_changed
+            || zoom_changed
             || places_resized
             || split_resized
             || hover_changed
@@ -18265,6 +18375,16 @@ fn inset_content_scrollbar_slot(slot: ViewRect, scale_factor: f32) -> Option<Vie
         width,
         height,
     })
+}
+
+fn status_zoom_control_contains_point(rects: StatusZoomIndicatorRects, point: ViewPoint) -> bool {
+    let track_hit = ViewRect {
+        x: rects.track.x,
+        y: rects.outer.y,
+        width: rects.track.width,
+        height: rects.outer.height,
+    };
+    rects.label.contains(point) || track_hit.contains(point) || rects.thumb_outer.contains(point)
 }
 
 fn scrollbar_scroll_from_pointer(
@@ -31642,6 +31762,70 @@ text/plain=writer.desktop;\n",
         };
         assert!(details_after.item_rect.height <= details_before.item_rect.height);
         assert!(details_after.icon_rect.width < details_before.icon_rect.width);
+    }
+
+    #[test]
+    fn status_zoom_indicator_uses_shared_geometry_for_hit_tests_and_cursor() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(760, 520);
+        let rects = scene
+            .status_zoom_indicator_rects_for_pane(ShellPaneId::SLOT_0, size)
+            .expect("wide status bar should show zoom indicator");
+        let point = ViewPoint {
+            x: rects.track.x + rects.track.width / 2.0,
+            y: rects.track.y + rects.track.height / 2.0,
+        };
+
+        assert!(scene.scrollbar_drag_hit_at_screen_point(point, size));
+        assert_eq!(
+            scene.status_zoom_indicator_rects_at_screen_point(point, size),
+            Some((ShellPaneId::SLOT_0, rects))
+        );
+        let _ = scene.set_pointer(point, size);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::Pointer);
+        assert_eq!(scene.hit_test_screen_point(point, size), None);
+    }
+
+    #[test]
+    fn status_zoom_indicator_drag_sets_discrete_zoom_level() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(760, 520);
+        let rects = scene
+            .status_zoom_indicator_rects_for_pane(ShellPaneId::SLOT_0, size)
+            .expect("wide status bar should show zoom indicator");
+        let high = ViewPoint {
+            x: rects.track.right() - 1.0,
+            y: rects.track.y + rects.track.height / 2.0,
+        };
+
+        assert_eq!(scene.zoom_step, 0);
+        assert_eq!(scene.begin_scrollbar_drag(high, size), Some(true));
+        assert_eq!(
+            scene.scrollbar_drag.map(|drag| drag.target),
+            Some(ScrollbarDragTarget::StatusZoom {
+                pane: ShellPaneId::SLOT_0
+            })
+        );
+        assert_eq!(scene.zoom_step, ZOOM_STEP_MAX);
+        assert_eq!(scene.cursor_icon(size), CursorIcon::Pointer);
+
+        let low = ViewPoint {
+            x: rects.track.x,
+            y: rects.track.y + rects.track.height / 2.0,
+        };
+        assert!(scene.set_pointer(low, size));
+        assert_eq!(scene.zoom_step, ZOOM_STEP_MIN);
+        let _ = scene.end_scrollbar_drag(low, size);
+        assert!(scene.scrollbar_drag.is_none());
+
+        assert!(scene.set_zoom_step(ZOOM_STEP_MAX, size, true));
+        let label = ViewPoint {
+            x: rects.label.x + rects.label.width / 2.0,
+            y: rects.label.y + rects.label.height / 2.0,
+        };
+        assert_eq!(scene.begin_scrollbar_drag(label, size), Some(true));
+        assert_eq!(scene.zoom_step, 0);
+        assert!(scene.scrollbar_drag.is_none());
     }
 
     #[test]
