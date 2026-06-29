@@ -1,16 +1,19 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::ops::Deref;
 
 use crate::shell::pane::ShellPaneView;
 use crate::shell::tasks::{ShellTaskId, ShellTaskStatus, ShellTaskStatusKind};
+
+pub(crate) mod paint;
 
 pub(crate) const MAX_TASK_STATUSES: usize = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShellPaneStatus {
     pub(crate) primary: String,
-    pub(crate) qualifiers: Vec<String>,
+    pub(crate) qualifier: String,
 }
 
 impl ShellPaneStatus {
@@ -23,29 +26,9 @@ impl ShellPaneStatus {
         let total = pane.entries.len();
         let selected = pane.selection.len();
         let file_count = total.saturating_sub(pane.dir_count);
-        let mut qualifiers = Vec::new();
-
         let primary = if selected > 0 {
-            if visible_items != total {
-                qualifiers.push(format!("{visible_items} visible"));
-            }
-            if show_hidden {
-                qualifiers.push("hidden shown".to_string());
-            }
-            if filter_active {
-                qualifiers.push(format!("{} matches", pane.filtered_entry_count()));
-            }
             format!("{} selected", count_label(selected, "item", "items"))
         } else {
-            if visible_items != total {
-                qualifiers.push(format!("{visible_items} visible"));
-            }
-            if show_hidden {
-                qualifiers.push("hidden shown".to_string());
-            }
-            if filter_active {
-                qualifiers.push(format!("{} matches", pane.filtered_entry_count()));
-            }
             format!(
                 "{}, {}, {}",
                 count_label(total, "item", "items"),
@@ -53,24 +36,22 @@ impl ShellPaneStatus {
                 count_label(file_count, "file", "files")
             )
         };
+        let qualifier = pane_qualifier_text(pane, visible_items, total, show_hidden, filter_active);
 
-        Self {
-            primary,
-            qualifiers,
-        }
+        Self { primary, qualifier }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn plain_text(&self) -> String {
-        if self.qualifiers.is_empty() {
+        if self.qualifier.is_empty() {
             self.primary.clone()
         } else {
-            format!("{} | {}", self.primary, self.qualifier_text())
+            format!("{} | {}", self.primary, self.qualifier)
         }
     }
 
-    pub(crate) fn qualifier_text(&self) -> String {
-        self.qualifiers.join(" | ")
+    pub(crate) fn qualifier_text(&self) -> &str {
+        &self.qualifier
     }
 }
 
@@ -212,6 +193,39 @@ fn count_label(count: usize, singular: &str, plural: &str) -> String {
         format!("1 {singular}")
     } else {
         format!("{count} {plural}")
+    }
+}
+
+fn pane_qualifier_text(
+    pane: ShellPaneView<'_>,
+    visible_items: usize,
+    total: usize,
+    show_hidden: bool,
+    filter_active: bool,
+) -> String {
+    let mut qualifier = String::new();
+    if visible_items != total {
+        append_qualifier_separator(&mut qualifier);
+        let _ = write!(&mut qualifier, "{visible_items} visible");
+    }
+    if show_hidden {
+        append_qualifier(&mut qualifier, "hidden shown");
+    }
+    if filter_active {
+        append_qualifier_separator(&mut qualifier);
+        let _ = write!(&mut qualifier, "{} matches", pane.filtered_entry_count());
+    }
+    qualifier
+}
+
+fn append_qualifier(qualifier: &mut String, label: &str) {
+    append_qualifier_separator(qualifier);
+    qualifier.push_str(label);
+}
+
+fn append_qualifier_separator(qualifier: &mut String) {
+    if !qualifier.is_empty() {
+        qualifier.push_str(" | ");
     }
 }
 

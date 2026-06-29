@@ -211,11 +211,13 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   参考 Dolphin 的 `DolphinViewContainer::delayedStatusBarUpdate/updateStatusBar`、
   `DolphinStatusBar::setDefaultText/showProgress` 和 `DolphinView::requestStatusBarText`
   边界，Fika 新增 `src/shell/status.rs` 承载 pane status summary、task status store、
-  task detail label 和 change generation；`ShellScene` 只负责把 view/projection 输入
-  映射给 status model，绘制层消费 `ShellPaneStatus` 的 primary/qualifier 两段文本。
-  task status 的容量、finish/update/cancel/dismiss/clear 也集中到 `ShellTaskStatusStore`，
-  后续 async operation dispatcher 可以直接接管这个 store，而不是散落修改
-  `VecDeque + changes`。
+  task detail label 和 change generation；`src/shell/status/paint.rs` 承载 pane status
+  bar 与 places task area 的绘制。`ShellScene` 只负责把 view/projection 输入映射给
+  status model，再用薄 wrapper 传给绘制层。`ShellPaneStatus` 保持 primary/qualifier
+  两段文本语义，但 qualifier 已收敛成单个字符串，避免每帧为了 join 维护临时
+  `Vec<String>`。task status 的容量、finish/update/cancel/dismiss/clear 也集中到
+  `ShellTaskStatusStore`，后续 async operation dispatcher 可以直接接管这个 store，
+  而不是散落修改 `VecDeque + changes`。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

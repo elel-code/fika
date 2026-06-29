@@ -198,6 +198,18 @@ Dolphin reference:
 - Verification: cargo fmt；cargo check；cargo test bounded_layout_cache_prunes_least_recently_used_entry；cargo test prepared_pane_projections_match_direct_projection；cargo test pane_visible_slot_pools_are_addressed_by_pane_id；cargo test render_dirty_key_with_projections_matches_scene_lookup；cargo test；git diff --check。
 ```
 
+### Status paint/model boundary
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/dolphinviewcontainer.cpp；/home/yk/Code/fika/reference/dolphin/src/statusbar/dolphinstatusbar.cpp
+- Symbol: DolphinViewContainer::delayedStatusBarUpdate / updateStatusBar；DolphinStatusBar::setDefaultText / showProgress
+- Dolphin boundary: view container 计算 status text，status bar 负责展示与 progress/task 表现，二者不把任务状态和绘制细节散落进主窗口事件路径。
+- Fika mapping: src/shell/status.rs::ShellPaneStatus / ShellTaskStatusStore；src/shell/status/paint.rs::push_pane_status_bar / push_places_task_area；src/main.rs::ShellScene::push_pane_status_bar / push_places_task_area。
+- Divergence: Dolphin 由 Qt widget/statusbar 拆分展示；Fika 需要手动向 wgpu quad/text frame 写入图元，因此保留 ShellScene 的薄 paint wrapper，但 status summary、task store 和 status/task area paint 已分层。pane qualifier 从 Vec<String> 收敛为单个 String，减少 status frame 路径的临时容器和 join。
+- Verification: cargo fmt；cargo check；cargo test task_status_store；cargo test pane_status_text_is_plain_pane_state；cargo test task_area_opens_detail_dialog_and_clear_keeps_running_tasks_visible；cargo test；git diff --check。
+```
+
 ## Review 检查项
 
 - 变更是否包含本地 Dolphin 文件路径和 symbol？

@@ -341,7 +341,13 @@ use shell::shortcuts::{
     reload_requested_for_key_parts, rename_command_for_key_parts, selection_command_for_key_parts,
     view_mode_for_key_parts, zoom_action_for_key, zoom_action_for_scroll_delta,
 };
+use shell::status::paint::{
+    PaneStatusBarPaint, PlacesTaskAreaPaint, push_pane_status_bar as push_status_pane_bar,
+    push_places_task_area as push_status_places_task_area,
+};
 use shell::status::{ShellPaneStatus, ShellTaskStatusStore};
+#[cfg(test)]
+use shell::tasks::ShellTaskStatusKind;
 #[cfg(test)]
 use shell::tasks::geometry::{
     task_detail_cancel_button_rect, task_detail_clear_button_rect, task_detail_dialog_rect,
@@ -351,9 +357,7 @@ use shell::tasks::geometry::{
     task_detail_cancel_button_rect_scaled, task_detail_clear_button_rect_scaled,
     task_detail_dialog_rect_scaled, task_detail_dismiss_button_rect_scaled,
 };
-use shell::tasks::{
-    ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, ShellTaskStatusKind, TaskDetailDialogClick,
-};
+use shell::tasks::{ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, TaskDetailDialogClick};
 use shell::transfer::{
     ShellAsyncTaskResult, ShellAsyncTransferCompletion, ShellAsyncTransferSource,
     ShellAsyncTrashViewCompletion, ShellPasteResult, ShellTransferExecution,
@@ -10069,66 +10073,20 @@ impl ShellScene {
     ) {
         let pane = projection.view;
         let rect = projection.geometry.status_bar;
-        push_rect(vertices, rect, chrome_color(self.dark_mode), size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: 1.0,
-            },
-            divider_color(self.dark_mode),
-            size,
-        );
-        if projection.geometry.kind == self.active_pane() {
-            push_rect(
-                vertices,
-                ViewRect {
-                    x: rect.x,
-                    y: rect.y,
-                    width: self.scale_metric(3.0).max(1.0),
-                    height: rect.height,
-                },
-                [0.184, 0.435, 0.929, 1.0],
-                size,
-            );
-        }
-
         let status = self.pane_status(pane, projection.visible_items.len());
-        let left_x = rect.x + self.scale_metric(12.0);
-        let qualifier = status.qualifier_text();
-        let right_width = if qualifier.is_empty() {
-            0.0
-        } else {
-            (rect.width * 0.44).min(self.scale_metric(260.0)).max(1.0)
-        };
-        text.push_label_aligned_no_wrap(
-            &status.primary,
-            ViewRect {
-                x: left_x,
-                y: rect.y + self.scale_metric(5.0),
-                width: (rect.width - self.scale_metric(24.0) - right_width).max(1.0),
-                height: self.text_line_height(),
-            },
-            rect,
-            primary_text_color(self.dark_mode),
-            LabelAlignment::Start,
-        );
-        if !qualifier.is_empty() {
-            text.push_label_aligned_no_wrap(
-                &qualifier,
-                ViewRect {
-                    x: rect.right() - self.scale_metric(12.0) - right_width,
-                    y: rect.y + self.scale_metric(5.0),
-                    width: right_width,
-                    height: self.text_line_height(),
-                },
+        push_status_pane_bar(
+            vertices,
+            text,
+            PaneStatusBarPaint {
                 rect,
-                muted_text_color(self.dark_mode),
-                LabelAlignment::End,
-            );
-        }
+                status: &status,
+                active: projection.geometry.kind == self.active_pane(),
+                dark_mode: self.dark_mode,
+                scale: self.ui_scale(),
+                line_height: self.text_line_height(),
+                size,
+            },
+        );
     }
 
     fn push_app_toolbar(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
@@ -10556,91 +10514,19 @@ impl ShellScene {
         let Some(rect) = self.places_task_area_rect(size) else {
             return;
         };
-        let sidebar = self.places_sidebar_rect(size);
-        let radius = self.scale_metric(10.0);
-        push_clipped_rounded_rect(
+        push_status_places_task_area(
             vertices,
-            rect,
-            sidebar,
-            radius,
-            [0.784, 0.808, 0.839, 1.0],
-            size,
-        );
-        let Some(inner) = inset_rect(rect, self.scale_metric(1.0)) else {
-            return;
-        };
-        push_clipped_rounded_rect(
-            vertices,
-            inner,
-            sidebar,
-            (radius - self.scale_metric(1.0)).max(1.0),
-            sidebar_color(self.dark_mode),
-            size,
-        );
-
-        let padding = self.scale_metric(10.0);
-        let title_height = self.small_text_line_height();
-        text.push_label_aligned(
-            "Tasks",
-            ViewRect {
-                x: inner.x + padding,
-                y: inner.y + self.scale_metric(7.0),
-                width: (inner.width - padding * 2.0).max(1.0),
-                height: title_height,
+            text,
+            PlacesTaskAreaPaint {
+                rect,
+                sidebar: self.places_sidebar_rect(size),
+                statuses: &self.task_statuses,
+                dark_mode: self.dark_mode,
+                scale: self.ui_scale(),
+                small_line_height: self.small_text_line_height(),
+                size,
             },
-            inner,
-            section_text_color(self.dark_mode),
-            LabelAlignment::Start,
         );
-
-        let row_height = self.scale_metric(PLACES_TASK_ROW_HEIGHT);
-        let mut y = inner.y + self.scale_metric(26.0);
-        let max_rows = ((inner.bottom() - y - self.scale_metric(4.0)) / row_height)
-            .floor()
-            .max(0.0) as usize;
-        for status in self.task_statuses.iter().take(max_rows) {
-            let dot_size = self.scale_metric(7.0);
-            let dot = ViewRect {
-                x: inner.x + padding,
-                y: y + self.scale_metric(5.0),
-                width: dot_size,
-                height: dot_size,
-            };
-            let color = match status.kind {
-                ShellTaskStatusKind::Running => [0.184, 0.435, 0.929, 1.0],
-                ShellTaskStatusKind::Completed => [0.102, 0.514, 0.286, 1.0],
-                ShellTaskStatusKind::Failed => [0.820, 0.184, 0.184, 1.0],
-                ShellTaskStatusKind::Cancelled => [0.475, 0.514, 0.565, 1.0],
-            };
-            push_clipped_rounded_rect(vertices, dot, inner, dot_size / 2.0, color, size);
-            let text_x = dot.right() + self.scale_metric(8.0);
-            text.push_label_aligned(
-                &status.label,
-                ViewRect {
-                    x: text_x,
-                    y,
-                    width: (inner.right() - text_x - padding).max(1.0),
-                    height: self.small_text_line_height(),
-                },
-                inner,
-                primary_text_color(self.dark_mode),
-                LabelAlignment::Start,
-            );
-            let detail = status.detail_label();
-            text.push_label_aligned(
-                detail.as_ref(),
-                ViewRect {
-                    x: text_x,
-                    y: y + self.scale_metric(16.0),
-                    width: (inner.right() - text_x - padding).max(1.0),
-                    height: self.small_text_line_height(),
-                },
-                inner,
-                section_text_color(self.dark_mode),
-                LabelAlignment::Start,
-            );
-            y += row_height;
-        }
     }
 
     fn push_filter_bar(
@@ -31813,7 +31699,7 @@ text/plain=writer.desktop;\n",
         );
         let status = scene.pane_status(projection.view, projection.visible_items.len());
         assert_eq!(status.primary, "3 items, 1 folder, 2 files");
-        assert!(status.qualifiers.is_empty());
+        assert!(status.qualifier_text().is_empty());
 
         assert!(
             scene.panes[ShellPaneId::SLOT_0]
@@ -31827,7 +31713,7 @@ text/plain=writer.desktop;\n",
         );
         let status = scene.pane_status(projection.view, projection.visible_items.len());
         assert_eq!(status.primary, "1 item selected");
-        assert!(status.qualifiers.is_empty());
+        assert!(status.qualifier_text().is_empty());
 
         scene.show_hidden = true;
         let projection = scene.pane_projection(ShellPaneId::SLOT_0, size).unwrap();
