@@ -24,21 +24,20 @@ use fika_core::{
     AppSettings, CompactLayout, CompactLayoutOptions, DeviceInfo, DevicePlaceOperation,
     DevicePlaceOperationResult, Entry, FileClipboardRole, FileTransferMode, Generation,
     IconsLayout, IconsLayoutOptions, ItemId, ItemLayout, MetadataRoleResult, MimeApplication,
-    MimeApplicationCache, MimeDatabase, NETWORK_ROOT_LABEL, NameFilter, OpenWithLaunchResult,
-    OperationController, PrivilegedCommand, ServiceMenuAction, ServiceMenuLaunchResult,
-    ServiceMenuTarget, ThumbnailRequest, ThumbnailRequestPriority, ThumbnailerRegistry,
-    TrashViewOperation, TrashViewOperationResult, UserPlace, ViewPoint, ViewRect,
-    complete_location_input, decode_file_clipboard_text, default_app_settings_path,
-    default_thumbnail_cache_root, default_user_places_path, encode_file_clipboard_text, file_ops,
-    format_modified_secs, format_size, generate_thumbnail_with_external_thumbnailer_registry,
-    home_dir, is_network_path, launch_with_systemd_user, load_app_settings, load_place_order,
-    load_user_places, mime_magic_resolution_required, network_parent_path,
-    network_path_display_name, network_path_from_uri, network_root_path, paste_text_result,
-    perform_device_place_operation, place_order_path_for_user_places_path, read_entries_sync,
-    read_gio_devices, read_network_entry_batches_sync_cancellable, resolve_location_input,
-    run_operation_task, save_app_settings, save_place_order, save_user_places,
-    service_menu_target_label, set_default_mime_application, thumbnail_request_may_have_preview,
-    trash_view_operation_result, trash_view_operation_result_async,
+    MimeApplicationCache, MimeDatabase, NETWORK_ROOT_LABEL, NameFilter, OperationController,
+    PrivilegedCommand, ServiceMenuAction, ServiceMenuTarget, ThumbnailRequest,
+    ThumbnailRequestPriority, ThumbnailerRegistry, TrashViewOperation, TrashViewOperationResult,
+    UserPlace, ViewPoint, ViewRect, complete_location_input, decode_file_clipboard_text,
+    default_app_settings_path, default_thumbnail_cache_root, default_user_places_path,
+    encode_file_clipboard_text, file_ops, format_modified_secs, format_size,
+    generate_thumbnail_with_external_thumbnailer_registry, home_dir, is_network_path,
+    load_app_settings, load_place_order, load_user_places, mime_magic_resolution_required,
+    network_parent_path, network_path_display_name, network_path_from_uri, network_root_path,
+    paste_text_result, place_order_path_for_user_places_path, read_entries_sync, read_gio_devices,
+    read_network_entry_batches_sync_cancellable, resolve_location_input, run_operation_task,
+    save_app_settings, save_place_order, save_user_places, set_default_mime_application,
+    thumbnail_request_may_have_preview, trash_view_operation_result,
+    trash_view_operation_result_async,
 };
 use winit::application::ApplicationHandler;
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
@@ -85,7 +84,7 @@ mod app_actions;
 mod shell;
 
 use shell::animation::ShellAnimationRuntime;
-use shell::ark::{ArkContextItem, extract::execute_ark_extract_and_trash};
+use shell::ark::ArkContextItem;
 #[cfg(test)]
 use shell::ark::{
     BUILTIN_ARK_COMPRESS_ACTION_ID, BUILTIN_ARK_COMPRESS_SUBMENU,
@@ -185,7 +184,9 @@ use shell::metadata_roles::{
     core_pane_id_for_shell_pane, shell_metadata_item_id, shell_metadata_role_candidate,
 };
 use shell::metrics::*;
-use shell::open_file::{OpenFileRequest, default_open_file_launch_request};
+use shell::open_file::OpenFileRequest;
+#[cfg(test)]
+use shell::open_file::default_open_file_launch_request;
 #[cfg(test)]
 use shell::open_with::OpenWithDefaultUpdate;
 #[cfg(test)]
@@ -2209,41 +2210,6 @@ impl ApplicationHandler for FikaWgpuApp {
 }
 
 impl FikaWgpuApp {
-    fn launch_open_file_request(&mut self, request: &OpenFileRequest) {
-        let launch = match default_open_file_launch_request(&self.mime_applications, request) {
-            Ok(launch) => launch,
-            Err(error) => {
-                fika_log!("[fika-wgpu] open-error {error}");
-                self.scene
-                    .record_task_status(ShellTaskStatus::failed("Open failed", error, false));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            }
-        };
-        self.scene.record_open_file_request(request);
-        std::thread::spawn(move || {
-            let result = pollster::block_on(launch_with_systemd_user(launch.plan));
-            match result {
-                Ok(result) => fika_log!(
-                    "[fika-wgpu] open-finished path={} app={:?} units={}",
-                    launch.path.display(),
-                    launch.app_name,
-                    result.units.join(",")
-                ),
-                Err(error) => fika_log!(
-                    "[fika-wgpu] open-finished path={} app={:?} error={error}",
-                    launch.path.display(),
-                    launch.app_name
-                ),
-            }
-        });
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
-    }
-
     fn external_drag_entered(&mut self, paths: Vec<PathBuf>, position: PhysicalPosition<f64>) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
@@ -2324,114 +2290,6 @@ impl FikaWgpuApp {
         }
     }
 
-    fn store_file_clipboard_request(&mut self, request: &FileClipboardExportRequest) {
-        if let Some(clipboard) = self.clipboard.as_ref() {
-            match clipboard.store_text(&request.text) {
-                Ok(()) => self.scene.record_file_clipboard_export(request),
-                Err(error) => {
-                    fika_log!(
-                        "[fika-wgpu] clipboard-export-error role={} paths={} error={error}",
-                        file_clipboard_role_as_str(request.role),
-                        request.paths.len()
-                    );
-                    self.scene.record_task_status(ShellTaskStatus::failed(
-                        "Clipboard failed",
-                        format!(
-                            "Could not store {}: {error}",
-                            paths_task_summary(&request.paths)
-                        ),
-                        false,
-                    ));
-                }
-            }
-        } else {
-            fika_log!(
-                "[fika-wgpu] clipboard-export-error role={} paths={} error=clipboard-unavailable",
-                file_clipboard_role_as_str(request.role),
-                request.paths.len()
-            );
-            self.scene.record_task_status(ShellTaskStatus::failed(
-                "Clipboard failed",
-                format!(
-                    "Clipboard is unavailable for {}",
-                    paths_task_summary(&request.paths)
-                ),
-                false,
-            ));
-        }
-    }
-
-    fn run_context_service_menu_action(&mut self, action_id: String) {
-        let extract_and_trash = shell::ark::is_extract_and_trash_action(&action_id);
-        let request = match self
-            .scene
-            .service_menu_launch_request(&self.mime_applications, &action_id)
-        {
-            Ok(request) => request,
-            Err(error) => {
-                fika_log!("[fika-wgpu] service-menu-error action={action_id:?} {error}");
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    "Action failed",
-                    error,
-                    false,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            }
-        };
-        if extract_and_trash {
-            self.run_ark_extract_and_trash_action(request);
-            return;
-        }
-        let paths = request.paths.clone();
-        let app_name = request.app_name.clone();
-        self.scene.record_task_status(ShellTaskStatus::completed(
-            "Started Action",
-            format!("{} with {}", service_menu_target_label(&paths), app_name),
-            false,
-        ));
-        std::thread::spawn(move || {
-            let result = pollster::block_on(launch_with_systemd_user(request.plan));
-            let status = ServiceMenuLaunchResult {
-                pane_id: WGPU_SHELL_PANE_ID,
-                target_label: service_menu_target_label(&paths),
-                app_name,
-                result,
-            }
-            .status_message();
-            fika_log!("[fika-wgpu] service-menu-finished {status}");
-        });
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
-    }
-
-    fn run_ark_extract_and_trash_action(&mut self, request: ServiceMenuLaunchRequest) {
-        let paths = request.paths.clone();
-        let app_name = request.app_name.clone();
-        self.scene.record_task_status(ShellTaskStatus::completed(
-            "Started Action",
-            format!("{} with {}", service_menu_target_label(&paths), app_name),
-            false,
-        ));
-        std::thread::spawn(move || {
-            let target_label = service_menu_target_label(&paths);
-            let status = pollster::block_on(run_operation_task(move || async move {
-                execute_ark_extract_and_trash(request).await
-            }))
-            .map_err(|err| err.to_string())
-            .and_then(|result| result)
-            .map(|message| format!("Ran {app_name} for {target_label}: {message}"))
-            .unwrap_or_else(|err| format!("Cannot run {app_name} for {target_label}: {err}"));
-            fika_log!("[fika-wgpu] service-menu-finished {status}");
-        });
-        if let Some(window) = self.window.as_ref() {
-            window.request_redraw();
-        }
-    }
-
     fn open_add_network_folder_input(&mut self) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
@@ -2439,129 +2297,6 @@ impl FikaWgpuApp {
         if self.scene.open_add_network_folder_location_draft(size)
             && let Some(window) = self.window.as_ref()
         {
-            window.request_redraw();
-        }
-    }
-
-    fn perform_device_context_action(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        action: ShellContextMenuAction,
-    ) {
-        let Some(request) = self.scene.context_target_device_action(action) else {
-            fika_log!(
-                "[fika-wgpu] device-action-error action={} target=none",
-                action.as_str()
-            );
-            self.scene.record_task_status(ShellTaskStatus::failed(
-                format!("{} failed", action.label()),
-                "No device target",
-                false,
-            ));
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
-            return;
-        };
-        self.perform_device_action_request(event_loop, request);
-    }
-
-    fn perform_device_action_request(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        request: DeviceActionRequest,
-    ) {
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        fika_log!(
-            "[fika-wgpu] device-action-start action={} id={:?} label={:?}",
-            request.action.as_str(),
-            request.id,
-            request.label
-        );
-        let result = pollster::block_on(perform_device_place_operation(
-            WGPU_SHELL_PANE_ID,
-            request.id.clone(),
-            request.label.clone(),
-            request.operation,
-        ));
-        let mount_point = match &result.result {
-            Ok(Some(path)) => Some(path.clone()),
-            Ok(None) => None,
-            Err(error) => {
-                fika_log!(
-                    "[fika-wgpu] device-action-error action={} id={:?} label={:?} error={error}",
-                    request.action.as_str(),
-                    request.id,
-                    request.label
-                );
-                None
-            }
-        };
-
-        match self
-            .scene
-            .apply_device_place_operation_result(&request, &result, size)
-        {
-            Ok(()) => {
-                if let Some(path) = mount_point {
-                    self.load_path_into_pane(event_loop, request.pane, path, "device-mount");
-                } else {
-                    self.present_scene_change(event_loop, "device-action");
-                }
-            }
-            Err(error) => {
-                fika_log!(
-                    "[fika-wgpu] device-action-refresh-error action={} id={:?} error={error}",
-                    request.action.as_str(),
-                    request.id
-                );
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-        }
-    }
-
-    fn open_context_target_with_application(&mut self, desktop_id: String) {
-        let request = match self
-            .scene
-            .open_with_launch_request_for_context_application(&self.mime_applications, &desktop_id)
-        {
-            Ok(request) => request,
-            Err(error) => {
-                fika_log!("[fika-wgpu] open-with-error app={desktop_id:?} {error}");
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    "Open With failed",
-                    error,
-                    false,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            }
-        };
-        let path = request.path.clone();
-        let app_name = request.app_name.clone();
-        self.scene.record_task_status(ShellTaskStatus::completed(
-            "Opening With",
-            format!("{} using {}", path_display_label(&path), app_name),
-            false,
-        ));
-        std::thread::spawn(move || {
-            let result = pollster::block_on(launch_with_systemd_user(request.plan));
-            let status = OpenWithLaunchResult {
-                pane_id: WGPU_SHELL_PANE_ID,
-                path,
-                app_name,
-                result,
-            }
-            .status_message();
-            fika_log!("[fika-wgpu] open-with-finished {status}");
-        });
-        if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }
     }
@@ -2603,60 +2338,6 @@ impl FikaWgpuApp {
             }
             Err(error) => {
                 fika_log!("[fika-wgpu] split-pane-error {error}");
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-        }
-    }
-
-    fn perform_trash_view_context_action(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        action: ShellContextMenuAction,
-    ) {
-        if action == ShellContextMenuAction::EmptyTrash {
-            match self.start_async_trash_view_operation(action) {
-                Ok(()) => {
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
-                }
-                Err(error) => {
-                    fika_log!(
-                        "[fika-wgpu] trash-view-error action={} {error}",
-                        action.as_str()
-                    );
-                    self.scene.record_task_status(ShellTaskStatus::failed(
-                        "Empty Trash failed",
-                        error,
-                        false,
-                    ));
-                    if let Some(window) = self.window.as_ref() {
-                        window.request_redraw();
-                    }
-                }
-            }
-            return;
-        }
-
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        match self.scene.perform_trash_view_context_action(action, size) {
-            Ok(result) if result.success_count > 0 => {
-                self.present_scene_change(event_loop, action.as_str())
-            }
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            Err(error) => {
-                fika_log!(
-                    "[fika-wgpu] trash-view-error action={} {error}",
-                    action.as_str()
-                );
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
                 }
@@ -2734,233 +2415,6 @@ impl FikaWgpuApp {
                     "Remove Place failed",
                     error,
                     false,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-        }
-    }
-
-    fn move_context_target_to_trash(&mut self, event_loop: &dyn ActiveEventLoop, privileged: bool) {
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        match self.scene.move_context_target_to_trash(size, privileged) {
-            Ok(result) if result.changed() => {
-                self.present_scene_change(event_loop, "move-to-trash")
-            }
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            Err(error) => {
-                fika_log!("[fika-wgpu] trash-error {error}");
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    if privileged {
-                        "Administrator move to Trash failed"
-                    } else {
-                        "Move to Trash failed"
-                    },
-                    error,
-                    privileged,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-        }
-    }
-
-    fn paste_from_clipboard(&mut self, event_loop: &dyn ActiveEventLoop, privileged: bool) {
-        self.paste_from_clipboard_with_target(event_loop, true, privileged);
-    }
-
-    fn perform_drop_operation_request(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        request: ShellDropOperationRequest,
-    ) {
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        if !request.privileged {
-            if let Err(error) = self.scene.validate_drop_operation_request(&request) {
-                self.scene
-                    .record_task_status(ShellTaskStatus::failed("Drop failed", error, false));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            }
-            self.start_async_transfer(
-                ShellAsyncTransferSource::Drop,
-                request.target_dir,
-                request.mode,
-                request.sources,
-                request.mode.label(),
-                false,
-            );
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
-            return;
-        }
-        match self.scene.perform_drop_operation_request(&request, size) {
-            Ok(result) if result.changed() => self.present_scene_change(event_loop, "dnd-drop"),
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            Err(error) => {
-                fika_log!("[fika-wgpu] dnd-transfer-error {error}");
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    if request.privileged {
-                        "Administrator drop failed"
-                    } else {
-                        "Drop failed"
-                    },
-                    error,
-                    request.privileged,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-        }
-    }
-
-    fn paste_from_clipboard_into_active_pane(&mut self, event_loop: &dyn ActiveEventLoop) {
-        self.paste_from_clipboard_with_target(event_loop, false, false);
-    }
-
-    fn paste_from_clipboard_with_target(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        use_context: bool,
-        privileged: bool,
-    ) {
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        let Some(clipboard) = self.clipboard.as_ref() else {
-            fika_log!("[fika-wgpu] paste-error error=clipboard-unavailable");
-            self.scene.record_task_status(ShellTaskStatus::failed(
-                "Paste failed",
-                "Clipboard is unavailable",
-                false,
-            ));
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
-            return;
-        };
-        let text = match clipboard.load_text() {
-            Ok(text) => text,
-            Err(error) => {
-                fika_log!("[fika-wgpu] paste-error load={error}");
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    "Paste failed",
-                    format!("Clipboard read failed: {error}"),
-                    false,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            }
-        };
-        if !privileged && let Some(payload) = decode_file_clipboard_text(&text) {
-            let target_dir = if use_context {
-                self.scene
-                    .context_target_paste_directory()
-                    .or_else(|| self.scene.active_pane_paste_directory())
-            } else {
-                self.scene.active_pane_paste_directory()
-            };
-            let Some((_target_pane, target_dir)) = target_dir else {
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    "Paste failed",
-                    "No paste target pane",
-                    false,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            };
-            if is_network_path(&target_dir) {
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    "Paste failed",
-                    "Remote paste target is not available yet",
-                    false,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            }
-            if payload.paths.iter().any(|path| is_network_path(path)) {
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    "Paste failed",
-                    "Remote paste source is not available yet",
-                    false,
-                ));
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-                return;
-            }
-            let mode = match payload.role {
-                FileClipboardRole::Copy => FileTransferMode::Copy,
-                FileClipboardRole::Cut => FileTransferMode::Move,
-            };
-            self.start_async_transfer(
-                ShellAsyncTransferSource::Paste,
-                target_dir,
-                mode,
-                payload.paths,
-                "Paste",
-                payload.role == FileClipboardRole::Cut,
-            );
-            if let Some(window) = self.window.as_ref() {
-                window.request_redraw();
-            }
-            return;
-        }
-        let paste_result = if use_context {
-            self.scene
-                .paste_clipboard_text_from_context(&text, size, privileged)
-        } else {
-            self.scene
-                .paste_clipboard_text_into_active_pane(&text, size, privileged)
-        };
-        match paste_result {
-            Ok(result) if result.changed() => {
-                if result.clear_clipboard && result.failure_count == 0 {
-                    if let Err(error) = clipboard.store_text("") {
-                        fika_log!("[fika-wgpu] clipboard-clear-error error={error}");
-                    }
-                }
-                self.present_scene_change(event_loop, "paste");
-            }
-            Ok(_) => {
-                if let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
-            }
-            Err(error) => {
-                fika_log!("[fika-wgpu] paste-error {error}");
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    if privileged {
-                        "Administrator paste failed"
-                    } else {
-                        "Paste failed"
-                    },
-                    error,
-                    privileged,
                 ));
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
@@ -3162,26 +2616,7 @@ impl FikaWgpuApp {
 
         self.scene.close_open_with_chooser_after_success(&request);
         self.close_open_with_dialog_window();
-        let path = request.path.clone();
-        let app_name = request.app_name.clone();
-        self.scene.record_task_status(ShellTaskStatus::completed(
-            "Opening With",
-            format!("{} using {}", path_display_label(&path), app_name),
-            false,
-        ));
-        std::thread::spawn(move || {
-            let result = pollster::block_on(launch_with_systemd_user(request.plan));
-            let status = OpenWithLaunchResult {
-                pane_id: WGPU_SHELL_PANE_ID,
-                path,
-                app_name,
-                result,
-            }
-            .status_message();
-            fika_log!("[fika-wgpu] open-with-finished {status}");
-        });
-
-        self.request_main_redraw();
+        self.launch_open_with_request(request);
     }
 
     fn perform_path_navigation(

@@ -38,6 +38,17 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - Command / Action 执行器第一步：
   `src/app_actions.rs` 承载 context menu 和 file keyboard command 的副作用执行；
   `main.rs` 的 window event handler 保持调用入口，但不再内联这两段长业务分支。
+- Command / Action 执行器第二步：
+  clipboard export、device action、trash view action、move-to-trash、paste/drop wrapper
+  已从 `main.rs` 迁入 `src/app_actions.rs`。
+- Command / Action 执行器第三步：
+  open file、service menu、Ark extract-and-trash、context open-with、Open With dialog launch
+  的副作用执行已迁入 `src/app_actions.rs`；`main.rs` 继续保留 dialog commit 前的校验、
+  默认应用更新、async completion 等尚未 request 化的应用层流程。
+- Command / Action 执行器模块化：
+  `src/app_actions.rs` 收缩为 dispatcher，具体副作用分散到
+  `src/app_actions/clipboard.rs`、`device.rs`、`launch.rs`、`trash.rs`、
+  `transfer.rs`，避免新的单文件执行器继续膨胀。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。
@@ -53,7 +64,8 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - context menu / drop menu action dispatcher。
 - 文件命令执行器：rename、create、delete、trash、paste、open。
 - view 命令执行器：zoom、view mode、hidden、split pane、reload。
-- 剪贴板、设备操作、trash 操作等副作用执行 request 化。
+- 剪贴板、设备操作、trash、paste、drop 等副作用进一步 request 化，并逐步接入
+  async operation dispatcher。
 
 完成标准：
 - `ApplicationHandler::window_event` 中的业务分支减少。
@@ -154,11 +166,12 @@ operation dispatcher。
 
 ## 当前推荐顺序
 
-1. Command / Action 层第一批：context menu 和 file keyboard command。
-2. ShellScene hit testing 模块化。
+1. Command / Action 层后续：create/rename commit、Open With 默认应用更新、
+   external drag/drop menu 打开路径的 request 化。
+2. Async operation dispatcher。
 3. Render surface / frame pipeline。
 4. Animation registry。
-5. Async operation dispatcher。
+5. ShellScene hit testing 模块化。
 6. Test fixture builder 穿插进行。
 7. Render dirty / damage 后续收敛穿插进行。
 

@@ -1,3 +1,9 @@
+mod clipboard;
+mod device;
+mod launch;
+mod transfer;
+mod trash;
+
 use winit::event_loop::ActiveEventLoop;
 
 use crate::shell::action::{
