@@ -30,10 +30,25 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - Dialog 生命周期 / layout size 对齐：
   参考 Dolphin `QDialog(parent)` / `setModal(true)` / `WA_DeleteOnClose` 和 KIO
   `KOpenWithDialog` 的 `minimumSizeHint` + 初始 `resize` 模式，detached dialog 关闭后
-  只释放 dialog host 并隔离尾随 window event，不再误触发主窗口退出；dialog renderer
+  从 active modal 集合移除并隔离尾随 window event，不再误触发主窗口退出；dialog renderer
   保留实际 surface size，输入 hit-test 和内部绘制使用固定 `layout_size`，避免 compositor
   或尾随 resize 事件导致弹窗内容尺寸漂移；detached dialog surface validation 不再退出
-  主 event loop。
+  主 event loop；主窗口 close request 在 modal dialog 存活期间被拦截，dialog 刚关闭后的
+  尾随主窗口 close request 也会被短暂 guard 掉，用来弥补当前缺少真正 transient parent
+  时 compositor/WM 可能投递的错误关闭序列。`FIKA_WGPU_DIALOG_TRACE=1` 会记录
+  `CloseRequested` / `Destroyed` / resize / redraw 等 window event 路由、dialog
+  close guard 和 event-loop exit reason；高频 pointer move 默认折叠，需要时可加
+  `FIKA_WGPU_DIALOG_TRACE_VERBOSE=1`。`scripts/dialog-lifecycle-smoke.sh` 提供
+  open-with/create/rename dialog 打开、关闭、主窗口继续渲染的 lifecycle smoke，用来排查 compositor
+  尾随事件是否仍误关主窗口。Wayland 下 `Window::set_visible(false)` 是 no-op，隐藏停放
+  会留下仍可获焦/吃输入的 zombie dialog；因此 dialog 关闭改为两阶段销毁：当前
+  `window_event` 回调只从 active modal 集合移除并记录 recently-closed id，随后在
+  `about_to_wait` 安全点先等待 dialog renderer idle，再 drop wgpu surface 和 native
+  window。窗口以 `Arc<dyn Window>` 交给 wgpu surface 持有，避免旧的 `'static`
+  transmute handle 生命周期假设；dialog renderer 复用主窗口的 wgpu
+  instance/adapter/device/queue，只为每个独立窗口创建自己的 surface 和 renderer caches，
+  避免关闭 dialog 时销毁额外 Vulkan device 后触发主窗口 swapchain reconfigure 的
+  NVIDIA/validation-layer 崩溃路径。
 - Dialog client-area 几何对齐：
   参考 Dolphin/KIO 的 `QDialog` widget 布局语义，独立 dialog 的 client area 本身就是
   dialog root，不再复用主窗口 overlay 时代的居中 rect + 外侧 click-away margin；

@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::PhysicalSize;
@@ -87,7 +89,7 @@ impl ShellDialogWindowSpec {
 pub(crate) struct ShellDetachedDialogWindow {
     kind: ShellDialogWindowKind,
     renderer: WgpuState,
-    window: Box<dyn Window>,
+    window: Arc<dyn Window>,
     layout_size: PhysicalSize<u32>,
     cursor_icon: CursorIcon,
 }
@@ -96,15 +98,27 @@ impl ShellDetachedDialogWindow {
     pub(crate) fn create(
         event_loop: &dyn ActiveEventLoop,
         parent: Option<&dyn Window>,
+        shared_renderer: Option<&WgpuState>,
         kind: ShellDialogWindowKind,
         spec: &ShellDialogWindowSpec,
     ) -> Result<Self, String> {
         let window = event_loop
             .create_window(spec.window_attributes(event_loop, kind))
             .map_err(|error| format!("{} dialog window create failed: {error}", kind.as_str()))?;
+        let window: Arc<dyn Window> = window.into();
         log_dialog_parent_status(event_loop, parent, window.as_ref(), kind);
-        let renderer = WgpuState::new(window.as_ref())
-            .map_err(|error| format!("{} dialog renderer init failed: {error}", kind.as_str()))?;
+        let renderer = match shared_renderer {
+            Some(renderer) => WgpuState::new_with_shared_device(window.clone(), renderer),
+            None => WgpuState::new(window.clone()),
+        }
+        .map_err(|error| format!("{} dialog renderer init failed: {error}", kind.as_str()))?;
+        fika_dialog_trace!(
+            "[fika-wgpu] dialog-window-created kind={} window={:?} surface={}x{}",
+            kind.as_str(),
+            window.id(),
+            spec.surface_size.width,
+            spec.surface_size.height
+        );
         Ok(Self {
             kind,
             renderer,
@@ -124,6 +138,10 @@ impl ShellDetachedDialogWindow {
 
     pub(crate) fn renderer_size(&self) -> PhysicalSize<u32> {
         self.renderer.size
+    }
+
+    pub(crate) fn frame_count(&self) -> u64 {
+        self.renderer.frame_count
     }
 
     pub(crate) fn layout_size(&self) -> PhysicalSize<u32> {
@@ -170,6 +188,15 @@ impl ShellDetachedDialogWindow {
             .request_user_attention(Some(UserAttentionType::Informational));
     }
 
+    fn prepare_for_drop(&mut self) {
+        fika_dialog_trace!(
+            "[fika-wgpu] dialog-window-renderer-idle kind={} window={:?}",
+            self.kind.as_str(),
+            self.window_id()
+        );
+        self.renderer.wait_idle("dialog-window-drop");
+    }
+
     pub(crate) fn renderer_and_window_mut(&mut self) -> (&mut WgpuState, &dyn Window) {
         (&mut self.renderer, self.window.as_ref())
     }
@@ -209,16 +236,25 @@ pub(crate) enum ShellDialogWindowHostEvent {
     ModifiersChanged(Modifiers),
 }
 
+struct ShellDeferredDialogClose {
+    kind: ShellDialogWindowKind,
+    window_id: WindowId,
+    window: ShellDetachedDialogWindow,
+    drop_at: Instant,
+}
+
 #[derive(Default)]
 pub(crate) struct ShellDialogWindows {
     create: Option<ShellDetachedDialogWindow>,
     open_with: Option<ShellDetachedDialogWindow>,
     rename: Option<ShellDetachedDialogWindow>,
     recently_closed: VecDeque<WindowId>,
+    deferred_closes: VecDeque<ShellDeferredDialogClose>,
 }
 
 impl ShellDialogWindows {
     const RECENTLY_CLOSED_LIMIT: usize = 8;
+    const DEFERRED_CLOSE_DELAY: Duration = Duration::from_millis(1);
 
     pub(crate) fn has_modal_window(&self) -> bool {
         self.create.is_some() || self.open_with.is_some() || self.rename.is_some()
@@ -331,6 +367,11 @@ impl ShellDialogWindows {
     pub(crate) fn set(&mut self, kind: ShellDialogWindowKind, window: ShellDetachedDialogWindow) {
         debug_assert_eq!(window.kind(), kind);
         self.forget_recently_closed(window.window_id());
+        fika_dialog_trace!(
+            "[fika-wgpu] dialog-window-set kind={} window={:?}",
+            kind.as_str(),
+            window.window_id()
+        );
         match kind {
             ShellDialogWindowKind::Create => self.create = Some(window),
             ShellDialogWindowKind::OpenWith => self.open_with = Some(window),
@@ -338,19 +379,63 @@ impl ShellDialogWindows {
         }
     }
 
-    pub(crate) fn close(&mut self, kind: ShellDialogWindowKind) {
+    pub(crate) fn close(&mut self, kind: ShellDialogWindowKind) -> bool {
         let closed = match kind {
             ShellDialogWindowKind::Create => self.create.take(),
             ShellDialogWindowKind::OpenWith => self.open_with.take(),
             ShellDialogWindowKind::Rename => self.rename.take(),
         };
         if let Some(window) = closed {
-            self.remember_recently_closed(window.window_id());
+            let window_id = window.window_id();
+            fika_dialog_trace!(
+                "[fika-wgpu] dialog-window-close-deferred kind={} window={:?}",
+                kind.as_str(),
+                window_id
+            );
+            self.remember_recently_closed(window_id);
+            self.deferred_closes.push_back(ShellDeferredDialogClose {
+                kind,
+                window_id,
+                window,
+                drop_at: Instant::now() + Self::DEFERRED_CLOSE_DELAY,
+            });
+            true
+        } else {
+            fika_dialog_trace!(
+                "[fika-wgpu] dialog-window-close kind={} window=<none>",
+                kind.as_str()
+            );
+            false
         }
     }
 
+    pub(crate) fn drain_ready_deferred_closes(&mut self) -> bool {
+        let mut dropped_any = false;
+        let now = Instant::now();
+        let mut pending = VecDeque::new();
+        while let Some(mut close) = self.deferred_closes.pop_front() {
+            if close.drop_at > now {
+                pending.push_back(close);
+                continue;
+            }
+            fika_dialog_trace!(
+                "[fika-wgpu] dialog-window-drop-deferred kind={} window={:?}",
+                close.kind.as_str(),
+                close.window_id
+            );
+            close.window.prepare_for_drop();
+            dropped_any = true;
+        }
+        self.deferred_closes = pending;
+        dropped_any
+    }
+
+    pub(crate) fn next_deferred_close_deadline(&self) -> Option<Instant> {
+        self.deferred_closes.iter().map(|close| close.drop_at).min()
+    }
+
     pub(crate) fn close_all(&mut self) {
-        for window in [
+        for mut window in [
             self.create.take(),
             self.open_with.take(),
             self.rename.take(),
@@ -358,7 +443,21 @@ impl ShellDialogWindows {
         .into_iter()
         .flatten()
         {
+            fika_dialog_trace!(
+                "[fika-wgpu] dialog-window-close-all kind={} window={:?}",
+                window.kind().as_str(),
+                window.window_id()
+            );
+            window.prepare_for_drop();
             self.remember_recently_closed(window.window_id());
+        }
+        while let Some(mut close) = self.deferred_closes.pop_front() {
+            fika_dialog_trace!(
+                "[fika-wgpu] dialog-window-close-all-deferred kind={} window={:?}",
+                close.kind.as_str(),
+                close.window_id
+            );
+            close.window.prepare_for_drop();
         }
     }
 
@@ -376,6 +475,10 @@ impl ShellDialogWindows {
 
     pub(crate) fn is_recently_closed_window(&self, window_id: WindowId) -> bool {
         self.recently_closed.contains(&window_id)
+    }
+
+    pub(crate) fn frame_count(&self, kind: ShellDialogWindowKind) -> Option<u64> {
+        self.get(kind).map(ShellDetachedDialogWindow::frame_count)
     }
 
     fn remember_recently_closed(&mut self, window_id: WindowId) {

@@ -55,28 +55,86 @@ macro_rules! fika_log {
     }};
 }
 
+macro_rules! fika_dialog_trace {
+    ($($arg:tt)*) => {{
+        if crate::fika_dialog_trace_enabled() {
+            eprintln!($($arg)*);
+        }
+    }};
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var_os(name).is_some_and(|value| {
+        let value = value.to_string_lossy();
+        let value = value.trim().to_ascii_lowercase();
+        !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
+    })
+}
+
 fn fika_log_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_flag_enabled("FIKA_LOG") || env_flag_enabled("FIKA_WGPU_LOG"))
+}
+
+fn fika_dialog_trace_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        env::var_os("FIKA_LOG")
-            .or_else(|| env::var_os("FIKA_WGPU_LOG"))
-            .is_some_and(|value| {
-                let value = value.to_string_lossy();
-                let value = value.trim().to_ascii_lowercase();
-                !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
-            })
+        env_flag_enabled("FIKA_WGPU_DIALOG_TRACE")
+            || env_flag_enabled("FIKA_LOG")
+            || env_flag_enabled("FIKA_WGPU_LOG")
     })
+}
+
+fn fika_dialog_trace_verbose_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_flag_enabled("FIKA_WGPU_DIALOG_TRACE_VERBOSE"))
 }
 
 fn fika_frame_log_all_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        env::var_os("FIKA_WGPU_FRAME_LOG_ALL").is_some_and(|value| {
-            let value = value.to_string_lossy();
-            let value = value.trim().to_ascii_lowercase();
-            !matches!(value.as_str(), "" | "0" | "false" | "no" | "off")
-        })
-    })
+    *ENABLED.get_or_init(|| env_flag_enabled("FIKA_WGPU_FRAME_LOG_ALL"))
+}
+
+fn dialog_lifecycle_autosmoke_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env_flag_enabled("FIKA_WGPU_AUTOSMOKE_DIALOG_LIFECYCLE"))
+}
+
+fn window_event_label(event: &WindowEvent) -> &'static str {
+    match event {
+        WindowEvent::ActivationTokenDone { .. } => "ActivationTokenDone",
+        WindowEvent::SurfaceResized(_) => "SurfaceResized",
+        WindowEvent::Moved(_) => "Moved",
+        WindowEvent::CloseRequested => "CloseRequested",
+        WindowEvent::Destroyed => "Destroyed",
+        WindowEvent::DragEntered { .. } => "DragEntered",
+        WindowEvent::DragMoved { .. } => "DragMoved",
+        WindowEvent::DragDropped { .. } => "DragDropped",
+        WindowEvent::DragLeft { .. } => "DragLeft",
+        WindowEvent::Focused(_) => "Focused",
+        WindowEvent::KeyboardInput { .. } => "KeyboardInput",
+        WindowEvent::ModifiersChanged(_) => "ModifiersChanged",
+        WindowEvent::Ime(_) => "Ime",
+        WindowEvent::PointerMoved { .. } => "PointerMoved",
+        WindowEvent::PointerEntered { .. } => "PointerEntered",
+        WindowEvent::PointerLeft { .. } => "PointerLeft",
+        WindowEvent::MouseWheel { .. } => "MouseWheel",
+        WindowEvent::PointerButton { .. } => "PointerButton",
+        WindowEvent::HoldGesture { .. } => "HoldGesture",
+        WindowEvent::PinchGesture { .. } => "PinchGesture",
+        WindowEvent::PanGesture { .. } => "PanGesture",
+        WindowEvent::DoubleTapGesture { .. } => "DoubleTapGesture",
+        WindowEvent::RotationGesture { .. } => "RotationGesture",
+        WindowEvent::TouchpadPressure { .. } => "TouchpadPressure",
+        WindowEvent::ScaleFactorChanged { .. } => "ScaleFactorChanged",
+        WindowEvent::ThemeChanged(_) => "ThemeChanged",
+        WindowEvent::Occluded(_) => "Occluded",
+        WindowEvent::RedrawRequested => "RedrawRequested",
+    }
+}
+
+fn window_event_trace_is_high_volume(event: &WindowEvent) -> bool {
+    matches!(event, WindowEvent::PointerMoved { .. })
 }
 
 mod app_actions;
@@ -430,6 +488,59 @@ struct ScrollbarDrag {
     grab_offset: f32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DialogLifecycleSmokeStep {
+    WaitMainFrame,
+    WaitDialogFrame,
+    WaitMainFrameAfterClose,
+    Complete,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DialogLifecycleSmoke {
+    step: DialogLifecycleSmokeStep,
+    kind: ShellDialogWindowKind,
+    close_frame: u64,
+    cycles_remaining: usize,
+}
+
+impl DialogLifecycleSmoke {
+    fn from_env() -> Option<Self> {
+        dialog_lifecycle_autosmoke_enabled().then_some(Self {
+            step: DialogLifecycleSmokeStep::WaitMainFrame,
+            kind: dialog_lifecycle_autosmoke_kind_from_env(),
+            close_frame: 0,
+            cycles_remaining: dialog_lifecycle_autosmoke_cycles_from_env(),
+        })
+    }
+
+    fn pending(self) -> bool {
+        !matches!(
+            self.step,
+            DialogLifecycleSmokeStep::Complete | DialogLifecycleSmokeStep::Failed
+        )
+    }
+}
+
+fn dialog_lifecycle_autosmoke_cycles_from_env() -> usize {
+    env::var_os("FIKA_WGPU_AUTOSMOKE_DIALOG_CYCLES")
+        .and_then(|value| value.to_string_lossy().trim().parse::<usize>().ok())
+        .filter(|cycles| *cycles > 0)
+        .unwrap_or(1)
+}
+
+fn dialog_lifecycle_autosmoke_kind_from_env() -> ShellDialogWindowKind {
+    let Some(value) = env::var_os("FIKA_WGPU_AUTOSMOKE_DIALOG_KIND") else {
+        return ShellDialogWindowKind::Create;
+    };
+    match value.to_string_lossy().trim().to_ascii_lowercase().as_str() {
+        "open-with" | "open_with" | "openwith" => ShellDialogWindowKind::OpenWith,
+        "rename" => ShellDialogWindowKind::Rename,
+        _ => ShellDialogWindowKind::Create,
+    }
+}
+
 fn window_title(scene: &ShellScene) -> String {
     let view_mode = scene.active_view_mode();
     if let Some(split_pane) = scene.panes.get(ShellPaneId::SLOT_1) {
@@ -459,11 +570,12 @@ struct FikaWgpuApp {
     active_task_base_details: HashMap<ShellTaskId, String>,
     next_task_id: ShellTaskId,
     modifiers: Modifiers,
-    // Drop order matters: renderer borrows display/window handles.
+    // Drop order matters: renderer owns a surface tied to the window handle.
     renderer: Option<WgpuState>,
     dialog_windows: ShellDialogWindows,
+    dialog_close_main_close_guard_until: Option<Instant>,
     clipboard: Option<ShellClipboard>,
-    window: Option<Box<dyn Window>>,
+    window: Option<Arc<dyn Window>>,
     cursor_icon: CursorIcon,
     pending_redraw_frames: u8,
     pending_render_reason: Option<&'static str>,
@@ -477,6 +589,7 @@ struct FikaWgpuApp {
     next_autosmoke_scroll: Instant,
     autosmoke_scroll_interval: Duration,
     autosmoke_scroll_allow_pending_redraw: bool,
+    dialog_lifecycle_smoke: Option<DialogLifecycleSmoke>,
 }
 
 impl FikaWgpuApp {
@@ -504,6 +617,7 @@ impl FikaWgpuApp {
             modifiers: Modifiers::default(),
             renderer: None,
             dialog_windows: ShellDialogWindows::default(),
+            dialog_close_main_close_guard_until: None,
             clipboard: None,
             window: None,
             cursor_icon: CursorIcon::Default,
@@ -519,6 +633,7 @@ impl FikaWgpuApp {
             next_autosmoke_scroll: Instant::now() + autosmoke_scroll.interval,
             autosmoke_scroll_interval: autosmoke_scroll.interval,
             autosmoke_scroll_allow_pending_redraw: autosmoke_scroll.allow_pending_redraw,
+            dialog_lifecycle_smoke: DialogLifecycleSmoke::from_env(),
         }
     }
 
@@ -559,6 +674,82 @@ impl FikaWgpuApp {
         self.dialog_windows.request_redraw(kind)
     }
 
+    fn dialog_close_guard_trace(&self) -> String {
+        let Some(deadline) = self.dialog_close_main_close_guard_until else {
+            return "none".to_string();
+        };
+        let now = Instant::now();
+        if deadline >= now {
+            format!(
+                "active:{}ms",
+                deadline.saturating_duration_since(now).as_millis()
+            )
+        } else {
+            format!(
+                "expired:{}ms",
+                now.saturating_duration_since(deadline).as_millis()
+            )
+        }
+    }
+
+    fn trace_window_event(&self, window_id: WindowId, event: &WindowEvent) {
+        if !fika_dialog_trace_enabled() {
+            return;
+        }
+        if window_event_trace_is_high_volume(event) && !fika_dialog_trace_verbose_enabled() {
+            return;
+        }
+        let main_id = self.window.as_ref().map(|window| window.id());
+        let dialog_kind = self.dialog_windows.window_kind_for_id(window_id);
+        let recently_closed = self.dialog_windows.is_recently_closed_window(window_id);
+        let role = if main_id == Some(window_id) {
+            "main"
+        } else if dialog_kind.is_some() {
+            "dialog"
+        } else if recently_closed {
+            "recently-closed-dialog"
+        } else {
+            "unknown"
+        };
+        fika_dialog_trace!(
+            "[fika-wgpu] window-event event={} window={:?} role={} main={:?} dialog={} recently_closed={} modal={} guard={}",
+            window_event_label(event),
+            window_id,
+            role,
+            main_id,
+            dialog_kind
+                .map(ShellDialogWindowKind::as_str)
+                .unwrap_or("none"),
+            recently_closed as u8,
+            self.dialog_windows.has_modal_window() as u8,
+            self.dialog_close_guard_trace()
+        );
+    }
+
+    fn exit_event_loop(&self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
+        fika_log!(
+            "[fika-wgpu] event-loop-exit reason={} main_open={} modal={} guard={}",
+            reason,
+            self.window.is_some() as u8,
+            self.dialog_windows.has_modal_window() as u8,
+            self.dialog_close_guard_trace()
+        );
+        event_loop.exit();
+    }
+
+    fn drop_windows_for_exit(&mut self) {
+        self.renderer = None;
+        self.dialog_windows.close_all();
+        self.clipboard = None;
+        self.window = None;
+    }
+
+    fn drain_dialog_window_deferred_closes(&mut self) {
+        if self.dialog_windows.drain_ready_deferred_closes() {
+            self.request_main_redraw();
+        }
+    }
+
     fn open_with_dialog_title(&self) -> String {
         self.scene
             .open_with_chooser
@@ -592,15 +783,19 @@ impl FikaWgpuApp {
             dialog.sync(spec);
             return true;
         }
-        let dialog =
-            match ShellDetachedDialogWindow::create(event_loop, self.window.as_deref(), kind, spec)
-            {
-                Ok(dialog) => dialog,
-                Err(error) => {
-                    fika_log!("[fika-wgpu] {error}");
-                    return false;
-                }
-            };
+        let dialog = match ShellDetachedDialogWindow::create(
+            event_loop,
+            self.window.as_deref(),
+            self.renderer.as_ref(),
+            kind,
+            spec,
+        ) {
+            Ok(dialog) => dialog,
+            Err(error) => {
+                fika_log!("[fika-wgpu] {error}");
+                return false;
+            }
+        };
         self.dialog_windows.set(kind, dialog);
         self.sync_dialog_window(kind, spec);
         true
@@ -612,8 +807,17 @@ impl FikaWgpuApp {
         }
     }
 
-    fn close_dialog_window(&mut self, kind: ShellDialogWindowKind) {
-        self.dialog_windows.close(kind);
+    fn close_dialog_window(&mut self, kind: ShellDialogWindowKind) -> bool {
+        let closed = self.dialog_windows.close(kind);
+        fika_dialog_trace!(
+            "[fika-wgpu] dialog-close-dispatch kind={} closed={}",
+            kind.as_str(),
+            closed as u8
+        );
+        if closed {
+            self.arm_dialog_close_main_close_guard(kind);
+        }
+        closed
     }
 
     fn close_dialog_state_and_window(&mut self, kind: ShellDialogWindowKind) -> bool {
@@ -622,8 +826,42 @@ impl FikaWgpuApp {
             ShellDialogWindowKind::OpenWith => self.scene.close_open_with_chooser(),
             ShellDialogWindowKind::Rename => self.scene.close_rename_dialog(),
         };
-        self.close_dialog_window(kind);
+        let closed = self.close_dialog_window(kind);
+        fika_dialog_trace!(
+            "[fika-wgpu] dialog-state-close kind={} changed={} closed={}",
+            kind.as_str(),
+            changed as u8,
+            closed as u8
+        );
         changed
+    }
+
+    fn arm_dialog_close_main_close_guard(&mut self, kind: ShellDialogWindowKind) {
+        let deadline = Instant::now() + Duration::from_millis(1_500);
+        self.dialog_close_main_close_guard_until = Some(deadline);
+        fika_dialog_trace!(
+            "[fika-wgpu] dialog-close-guard arm kind={} duration_ms=1500",
+            kind.as_str()
+        );
+    }
+
+    fn intercept_main_close_for_dialog_lifecycle(&mut self) -> bool {
+        if self.dialog_windows.has_modal_window() {
+            self.dialog_windows.request_modal_attention();
+            fika_dialog_trace!("[fika-wgpu] main-close intercept=1 reason=modal-dialog");
+            return true;
+        }
+        let Some(deadline) = self.dialog_close_main_close_guard_until else {
+            fika_dialog_trace!("[fika-wgpu] main-close intercept=0 reason=no-guard");
+            return false;
+        };
+        self.dialog_close_main_close_guard_until = None;
+        let intercept = Instant::now() <= deadline;
+        fika_dialog_trace!(
+            "[fika-wgpu] main-close intercept={} reason=dialog-close-guard",
+            intercept as u8
+        );
+        intercept
     }
 
     fn sync_dialog_window_for_kind(&mut self, kind: ShellDialogWindowKind) {
@@ -642,6 +880,11 @@ impl FikaWgpuApp {
         let Some(event) = self.dialog_windows.handle_window_event(kind, event) else {
             return false;
         };
+        fika_dialog_trace!(
+            "[fika-wgpu] dialog-host-event kind={} event={:?}",
+            kind.as_str(),
+            event
+        );
         match event {
             ShellDialogWindowHostEvent::CloseRequested => {
                 if self.close_dialog_state_and_window(kind) {
@@ -1020,7 +1263,11 @@ impl FikaWgpuApp {
     }
 
     fn autosmoke_work_pending(&self) -> bool {
-        !self.autosmoke_zoom_actions.is_empty() || !self.autosmoke_scroll_actions.is_empty()
+        !self.autosmoke_zoom_actions.is_empty()
+            || !self.autosmoke_scroll_actions.is_empty()
+            || self
+                .dialog_lifecycle_smoke
+                .is_some_and(DialogLifecycleSmoke::pending)
     }
 
     fn drive_autosmoke_after_render(&mut self) {
@@ -1041,6 +1288,135 @@ impl FikaWgpuApp {
         {
             window.request_redraw();
         }
+    }
+
+    fn drive_dialog_lifecycle_autosmoke(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(smoke_state) = self.dialog_lifecycle_smoke else {
+            return;
+        };
+        let kind = smoke_state.kind;
+        match smoke_state.step {
+            DialogLifecycleSmokeStep::WaitMainFrame => {
+                let Some(frame_count) = self.renderer.as_ref().map(|renderer| renderer.frame_count)
+                else {
+                    return;
+                };
+                if frame_count == 0 {
+                    return;
+                }
+                if !self.open_dialog_for_autosmoke(kind) {
+                    self.finish_dialog_lifecycle_autosmoke(false, event_loop);
+                    return;
+                }
+                if !self.ensure_dialog_window_for_autosmoke_kind(kind, event_loop) {
+                    self.finish_dialog_lifecycle_autosmoke(false, event_loop);
+                    return;
+                }
+                fika_log!(
+                    "[fika-wgpu] dialog-smoke open kind={} main_frame={}",
+                    kind.as_str(),
+                    frame_count
+                );
+                if let Some(smoke) = self.dialog_lifecycle_smoke.as_mut() {
+                    smoke.step = DialogLifecycleSmokeStep::WaitDialogFrame;
+                }
+                self.request_dialog_redraw(kind);
+            }
+            DialogLifecycleSmokeStep::WaitDialogFrame => {
+                let frame_count = self.dialog_windows.frame_count(kind).unwrap_or(0);
+                if frame_count == 0 {
+                    self.request_dialog_redraw(kind);
+                    return;
+                }
+                let close_frame = self
+                    .renderer
+                    .as_ref()
+                    .map(|renderer| renderer.frame_count)
+                    .unwrap_or(0);
+                fika_log!(
+                    "[fika-wgpu] dialog-smoke close kind={} dialog_frame={} main_frame={}",
+                    kind.as_str(),
+                    frame_count,
+                    close_frame
+                );
+                self.handle_common_dialog_window_event(kind, &WindowEvent::CloseRequested);
+                if let Some(smoke) = self.dialog_lifecycle_smoke.as_mut() {
+                    smoke.step = DialogLifecycleSmokeStep::WaitMainFrameAfterClose;
+                    smoke.close_frame = close_frame;
+                }
+                self.request_main_redraw();
+            }
+            DialogLifecycleSmokeStep::WaitMainFrameAfterClose => {
+                let Some(smoke) = self.dialog_lifecycle_smoke else {
+                    return;
+                };
+                let Some(frame_count) = self.renderer.as_ref().map(|renderer| renderer.frame_count)
+                else {
+                    self.finish_dialog_lifecycle_autosmoke(false, event_loop);
+                    return;
+                };
+                if self.dialog_windows.has_modal_window() || frame_count < smoke.close_frame {
+                    self.request_main_redraw();
+                    return;
+                }
+                if smoke.cycles_remaining > 1 {
+                    if let Some(smoke) = self.dialog_lifecycle_smoke.as_mut() {
+                        smoke.cycles_remaining -= 1;
+                        smoke.step = DialogLifecycleSmokeStep::WaitMainFrame;
+                    }
+                    self.request_main_redraw();
+                    return;
+                }
+                self.finish_dialog_lifecycle_autosmoke(true, event_loop);
+            }
+            DialogLifecycleSmokeStep::Complete | DialogLifecycleSmokeStep::Failed => {}
+        }
+    }
+
+    fn open_dialog_for_autosmoke(&mut self, kind: ShellDialogWindowKind) -> bool {
+        match kind {
+            ShellDialogWindowKind::Create => self.scene.open_create_dialog_for_autosmoke(),
+            ShellDialogWindowKind::OpenWith => self
+                .scene
+                .open_open_with_chooser_for_autosmoke(&self.mime_applications),
+            ShellDialogWindowKind::Rename => self.scene.open_rename_dialog_for_autosmoke(),
+        }
+    }
+
+    fn ensure_dialog_window_for_autosmoke_kind(
+        &mut self,
+        kind: ShellDialogWindowKind,
+        event_loop: &dyn ActiveEventLoop,
+    ) -> bool {
+        match kind {
+            ShellDialogWindowKind::Create => self.ensure_create_dialog_window(event_loop),
+            ShellDialogWindowKind::OpenWith => self.ensure_open_with_dialog_window(event_loop),
+            ShellDialogWindowKind::Rename => self.ensure_rename_dialog_window(event_loop),
+        }
+    }
+
+    fn finish_dialog_lifecycle_autosmoke(
+        &mut self,
+        success: bool,
+        event_loop: &dyn ActiveEventLoop,
+    ) {
+        let Some(()) = self.dialog_lifecycle_smoke.as_mut().map(|smoke| {
+            smoke.step = if success {
+                DialogLifecycleSmokeStep::Complete
+            } else {
+                DialogLifecycleSmokeStep::Failed
+            };
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }) else {
+            return;
+        };
+        fika_log!(
+            "[fika-wgpu] dialog-smoke {} main_open={} modal={} guard={}",
+            if success { "complete" } else { "failed" },
+            self.window.is_some() as u8,
+            self.dialog_windows.has_modal_window() as u8,
+            self.dialog_close_guard_trace()
+        );
     }
 
     fn drive_autosmoke_zoom(&mut self, size: PhysicalSize<u32>) {
@@ -1502,16 +1878,17 @@ impl ApplicationHandler for FikaWgpuApp {
             Ok(window) => window,
             Err(error) => {
                 fika_log!("[fika-wgpu] window create failed: {error}");
-                event_loop.exit();
+                self.exit_event_loop(event_loop, "main-window-create-failed");
                 return;
             }
         };
 
-        let mut renderer = match WgpuState::new(window.as_ref()) {
+        let window: Arc<dyn Window> = window.into();
+        let mut renderer = match WgpuState::new(window.clone()) {
             Ok(renderer) => renderer,
             Err(error) => {
                 fika_log!("[fika-wgpu] renderer init failed: {error}");
-                event_loop.exit();
+                self.exit_event_loop(event_loop, "main-renderer-init-failed");
                 return;
             }
         };
@@ -1586,6 +1963,8 @@ impl ApplicationHandler for FikaWgpuApp {
             self.drive_autosmoke_zoom(size);
             self.drive_autosmoke_scroll(size);
         }
+        self.drive_dialog_lifecycle_autosmoke(event_loop);
+        self.drain_dialog_window_deferred_closes();
 
         let autosmoke_work_pending = self.autosmoke_work_pending();
         let animation_active = self.scene.animation_active();
@@ -1606,6 +1985,7 @@ impl ApplicationHandler for FikaWgpuApp {
         let next_idle_deadline = [
             self.auto_cycle_views.then_some(self.next_auto_cycle),
             next_autosmoke_deadline,
+            self.dialog_windows.next_deferred_close_deadline(),
             self.scene.next_animation_frame_deadline(),
             self.directory_watchers.next_reload_deadline(),
         ]
@@ -1636,6 +2016,7 @@ impl ApplicationHandler for FikaWgpuApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        self.trace_window_event(window_id, &event);
         if let Some(kind) = self.dialog_windows.window_kind_for_id(window_id) {
             match kind {
                 ShellDialogWindowKind::Create => {
@@ -1655,11 +2036,10 @@ impl ApplicationHandler for FikaWgpuApp {
         if self.dialog_windows.is_recently_closed_window(window_id) {
             return;
         }
-        if self
-            .window
-            .as_ref()
-            .is_some_and(|window| window.id() != window_id)
-        {
+        let Some(main_window_id) = self.window.as_ref().map(|window| window.id()) else {
+            return;
+        };
+        if main_window_id != window_id {
             return;
         }
         let modal_disposition = self.dialog_windows.modal_event_disposition(&event);
@@ -1671,11 +2051,11 @@ impl ApplicationHandler for FikaWgpuApp {
         }
         match event {
             WindowEvent::CloseRequested => {
-                self.renderer = None;
-                self.dialog_windows.close_all();
-                self.clipboard = None;
-                self.window = None;
-                event_loop.exit();
+                if self.intercept_main_close_for_dialog_lifecycle() {
+                    return;
+                }
+                self.drop_windows_for_exit();
+                self.exit_event_loop(event_loop, "main-close-requested");
             }
             WindowEvent::SurfaceResized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -7078,6 +7458,61 @@ impl ShellScene {
         self.open_create_dialog_from_context_with_kind(CreateEntryKind::Folder, false)
     }
 
+    fn open_create_dialog_for_autosmoke(&mut self) -> bool {
+        let pane = self.active_pane();
+        let Some(path) = self.pane_state(pane).map(|state| state.path.clone()) else {
+            fika_log!("[fika-wgpu] dialog-smoke failed reason=no-active-pane");
+            return false;
+        };
+        self.open_create_dialog_for_parent(pane, path, CreateEntryKind::Folder, false)
+    }
+
+    fn open_open_with_chooser_for_autosmoke(&mut self, cache: &MimeApplicationCache) -> bool {
+        let pane = self.active_pane();
+        let Some(target) = self.first_item_context_target_for_autosmoke(pane) else {
+            fika_log!("[fika-wgpu] dialog-smoke failed reason=no-open-with-target");
+            return false;
+        };
+        self.context_target = Some(target);
+        self.open_open_with_chooser_from_context(cache)
+    }
+
+    fn open_rename_dialog_for_autosmoke(&mut self) -> bool {
+        let pane = self.active_pane();
+        let Some(target) = self.first_item_context_target_for_autosmoke(pane) else {
+            fika_log!("[fika-wgpu] dialog-smoke failed reason=no-rename-target");
+            return false;
+        };
+        let index = match target {
+            ShellContextTarget::Item { index, .. } => index,
+            ShellContextTarget::Blank { .. } | ShellContextTarget::Place { .. } => return false,
+        };
+        if self
+            .pane_selection_mut(pane)
+            .is_some_and(|selection| selection.apply_navigation(index, false))
+        {
+            self.selection_changes += 1;
+        }
+        self.open_rename_dialog_from_active_selection(false)
+    }
+
+    fn first_item_context_target_for_autosmoke(
+        &self,
+        pane: ShellPaneId,
+    ) -> Option<ShellContextTarget> {
+        let view = self.pane_view(pane)?;
+        view.filtered_indexes.iter().copied().find_map(|index| {
+            let entry = view.entries.get(index)?;
+            Some(ShellContextTarget::Item {
+                pane,
+                index,
+                path: self.entry_path_for_pane_view(view, index)?,
+                is_dir: entry.is_dir,
+                selection_count: 1,
+            })
+        })
+    }
+
     fn open_create_dialog_from_context_with_kind(
         &mut self,
         kind: CreateEntryKind,
@@ -7094,7 +7529,17 @@ impl ShellScene {
             );
             return false;
         };
-        let dialog = ShellCreateDialog::new(*pane, path.clone(), kind, privileged);
+        self.open_create_dialog_for_parent(*pane, path.clone(), kind, privileged)
+    }
+
+    fn open_create_dialog_for_parent(
+        &mut self,
+        pane: ShellPaneId,
+        path: PathBuf,
+        kind: CreateEntryKind,
+        privileged: bool,
+    ) -> bool {
+        let dialog = ShellCreateDialog::new(pane, path.clone(), kind, privileged);
         let changed = self.create_dialog.as_ref() != Some(&dialog);
         self.create_dialog = Some(dialog);
         self.properties_overlay = None;
@@ -11681,18 +12126,19 @@ impl TextLabelPrewarmStats {
 }
 
 struct WgpuState {
-    instance: wgpu::Instance,
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    size: PhysicalSize<u32>,
     quad_renderer: QuadRenderer,
     overlay_quad_renderer: QuadRenderer,
     icon_renderer: IconRenderer,
     text_renderer: TextRenderer,
     overlay_text_renderer: Option<TextRenderer>,
     retained_scene: RetainedSceneRenderer,
+    surface: wgpu::Surface<'static>,
+    queue: wgpu::Queue,
+    device: wgpu::Device,
+    adapter: wgpu::Adapter,
+    instance: wgpu::Instance,
+    config: wgpu::SurfaceConfiguration,
+    size: PhysicalSize<u32>,
     frame_count: u64,
     last_log: Instant,
     rendered_view_switches: u64,
@@ -11721,7 +12167,7 @@ impl ShellRenderOutcome {
 }
 
 impl WgpuState {
-    fn new(window: &dyn Window) -> Result<Self, String> {
+    fn new(window: Arc<dyn Window>) -> Result<Self, String> {
         let size = nonzero_size(window.surface_size());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
@@ -11731,10 +12177,6 @@ impl WgpuState {
             display: None,
         });
 
-        // The app stores and drops the renderer before the window. This mirrors
-        // winit's own example strategy for handle-owning render resources while
-        // keeping the Phase 0 spike free of a larger ownership wrapper.
-        let window: &'static dyn Window = unsafe { std::mem::transmute(window) };
         let surface = instance
             .create_surface(window)
             .map_err(|error| format!("create surface: {error}"))?;
@@ -11763,6 +12205,33 @@ impl WgpuState {
         }))
         .map_err(|error| format!("request device: {error}"))?;
 
+        Self::from_surface_parts(size, instance, adapter, device, queue, surface)
+    }
+
+    fn new_with_shared_device(window: Arc<dyn Window>, shared: &Self) -> Result<Self, String> {
+        let size = nonzero_size(window.surface_size());
+        let instance = shared.instance.clone();
+        let adapter = shared.adapter.clone();
+        let device = shared.device.clone();
+        let queue = shared.queue.clone();
+        let surface = instance
+            .create_surface(window)
+            .map_err(|error| format!("create surface: {error}"))?;
+        fika_dialog_trace!(
+            "[fika-wgpu] renderer-shared-device adapter={:?}",
+            adapter.get_info().name
+        );
+        Self::from_surface_parts(size, instance, adapter, device, queue, surface)
+    }
+
+    fn from_surface_parts(
+        size: PhysicalSize<u32>,
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface: wgpu::Surface<'static>,
+    ) -> Result<Self, String> {
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
             .formats
@@ -11806,18 +12275,19 @@ impl WgpuState {
         let retained_scene = RetainedSceneRenderer::new(&device, &queue, config.format, size);
 
         Ok(Self {
-            instance,
-            surface,
-            device,
-            queue,
-            config,
-            size,
             quad_renderer,
             overlay_quad_renderer,
             icon_renderer,
             text_renderer,
             overlay_text_renderer: None,
             retained_scene,
+            surface,
+            queue,
+            device,
+            adapter,
+            instance,
+            config,
+            size,
             frame_count: 0,
             last_log: Instant::now(),
             rendered_view_switches: 0,
@@ -11827,6 +12297,30 @@ impl WgpuState {
             render_work_pending: false,
             clean_redraw_skips: 0,
         })
+    }
+
+    pub(crate) fn wait_idle(&self, reason: &'static str) {
+        let start = Instant::now();
+        match self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_millis(500)),
+        }) {
+            Ok(status) => {
+                fika_dialog_trace!(
+                    "[fika-wgpu] renderer-idle reason={} status={:?} elapsed_ms={}",
+                    reason,
+                    status,
+                    start.elapsed().as_millis()
+                );
+            }
+            Err(error) => {
+                fika_log!(
+                    "[fika-wgpu] renderer-idle-failed reason={} error={:?}",
+                    reason,
+                    error
+                );
+            }
+        }
     }
 
     fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -12304,7 +12798,7 @@ impl WgpuState {
     fn render(
         &mut self,
         window: &dyn Window,
-        event_loop: &dyn ActiveEventLoop,
+        _event_loop: &dyn ActiveEventLoop,
         scene: &mut ShellScene,
         reason: &'static str,
         force_log: bool,
@@ -12506,7 +13000,6 @@ impl WgpuState {
                     }
                     wgpu::CurrentSurfaceTexture::Validation => {
                         fika_log!("[fika-wgpu] surface validation error");
-                        event_loop.exit();
                         return ShellRenderOutcome::NotReady;
                     }
                 }
@@ -12523,7 +13016,6 @@ impl WgpuState {
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 fika_log!("[fika-wgpu] surface validation error");
-                event_loop.exit();
                 return ShellRenderOutcome::NotReady;
             }
         };
@@ -12900,6 +13392,7 @@ fn frame_latency_counters_for_scene(scene: &ShellScene) -> ShellFrameLatencyCoun
 
 impl Drop for WgpuState {
     fn drop(&mut self) {
+        self.wait_idle("renderer-drop");
         let _ = self.instance.poll_all(false);
     }
 }
