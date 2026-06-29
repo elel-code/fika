@@ -236,9 +236,9 @@ impl FikaWgpuApp {
                     .scene
                     .open_task_detail_dialog_at_screen_point(point, size)
                     .unwrap_or(false);
-                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-                    changed || location_blur_changed,
-                ));
+                self.apply_window_action_outcome(
+                    ShellActionOutcome::redraw_if(changed).with_redraw_if(location_blur_changed),
+                );
             }
             MainLeftPointerButtonIntent::ToggleSplitView => {
                 self.toggle_split_view_from_toolbar(event_loop);
@@ -249,9 +249,9 @@ impl FikaWgpuApp {
                     .toggle_places_at_screen_point(point, size)
                     .unwrap_or(false);
                 self.update_window_cursor_for_scene(size);
-                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-                    changed || location_blur_changed,
-                ));
+                self.apply_window_action_outcome(
+                    ShellActionOutcome::redraw_if(changed).with_redraw_if(location_blur_changed),
+                );
             }
             MainLeftPointerButtonIntent::BeginScrollbarDrag => {
                 let changed = self
@@ -259,9 +259,9 @@ impl FikaWgpuApp {
                     .begin_scrollbar_drag(point, size)
                     .unwrap_or(false);
                 self.update_window_cursor_for_scene(size);
-                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-                    changed || location_blur_changed,
-                ));
+                self.apply_window_action_outcome(
+                    ShellActionOutcome::redraw_if(changed).with_redraw_if(location_blur_changed),
+                );
             }
             MainLeftPointerButtonIntent::PathBar => {
                 let changed = self.scene.activate_path_bar_at_screen_point(point, size);
@@ -279,9 +279,9 @@ impl FikaWgpuApp {
             }
             MainLeftPointerButtonIntent::BeginPlacePointer => {
                 let changed = self.scene.begin_place_pointer(point, size).unwrap_or(false);
-                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-                    changed || location_blur_changed,
-                ));
+                self.apply_window_action_outcome(
+                    ShellActionOutcome::redraw_if(changed).with_redraw_if(location_blur_changed),
+                );
             }
             MainLeftPointerButtonIntent::EndPlacePointer => {
                 self.end_place_pointer(event_loop, point, size, location_blur_changed);
@@ -322,9 +322,9 @@ impl FikaWgpuApp {
             ElementState::Released => self.scene.end_pane_pointer(point, size),
         };
         self.update_window_cursor_for_scene(size);
-        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-            changed || location_blur_changed,
-        ));
+        self.apply_window_action_outcome(
+            ShellActionOutcome::redraw_if(changed).with_redraw_if(location_blur_changed),
+        );
     }
 
     fn activate_or_close_context_menu(
@@ -376,9 +376,9 @@ impl FikaWgpuApp {
             }
             return;
         }
-        self.apply_window_action_outcome(ShellActionOutcome::redraw_if(
-            changed || location_blur_changed,
-        ));
+        self.apply_window_action_outcome(
+            ShellActionOutcome::redraw_if(changed).with_redraw_if(location_blur_changed),
+        );
     }
 
     fn perform_item_activation(

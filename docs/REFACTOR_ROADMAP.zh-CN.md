@@ -89,6 +89,10 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口
   `request_redraw`、`queue_scene_change` 或 `present_scene_change`，后续动画、
   render damage 和性能策略可以挂到统一表现调度入口。
+- Action Outcome 组合器：
+  `ShellActionOutcome` 增加 `merge` / `with_redraw_if`，用明确优先级合并 `Redraw`、
+  `Queue` 和 `Present`；pointer effect 已开始使用组合式 redraw，后续 async
+  completion、动画 timeline 和局部 dirty 可以继续返回 outcome 而不是立即触发表现。
 
 ## 下一步队列
 
@@ -105,8 +109,8 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   async operation dispatcher。
 - 将 pointer move / drag route 继续收敛到 snapshot + planner，和 pointer button
   使用同一种 route/effect 边界。
-- 将 action outcome 从“立即应用”继续推进为可组合 request/result，便于 async
-  completion、动画 timeline 和 render damage 共享同一套调度语义。
+- 将更多 effect 从“立即 apply outcome”推进为“返回 outcome/request，由上层合并后
+  apply”，便于 async completion、动画 timeline 和 render damage 共享同一套调度语义。
 
 完成标准：
 - `ApplicationHandler::window_event` 中的业务分支减少。
