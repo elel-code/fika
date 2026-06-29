@@ -195,7 +195,7 @@ use shell::dolphin::style::{
 use shell::dolphin::text::{
     compact_entry_text_width, dolphin_elide_filename_to_width,
     dolphin_elide_wrapped_filename_to_rect, estimated_label_raster_width,
-    estimated_text_cursor_for_offset, icons_entry_text_line_count, required_compact_item_width,
+    icons_entry_text_line_count, required_compact_item_width,
 };
 #[cfg(test)]
 use shell::dolphin::text::{
@@ -366,6 +366,10 @@ use shell::tasks::geometry::{
 };
 use shell::tasks::{ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, TaskDetailDialogClick};
 use shell::theme::ShellTheme;
+use shell::toolbar::{
+    ShellToolbarLayout, ShellToolbarViewModeControl, ShellToolbarViewModeSegment,
+    app_toolbar_layout as build_app_toolbar_layout,
+};
 use shell::transfer::{
     ShellAsyncTaskResult, ShellAsyncTransferCompletion, ShellAsyncTransferSource,
     ShellAsyncTrashViewCompletion, ShellPasteResult, ShellTransferExecution,
@@ -511,26 +515,6 @@ enum ScrollbarDragTarget {
 struct ScrollbarDrag {
     target: ScrollbarDragTarget,
     grab_offset: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ShellToolbarViewModeSegment {
-    mode: ShellViewMode,
-    rect: ViewRect,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ShellToolbarViewModeControl {
-    outer: ViewRect,
-    segments: [ShellToolbarViewModeSegment; 3],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ShellToolbarLayout {
-    toolbar: ViewRect,
-    places_toggle: ViewRect,
-    split_view: ViewRect,
-    view_mode: Option<ShellToolbarViewModeControl>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2685,6 +2669,7 @@ struct ShellScene {
     task_statuses: ShellTaskStatusStore,
     rubber_band: Option<RubberBand>,
     animations: ShellAnimationRuntime,
+    text_hit_tests: RefCell<TextHitTestRuntime>,
     scale_factor: f32,
     hit_tests: u64,
     selection_changes: u64,
@@ -2800,6 +2785,7 @@ impl ShellScene {
             task_statuses: ShellTaskStatusStore::new(),
             rubber_band: None,
             animations: ShellAnimationRuntime::default(),
+            text_hit_tests: RefCell::new(TextHitTestRuntime::new()),
             scale_factor: 1.0,
             hit_tests: 0,
             selection_changes: 0,
@@ -3475,10 +3461,13 @@ impl ShellScene {
         }
         let text_rect = self.location_text_rect_for_path_bar_rect(rect);
         let label = self.location_label_for_pane(pane);
-        Some(estimated_text_cursor_for_offset(
+        Some(self.text_hit_tests.borrow_mut().cursor_for_offset(
             &label,
+            text_rect,
             point.x - text_rect.x,
-            self.scale_metric(TEXT_FONT_SIZE),
+            LabelAlignment::Start,
+            LabelWrap::None,
+            self.ui_scale(),
         ))
     }
 
@@ -4260,74 +4249,7 @@ impl ShellScene {
     }
 
     fn app_toolbar_layout(&self, size: PhysicalSize<u32>) -> ShellToolbarLayout {
-        let toolbar = self.app_toolbar_rect(size);
-        let margin = self.scale_metric(8.0);
-        let button_size = self
-            .scale_metric(28.0)
-            .min((toolbar.height - margin).max(1.0));
-        let places_toggle = ViewRect {
-            x: margin,
-            y: toolbar.y + margin,
-            width: button_size,
-            height: button_size,
-        };
-        let split_view = ViewRect {
-            x: (toolbar.right() - margin - button_size).max(toolbar.x),
-            y: toolbar.y + margin,
-            width: button_size,
-            height: button_size,
-        };
-        let view_mode = self.toolbar_view_mode_control(toolbar, places_toggle, split_view);
-        ShellToolbarLayout {
-            toolbar,
-            places_toggle,
-            split_view,
-            view_mode,
-        }
-    }
-
-    fn toolbar_view_mode_control(
-        &self,
-        toolbar: ViewRect,
-        places_toggle: ViewRect,
-        split_view: ViewRect,
-    ) -> Option<ShellToolbarViewModeControl> {
-        let width = self.scale_metric(96.0);
-        let gap_to_split = self.scale_metric(10.0);
-        if split_view.x - gap_to_split - width <= places_toggle.right() + self.scale_metric(16.0) {
-            return None;
-        }
-        let outer = ViewRect {
-            x: split_view.x - gap_to_split - width,
-            y: toolbar.y + self.scale_metric(7.0),
-            width,
-            height: (toolbar.height - self.scale_metric(14.0)).max(1.0),
-        };
-        let inner = inset_rect(outer, self.scale_metric(2.0)).unwrap_or(outer);
-        let gap = self.scale_metric(2.0).min((inner.width / 8.0).max(0.0));
-        let segment_width = ((inner.width - gap * 2.0) / 3.0).max(1.0);
-        let modes = [
-            ShellViewMode::Icons,
-            ShellViewMode::Compact,
-            ShellViewMode::Details,
-        ];
-        let segments = modes.map(|mode| {
-            let index = match mode {
-                ShellViewMode::Icons => 0,
-                ShellViewMode::Compact => 1,
-                ShellViewMode::Details => 2,
-            } as f32;
-            ShellToolbarViewModeSegment {
-                mode,
-                rect: ViewRect {
-                    x: inner.x + index * (segment_width + gap),
-                    y: inner.y,
-                    width: segment_width,
-                    height: inner.height,
-                },
-            }
-        });
-        Some(ShellToolbarViewModeControl { outer, segments })
+        build_app_toolbar_layout(self.app_toolbar_rect(size), self.ui_scale())
     }
 
     fn places_toggle_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
@@ -4350,10 +4272,7 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) -> Option<ShellToolbarViewModeSegment> {
         self.app_toolbar_layout(size)
-            .view_mode?
-            .segments
-            .into_iter()
-            .find(|segment| segment.rect.contains(point))
+            .view_mode_segment_at_point(point)
     }
 
     fn split_view_button_at_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
@@ -9239,11 +9158,8 @@ impl ShellScene {
         theme: ShellTheme,
     ) {
         let radius = self.scale_metric(7.0);
-        let border_color = if active {
-            theme.accent()
-        } else {
-            theme.divider()
-        };
+        let editing = active && cursor.is_some();
+        let border_color = theme.divider();
         push_clipped_rounded_rect(vertices, rect, clip, radius, border_color, size);
         if let Some(inner) = inset_rect(rect, self.scale_metric(1.0)) {
             push_clipped_rounded_rect(
@@ -9269,7 +9185,7 @@ impl ShellScene {
             vertices,
             icon_rect,
             clip,
-            active,
+            false,
             theme,
             self.ui_scale(),
             size,
@@ -9304,7 +9220,7 @@ impl ShellScene {
             theme.primary_text(),
             LabelAlignment::Start,
         );
-        if active && cursor.is_some() && self.text_caret_visible() {
+        if editing && self.text_caret_visible() {
             let caret_width = self.scale_metric(1.25);
             let caret_height = self
                 .scale_metric(17.0)
@@ -9323,7 +9239,7 @@ impl ShellScene {
                 },
                 clip,
                 caret_width / 2.0,
-                [0.122, 0.310, 0.749, 1.0],
+                text_color_to_vertex_color(theme.primary_text()),
                 size,
             );
         }
@@ -10526,17 +10442,6 @@ impl ShellScene {
             vertices,
             ViewRect {
                 x: toolbar.x,
-                y: toolbar.y,
-                width: toolbar.width,
-                height: self.scale_metric(2.0).max(1.0),
-            },
-            theme.accent(),
-            size,
-        );
-        push_rect(
-            vertices,
-            ViewRect {
-                x: toolbar.x,
                 y: toolbar.bottom() - self.scale_metric(1.0).max(1.0),
                 width: toolbar.width,
                 height: self.scale_metric(1.0).max(1.0),
@@ -10602,44 +10507,9 @@ impl ShellScene {
             size,
         );
 
-        let center_line_start = button.right() + self.scale_metric(12.0);
-        let center_line_end = view_mode
-            .map(|control| control.outer.x)
-            .unwrap_or(split_button.x)
-            - self.scale_metric(12.0);
-        if center_line_end > center_line_start {
-            push_clipped_rounded_rect(
-                vertices,
-                ViewRect {
-                    x: center_line_start,
-                    y: toolbar.y + toolbar.height / 2.0 - self.scale_metric(1.0).max(1.0) / 2.0,
-                    width: center_line_end - center_line_start,
-                    height: self.scale_metric(1.0).max(1.0),
-                },
-                toolbar,
-                self.scale_metric(0.5).max(0.5),
-                theme.field_separator(),
-                size,
-            );
-        }
         if let Some(control) = view_mode {
             self.push_toolbar_view_mode_control(vertices, control, toolbar, theme, size);
         }
-
-        let active_dot_size = self.scale_metric(6.0).max(4.0);
-        push_clipped_rounded_rect(
-            vertices,
-            ViewRect {
-                x: center_line_start,
-                y: toolbar.y + toolbar.height / 2.0 - active_dot_size / 2.0,
-                width: active_dot_size,
-                height: active_dot_size,
-            },
-            toolbar,
-            active_dot_size / 2.0,
-            theme.accent(),
-            size,
-        );
 
         let split_open = self.panes.is_open(ShellPaneId::SLOT_1);
         let split_hovered = self
@@ -17123,6 +16993,114 @@ impl LabelMetricsCache {
     }
 }
 
+struct TextHitTestRuntime {
+    font_system: FontSystem,
+    text_buffer: Buffer,
+}
+
+impl TextHitTestRuntime {
+    fn new() -> Self {
+        let mut font_system = FontSystem::new();
+        let text_buffer = Buffer::new(
+            &mut font_system,
+            Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT),
+        );
+        Self {
+            font_system,
+            text_buffer,
+        }
+    }
+
+    fn cursor_for_offset(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        offset_x: f32,
+        alignment: LabelAlignment,
+        wrap: LabelWrap,
+        scale_factor: f32,
+    ) -> usize {
+        if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 || offset_x <= 0.0 {
+            return 0;
+        }
+        let label_width = rect.width.ceil().max(1.0) as u32;
+        let label_height = rect.height.ceil().max(1.0) as u32;
+        let max_line_height = (TEXT_LINE_HEIGHT * scale_factor).round().max(1.0);
+        let max_font_size = (TEXT_FONT_SIZE * max_line_height / TEXT_LINE_HEIGHT).max(1.0);
+        let metrics = text_metrics_for_label_height(label_height, max_font_size, max_line_height);
+        let attrs = Attrs::new().family(Family::SansSerif);
+
+        self.text_buffer.set_metrics(metrics);
+        self.text_buffer.set_wrap(wrap.cosmic_wrap());
+        self.text_buffer
+            .set_size(Some(label_width as f32), Some(label_height as f32));
+        self.text_buffer.set_text(
+            label,
+            &attrs,
+            shaping_for_label(label, wrap),
+            Some(alignment.cosmic_align()),
+        );
+        self.text_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+
+        let scale_x = label_width as f32 / rect.width.max(1.0);
+        let x = (offset_x * scale_x).clamp(0.0, label_width as f32);
+        let y = label_height as f32 / 2.0;
+        self.text_buffer
+            .hit(x, y)
+            .map(|cursor| normalized_text_cursor(label, cursor.index))
+            .unwrap_or_else(|| {
+                if offset_x >= rect.width {
+                    label.len()
+                } else {
+                    0
+                }
+            })
+    }
+
+    #[cfg(test)]
+    fn cursor_x(
+        &mut self,
+        label: &str,
+        rect: ViewRect,
+        cursor: usize,
+        alignment: LabelAlignment,
+        wrap: LabelWrap,
+        max_font_size: f32,
+        max_line_height: f32,
+    ) -> f32 {
+        if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+            return 0.0;
+        }
+        let label_width = rect.width.ceil().max(1.0) as u32;
+        let label_height = rect.height.ceil().max(1.0) as u32;
+        let attrs = Attrs::new().family(Family::SansSerif);
+        let metrics = text_metrics_for_label_height(label_height, max_font_size, max_line_height);
+
+        self.text_buffer.set_metrics(metrics);
+        self.text_buffer.set_wrap(wrap.cosmic_wrap());
+        self.text_buffer
+            .set_size(Some(label_width as f32), Some(label_height as f32));
+        self.text_buffer.set_text(
+            label,
+            &attrs,
+            shaping_for_label(label, wrap),
+            Some(alignment.cosmic_align()),
+        );
+        self.text_buffer
+            .shape_until_scroll(&mut self.font_system, false);
+
+        let cursor = Cursor::new(0, normalized_text_cursor(label, cursor));
+        let measured_x = self
+            .text_buffer
+            .cursor_position(&cursor)
+            .map(|(x, _)| x)
+            .or_else(|| self.text_buffer.layout_runs().next().map(|run| run.line_w))
+            .unwrap_or(0.0);
+        measured_x / (label_width as f32 / rect.width.max(1.0))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LabelCacheOutcome {
     Hit,
@@ -19545,6 +19523,7 @@ mod tests {
             task_statuses: ShellTaskStatusStore::new(),
             rubber_band: None,
             animations: ShellAnimationRuntime::default(),
+            text_hit_tests: RefCell::new(TextHitTestRuntime::new()),
             scale_factor: 1.0,
             hit_tests: 0,
             selection_changes: 0,
@@ -30939,7 +30918,15 @@ text/plain=writer.desktop;\n",
         let text_rect = scene.location_text_rect_for_path_bar_rect(path_bar);
         let label = scene.location_label_for_pane(ShellPaneId::SLOT_0);
         let tmp_cursor = "/tmp".len();
-        let tmp_x = estimated_text_cursor_x(&label, tmp_cursor, scene.scale_metric(TEXT_FONT_SIZE));
+        let tmp_x = scene.text_hit_tests.borrow_mut().cursor_x(
+            &label,
+            text_rect,
+            tmp_cursor,
+            LabelAlignment::Start,
+            LabelWrap::None,
+            scene.scale_metric(TEXT_FONT_SIZE),
+            scene.text_line_height(),
+        );
 
         assert!(scene.activate_path_bar_at_screen_point(
             ViewPoint {
@@ -30956,8 +30943,15 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.location_draft_value(), Some("/tmpX/alpha"));
 
         let edited = scene.location_draft_value().unwrap().to_string();
-        let tail_x =
-            estimated_text_cursor_x(&edited, edited.len(), scene.scale_metric(TEXT_FONT_SIZE));
+        let tail_x = scene.text_hit_tests.borrow_mut().cursor_x(
+            &edited,
+            text_rect,
+            edited.len(),
+            LabelAlignment::Start,
+            LabelWrap::None,
+            scene.scale_metric(TEXT_FONT_SIZE),
+            scene.text_line_height(),
+        );
         assert!(scene.activate_path_bar_at_screen_point(
             ViewPoint {
                 x: text_rect.x + tail_x + 20.0,
@@ -31047,6 +31041,60 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.location_draft_value(), None);
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, PathBuf::from("/tmp"));
         assert_eq!(scene.location_changes, 3);
+    }
+
+    #[test]
+    fn text_hit_test_runtime_uses_shaped_glyph_boundaries() {
+        let mut runtime = TextHitTestRuntime::new();
+        let rect = ViewRect {
+            x: 0.0,
+            y: 0.0,
+            width: 220.0,
+            height: TEXT_LINE_HEIGHT,
+        };
+        let label = "mmmmii";
+        let first = runtime.cursor_x(
+            label,
+            rect,
+            1,
+            LabelAlignment::Start,
+            LabelWrap::None,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+        );
+        let second = runtime.cursor_x(
+            label,
+            rect,
+            2,
+            LabelAlignment::Start,
+            LabelWrap::None,
+            TEXT_FONT_SIZE,
+            TEXT_LINE_HEIGHT,
+        );
+
+        assert!(second > first);
+        assert_eq!(
+            runtime.cursor_for_offset(
+                label,
+                rect,
+                first + (second - first) * 0.25,
+                LabelAlignment::Start,
+                LabelWrap::None,
+                1.0,
+            ),
+            1
+        );
+        assert_eq!(
+            runtime.cursor_for_offset(
+                label,
+                rect,
+                first + (second - first) * 0.75,
+                LabelAlignment::Start,
+                LabelWrap::None,
+                1.0,
+            ),
+            2
+        );
     }
 
     #[test]
