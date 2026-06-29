@@ -267,6 +267,12 @@ impl ShellVisibleItemSlotStats {
     }
 }
 
+pub(crate) trait ShellVisibleSlotItem {
+    fn visible_slot_path(&self) -> Option<&Path>;
+    fn visible_slot_id(&self) -> u64;
+    fn set_visible_slot_id(&mut self, slot_id: u64);
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ShellVisibleItemSlotPool {
     next_slot_id: u64,
@@ -278,7 +284,6 @@ pub(crate) struct ShellVisibleItemSlotPool {
 impl ShellVisibleItemSlotPool {
     const MAX_FREE_SLOTS: usize = 100;
 
-    #[cfg_attr(not(test), allow(dead_code))]
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn update_visible_items<P>(
         &mut self,
@@ -336,6 +341,85 @@ impl ShellVisibleItemSlotPool {
                 slot.slot_id = self.next_slot_id;
                 allocated += 1;
             }
+        }
+
+        ShellVisibleItemSlotStats {
+            active: self.slot_by_path.len(),
+            free: self.free_slots.len(),
+            reused,
+            recycled,
+            allocated,
+        }
+    }
+
+    pub(crate) fn update_visible_item_slots(
+        &mut self,
+        visible_items: &mut [impl ShellVisibleSlotItem],
+    ) -> ShellVisibleItemSlotStats {
+        self.visible_epoch = self.visible_epoch.wrapping_add(1).max(1);
+        let visible_epoch = self.visible_epoch;
+        let mut reused = 0usize;
+
+        for item in visible_items.iter_mut() {
+            let Some(path) = item.visible_slot_path() else {
+                item.set_visible_slot_id(0);
+                continue;
+            };
+            if let Some(slot) = self.slot_by_path.get_mut(path) {
+                reused += usize::from(slot.visible_epoch != visible_epoch);
+                slot.visible_epoch = visible_epoch;
+                item.set_visible_slot_id(slot.slot_id);
+            } else {
+                self.slot_by_path.insert(
+                    path.to_path_buf(),
+                    ShellVisibleItemSlot {
+                        slot_id: 0,
+                        visible_epoch,
+                    },
+                );
+                item.set_visible_slot_id(0);
+            }
+        }
+
+        let free_slots = &mut self.free_slots;
+        self.slot_by_path.retain(|_, slot| {
+            if slot.visible_epoch == visible_epoch {
+                true
+            } else {
+                if slot.slot_id != 0 {
+                    free_slots.push(slot.slot_id);
+                }
+                false
+            }
+        });
+        if self.free_slots.len() > Self::MAX_FREE_SLOTS {
+            self.free_slots.truncate(Self::MAX_FREE_SLOTS);
+        }
+
+        let mut recycled = 0usize;
+        let mut allocated = 0usize;
+        for slot in self.slot_by_path.values_mut() {
+            if slot.slot_id != 0 {
+                continue;
+            }
+            if let Some(slot_id) = self.free_slots.pop() {
+                slot.slot_id = slot_id;
+                recycled += 1;
+            } else {
+                self.next_slot_id += 1;
+                slot.slot_id = self.next_slot_id;
+                allocated += 1;
+            }
+        }
+
+        for item in visible_items.iter_mut() {
+            if item.visible_slot_id() != 0 {
+                continue;
+            }
+            let Some(path) = item.visible_slot_path() else {
+                continue;
+            };
+            item.set_visible_slot_id(self.slot_for_path(path).unwrap_or_default());
         }
 
         ShellVisibleItemSlotStats {

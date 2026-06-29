@@ -197,9 +197,9 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   supplied projections，不再在 paint 准备阶段再次计算布局。
 - Visible slot assignment 融合：
   `ShellVisibleItemSlotPool::update_visible_items` 支持 borrowed path 输入，prepared
-  projection layout 更新 visible slot pool 后把 slot id 写回 visible item；最终
-  `ShellPaneProjection` 优先使用已分配 slot id，减少 frame projection 构建中的路径克隆
-  和重复 slot lookup。
+  projection layout 通过 `ShellVisibleSlotItem` 更新 visible slot pool 后把 slot id 写回
+  visible item；最终 `ShellPaneProjection` 优先使用已分配 slot id，减少 frame projection
+  构建中的路径克隆和全量重复 slot lookup。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

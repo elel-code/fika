@@ -272,7 +272,7 @@ use shell::options::{ShellViewMode, parse_start_options};
 use shell::pane::{
     ShellPaneGeometry, ShellPaneId, ShellPaneProjection, ShellPaneScrollMetrics,
     ShellPaneSplitMetrics, ShellPaneState, ShellPaneStates, ShellPaneView, ShellPaneVisibleItem,
-    ShellPaneVisibleSlotPools, ShellVisibleItemSlotStats,
+    ShellPaneVisibleSlotPools, ShellVisibleItemSlotStats, ShellVisibleSlotItem,
 };
 use shell::pane_layout::{
     CompactLayoutCache, CompactLayoutCacheKey, CompactLayoutCacheValue, DetailsLayout,
@@ -2533,6 +2533,20 @@ struct ShellPreparedPaneVisibleItem {
     layout: ItemLayout,
     path: Option<PathBuf>,
     slot_id: u64,
+}
+
+impl ShellVisibleSlotItem for ShellPreparedPaneVisibleItem {
+    fn visible_slot_path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    fn visible_slot_id(&self) -> u64 {
+        self.slot_id
+    }
+
+    fn set_visible_slot_id(&mut self, slot_id: u64) {
+        self.slot_id = slot_id;
+    }
 }
 
 struct ShellPreparedPaneProjection {
@@ -8588,19 +8602,7 @@ impl ShellScene {
             let kind = prepared.geometry.kind;
             prepared_panes[kind.index()] = true;
             let pool = self.visible_slots.get_mut(kind);
-            let pane_stats = pool.update_visible_items(
-                prepared
-                    .visible_items
-                    .iter()
-                    .filter_map(|item| item.path.as_deref()),
-            );
-            for item in &mut prepared.visible_items {
-                item.slot_id = item
-                    .path
-                    .as_deref()
-                    .and_then(|path| pool.slot_for_path(path))
-                    .unwrap_or_default();
-            }
+            let pane_stats = pool.update_visible_item_slots(&mut prepared.visible_items);
             stats = stats.merged(pane_stats);
         }
         for kind in ShellPaneId::ALL {

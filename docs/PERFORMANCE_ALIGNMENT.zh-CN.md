@@ -181,8 +181,8 @@ Dolphin reference:
 - Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/kitemlistview.cpp
 - Symbol: KItemListView::updateVisibleItems / m_visibleItems
 - Dolphin boundary: visible item/widget 集合在可见项更新阶段分配和复用 widget identity，paint 阶段直接使用已经维护好的 visible item，不再为每个 item 重新查找 identity。
-- Fika mapping: src/main.rs::ShellScene::update_visible_slot_pools_for_projection_layouts；src/shell/pane.rs::ShellVisibleItemSlotPool::update_visible_items；src/main.rs::ShellScene::pane_projection_from_prepared。
-- Divergence: Dolphin 以 widget 对象长期承载 identity；Fika 仍使用 path keyed visible slot pool。现在 slot pool 直接消费 prepared projection layout 中的 borrowed path，并把 slot id 写回 prepared visible item，最终 projection 构建时优先使用已分配 slot id，避免 retained visible item 的 `PathBuf` 克隆和二次 slot hash lookup。
+- Fika mapping: src/main.rs::ShellScene::update_visible_slot_pools_for_projection_layouts；src/shell/pane.rs::ShellVisibleItemSlotPool::update_visible_item_slots / ShellVisibleSlotItem；src/main.rs::ShellScene::pane_projection_from_prepared。
+- Divergence: Dolphin 以 widget 对象长期承载 identity；Fika 仍使用 path keyed visible slot pool。现在 slot pool 直接消费 prepared projection layout 中的 borrowed path，并通过 `ShellVisibleSlotItem` 把 slot id 写回 prepared visible item；已有可见项在同一次 hash lookup 中拿到 slot id，新出现的 item 只在分配 slot 后补一次 lookup，最终 projection 构建时优先使用已分配 slot id，避免 retained visible item 的 `PathBuf` 克隆和全量二次 slot hash lookup。
 - Verification: cargo fmt；cargo check；cargo test prepared_pane_projections_match_direct_projection；cargo test；git diff --check。
 ```
 
