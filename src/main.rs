@@ -276,6 +276,7 @@ use shell::pane::{
 };
 use shell::pane_layout::{
     CompactLayoutCache, CompactLayoutCacheKey, CompactLayoutCacheValue, DetailsLayout,
+    IconsLayoutHeightCache, IconsLayoutHeightCacheKey, IconsLayoutHeightCacheValue,
     ShellCompactLayout, ShellLayout, navigation_target,
 };
 use shell::perf::{
@@ -2538,6 +2539,7 @@ struct ShellPlacePress {
 struct ShellScene {
     panes: ShellPaneStates,
     compact_layout_cache: CompactLayoutCache,
+    icons_layout_height_cache: IconsLayoutHeightCache,
     active_pane: ShellPaneId,
     places: Vec<ShellPlace>,
     location_draft: Option<ShellLocationDraft>,
@@ -2652,6 +2654,7 @@ impl ShellScene {
         Ok(Self {
             panes: ShellPaneStates::new(slot0_pane),
             compact_layout_cache: CompactLayoutCache::new(),
+            icons_layout_height_cache: IconsLayoutHeightCache::new(),
             active_pane: ShellPaneId::SLOT_0,
             places,
             location_draft: None,
@@ -2726,12 +2729,14 @@ impl ShellScene {
         })
     }
 
-    fn invalidate_compact_layout_cache(&self, pane: ShellPaneId) {
+    fn invalidate_layout_caches(&self, pane: ShellPaneId) {
         self.compact_layout_cache.invalidate_pane(pane.index());
+        self.icons_layout_height_cache.invalidate_pane(pane.index());
     }
 
-    fn invalidate_all_compact_layout_caches(&self) {
+    fn invalidate_all_layout_caches(&self) {
         self.compact_layout_cache.clear();
+        self.icons_layout_height_cache.clear();
     }
 
     #[cfg(test)]
@@ -2837,7 +2842,7 @@ impl ShellScene {
         if selection_changed || pruned_selection {
             self.selection_changes += 1;
         }
-        self.invalidate_compact_layout_cache(pane);
+        self.invalidate_layout_caches(pane);
         self.directory_reloads += 1;
         self.clear_transient_after_pane_content_change(pane, false);
         self.clamp_scroll(size);
@@ -3031,7 +3036,7 @@ impl ShellScene {
                 &filter_pattern,
             ),
         );
-        self.invalidate_compact_layout_cache(pane);
+        self.invalidate_layout_caches(pane);
         self.visible_slots.clear(pane);
         if let Some(state) = self.pane_state_mut(pane) {
             state.scroll_x = 0.0;
@@ -3171,7 +3176,7 @@ impl ShellScene {
         }
 
         self.zoom_step = next_step;
-        self.invalidate_all_compact_layout_caches();
+        self.invalidate_all_layout_caches();
         self.folder_preview_roles
             .borrow_mut()
             .clear_request_lifecycle();
@@ -3660,7 +3665,7 @@ impl ShellScene {
         split_pane.scroll_x = 0.0;
         split_pane.scroll_y = 0.0;
         self.panes.set(ShellPaneId::SLOT_1, split_pane);
-        self.invalidate_compact_layout_cache(ShellPaneId::SLOT_1);
+        self.invalidate_layout_caches(ShellPaneId::SLOT_1);
         self.visible_slots.clear(ShellPaneId::SLOT_1);
         self.active_pane = ShellPaneId::SLOT_1;
         self.split_pane_left_fraction = 0.5;
@@ -3739,6 +3744,7 @@ impl ShellScene {
         self.active_pane = ShellPaneId::SLOT_0;
         self.visible_slots.clear(ShellPaneId::SLOT_0);
         self.visible_slots.clear(ShellPaneId::SLOT_1);
+        self.invalidate_all_layout_caches();
         self.split_pane_left_fraction = 0.5;
         self.split_pane_changes += 1;
         self.context_target = None;
@@ -3808,7 +3814,7 @@ impl ShellScene {
             if let Some(state) = self.pane_state_mut(pane) {
                 selection_changed |=
                     state.rebuild_filtered_indexes_with_pattern(show_hidden, &filter_pattern);
-                self.invalidate_compact_layout_cache(pane);
+                self.invalidate_layout_caches(pane);
             }
         }
         selection_changed
@@ -3828,7 +3834,7 @@ impl ShellScene {
 
         let old_ui_scale = self.ui_scale();
         self.scale_factor = next;
-        self.invalidate_all_compact_layout_caches();
+        self.invalidate_all_layout_caches();
         self.folder_preview_roles
             .borrow_mut()
             .clear_request_lifecycle();
@@ -8569,7 +8575,7 @@ impl ShellScene {
                 let mut options = self.icons_options_for_viewport(content_width, viewport_height);
                 options.scroll_x = pane.scroll_x;
                 options.scroll_y = pane.scroll_y;
-                ShellLayout::Icons(self.pane_icons_layout(pane, options))
+                ShellLayout::Icons(self.pane_icons_layout(pane_id, pane, options))
             }
             ShellViewMode::Compact => {
                 let mut options = self.compact_options_for_viewport(content_width, viewport_height);
@@ -8605,6 +8611,7 @@ impl ShellScene {
             item_count,
             rows_per_column,
             item_width: options.item_width.to_bits(),
+            item_height: options.item_height.to_bits(),
             padding: options.padding.to_bits(),
             icon_size: options.icon_size.to_bits(),
             text_gap: options.text_gap.to_bits(),
@@ -8650,12 +8657,27 @@ impl ShellScene {
 
     fn pane_icons_layout(
         &self,
+        pane_id: ShellPaneId,
         pane: ShellPaneView<'_>,
         options: IconsLayoutOptions,
     ) -> IconsLayout {
         let item_count = pane.filtered_entry_count();
         if item_count == 0 {
             return IconsLayout::new(0, options);
+        }
+
+        let cache_key = IconsLayoutHeightCacheKey {
+            pane: pane_id.index(),
+            item_count,
+            item_width: options.item_width.to_bits(),
+            item_height: options.item_height.to_bits(),
+            padding: options.padding.to_bits(),
+            icon_size: options.icon_size.to_bits(),
+            text_height: options.text_height.to_bits(),
+            text_scale: self.ui_scale().to_bits(),
+        };
+        if let Some(cached) = self.icons_layout_height_cache.get(&cache_key) {
+            return IconsLayout::new_with_item_heights(item_count, options, cached.item_heights);
         }
 
         let available_text_width = (options.item_width - options.padding * 2.0).max(1.0);
@@ -8680,6 +8702,13 @@ impl ShellScene {
                     .unwrap_or(options.item_height)
             })
             .collect::<Vec<_>>();
+        let item_heights = Arc::<[f32]>::from(item_heights);
+        self.icons_layout_height_cache.insert(
+            cache_key,
+            IconsLayoutHeightCacheValue {
+                item_heights: Arc::clone(&item_heights),
+            },
+        );
         IconsLayout::new_with_item_heights(item_count, options, item_heights)
     }
 
@@ -19055,6 +19084,7 @@ mod tests {
                 "",
             )),
             compact_layout_cache: CompactLayoutCache::new(),
+            icons_layout_height_cache: IconsLayoutHeightCache::new(),
             active_pane: ShellPaneId::SLOT_0,
             places: vec![
                 ShellPlace::new("", "H", "Home", PathBuf::from("/tmp"), false),
@@ -31377,6 +31407,38 @@ text/plain=writer.desktop;\n",
         );
         assert!(item.item_rect.height > options.item_height);
         assert!(item.text_rect.bottom() <= item.item_rect.bottom() + f32::EPSILON);
+    }
+
+    #[test]
+    fn icons_layout_height_cache_reuses_name_measurements_while_scrolling() {
+        let mut scene = test_scene(
+            (0..80)
+                .map(|index| {
+                    test_entry(
+                        &format!("very-long-file-name-that-needs-icons-wrapping-{index:02}.txt"),
+                        false,
+                    )
+                })
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(420, 260);
+
+        assert_eq!(scene.icons_layout_height_cache.len(), 0);
+        let first_visible_before = match scene.layout(size) {
+            ShellLayout::Icons(layout) => layout.visible_items().next().unwrap().model_index,
+            _ => unreachable!(),
+        };
+        assert_eq!(scene.icons_layout_height_cache.len(), 1);
+
+        scene.panes[ShellPaneId::SLOT_0].scroll_y = 180.0;
+        let first_visible_after = match scene.layout(size) {
+            ShellLayout::Icons(layout) => layout.visible_items().next().unwrap().model_index,
+            _ => unreachable!(),
+        };
+
+        assert_eq!(scene.icons_layout_height_cache.len(), 1);
+        assert!(first_visible_after > first_visible_before);
     }
 
     #[test]

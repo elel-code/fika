@@ -12,6 +12,7 @@ pub(crate) struct CompactLayoutCacheKey {
     pub(crate) item_count: usize,
     pub(crate) rows_per_column: usize,
     pub(crate) item_width: u32,
+    pub(crate) item_height: u32,
     pub(crate) padding: u32,
     pub(crate) icon_size: u32,
     pub(crate) text_gap: u32,
@@ -50,6 +51,64 @@ impl CompactLayoutCache {
 
     pub(crate) fn clear(&self) {
         self.entries.borrow_mut().clear();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct IconsLayoutHeightCacheKey {
+    pub(crate) pane: usize,
+    pub(crate) item_count: usize,
+    pub(crate) item_width: u32,
+    pub(crate) item_height: u32,
+    pub(crate) padding: u32,
+    pub(crate) icon_size: u32,
+    pub(crate) text_height: u32,
+    pub(crate) text_scale: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct IconsLayoutHeightCacheValue {
+    pub(crate) item_heights: Arc<[f32]>,
+}
+
+#[derive(Default)]
+pub(crate) struct IconsLayoutHeightCache {
+    entries: RefCell<HashMap<IconsLayoutHeightCacheKey, IconsLayoutHeightCacheValue>>,
+}
+
+impl IconsLayoutHeightCache {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn get(
+        &self,
+        key: &IconsLayoutHeightCacheKey,
+    ) -> Option<IconsLayoutHeightCacheValue> {
+        self.entries.borrow().get(key).cloned()
+    }
+
+    pub(crate) fn insert(
+        &self,
+        key: IconsLayoutHeightCacheKey,
+        value: IconsLayoutHeightCacheValue,
+    ) {
+        self.entries.borrow_mut().insert(key, value);
+    }
+
+    pub(crate) fn invalidate_pane(&self, pane_index: usize) {
+        self.entries
+            .borrow_mut()
+            .retain(|key, _| key.pane != pane_index);
+    }
+
+    pub(crate) fn clear(&self) {
+        self.entries.borrow_mut().clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.borrow().len()
     }
 }
 

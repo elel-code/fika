@@ -88,6 +88,20 @@ Dolphin reference:
 - Render pipeline：将主窗口和 detached dialog 的 surface acquire、text/icon begin-frame、
   upload、present 合并到共享 frame surface 层，为 damage 和多窗口性能日志提供统一入口。
 
+## 近期对齐记录
+
+### Icons layout height cache
+
+```text
+Dolphin reference:
+- Source: /home/yk/Code/fika/reference/dolphin/src/kitemviews/private/kitemlistsizehintresolver.cpp
+- Symbol: KItemListSizeHintResolver::sizeHint / itemsChanged / clearCache / updateCache
+- Dolphin boundary: item size hint 独立缓存，只有 item 插入、删除、移动、role 改变或显式 clear 时才重新解析。
+- Fika mapping: src/shell/pane_layout.rs IconsLayoutHeightCache；src/main.rs ShellScene::pane_icons_layout / invalidate_layout_caches。
+- Divergence: Dolphin 以 model range 精确失效；Fika 当前目录模型仍以 pane 级 reload/filter 为主，因此先按 pane + layout metric key 缓存 icons 文本高度，后续 model diff 落地后再缩小到 range 级失效。
+- Verification: cargo test icons_layout_height_cache_reuses_name_measurements_while_scrolling；cargo check。
+```
+
 ## Review 检查项
 
 - 变更是否包含本地 Dolphin 文件路径和 symbol？

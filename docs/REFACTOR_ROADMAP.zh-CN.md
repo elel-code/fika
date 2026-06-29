@@ -153,6 +153,11 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   的兼容慢路径，避免后续执行入口绕回阻塞 UI 的实现。Empty 操作结果只需要数量和刷新
   Trash，不再逐个读取 `.trashinfo` 还原 original path，减少大垃圾桶场景下 swap 前的小文件
   I/O。
+- Icons layout size-hint cache：
+  参考 Dolphin `KItemListSizeHintResolver` 的高度 hint 缓存和 `itemsChanged` 失效边界，
+  Fika 在 `src/shell/pane_layout.rs` 增加 icons item height cache，滚动和重复 frame 不再
+  为同一 pane / item count / text width 反复估算所有文件名换行高度；路径加载、reload、
+  filter、zoom、scale 和 split pane 替换统一走 layout cache 失效入口。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口
