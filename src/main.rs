@@ -115,9 +115,9 @@ use shell::create_rename::geometry::{
 };
 use shell::create_rename::geometry::{
     create_dialog_cancel_button_rect_scaled, create_dialog_commit_button_rect_scaled,
-    create_dialog_rect_scaled, create_kind_button_rect_scaled,
+    create_dialog_rect_scaled, create_dialog_window_size_scaled, create_kind_button_rect_scaled,
     rename_dialog_cancel_button_rect_scaled, rename_dialog_commit_button_rect_scaled,
-    rename_dialog_rect_scaled,
+    rename_dialog_rect_scaled, rename_dialog_window_size_scaled,
 };
 use shell::create_rename::{
     CreateDialogClick, CreateEntryKind, CreateEntryRequest, RenameDialogClick, RenameEntryRequest,
@@ -553,17 +553,29 @@ impl FikaWgpuApp {
     }
 
     fn request_open_with_dialog_redraw(&self) -> bool {
-        self.dialog_windows
-            .get(ShellDialogWindowKind::OpenWith)
-            .is_some_and(|dialog| {
-                dialog.request_redraw();
-                true
-            })
+        self.request_dialog_redraw(ShellDialogWindowKind::OpenWith)
+    }
+
+    fn request_dialog_redraw(&self, kind: ShellDialogWindowKind) -> bool {
+        self.dialog_windows.get(kind).is_some_and(|dialog| {
+            dialog.request_redraw();
+            true
+        })
     }
 
     fn open_with_chooser_is_main_overlay(&self) -> bool {
         self.scene.is_open_with_chooser_open()
             && !self.dialog_windows.is_open(ShellDialogWindowKind::OpenWith)
+    }
+
+    fn create_dialog_is_main_overlay(&self) -> bool {
+        self.scene.is_create_dialog_open()
+            && !self.dialog_windows.is_open(ShellDialogWindowKind::Create)
+    }
+
+    fn rename_dialog_is_main_overlay(&self) -> bool {
+        self.scene.is_rename_dialog_open()
+            && !self.dialog_windows.is_open(ShellDialogWindowKind::Rename)
     }
 
     fn open_with_dialog_title(&self) -> String {
@@ -589,6 +601,162 @@ impl FikaWgpuApp {
         }
     }
 
+    fn ensure_dialog_window(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        kind: ShellDialogWindowKind,
+        spec: &ShellDialogWindowSpec,
+    ) -> bool {
+        if let Some(dialog) = self.dialog_windows.get_mut(kind) {
+            dialog.sync(spec);
+            return true;
+        }
+        let dialog = match ShellDetachedDialogWindow::create(event_loop, kind, spec) {
+            Ok(dialog) => dialog,
+            Err(error) => {
+                fika_log!("[fika-wgpu] {error}");
+                return false;
+            }
+        };
+        self.dialog_windows.set(kind, dialog);
+        self.sync_dialog_window(kind, spec);
+        true
+    }
+
+    fn sync_dialog_window(&mut self, kind: ShellDialogWindowKind, spec: &ShellDialogWindowSpec) {
+        if let Some(dialog) = self.dialog_windows.get_mut(kind) {
+            dialog.sync(spec);
+        }
+    }
+
+    fn close_dialog_window(&mut self, kind: ShellDialogWindowKind) {
+        self.dialog_windows.close(kind);
+    }
+
+    fn create_dialog_title(&self) -> String {
+        let Some(dialog) = self.scene.create_dialog.as_ref() else {
+            return "Create New".to_string();
+        };
+        if dialog.privileged {
+            "Create New as Administrator".to_string()
+        } else {
+            "Create New".to_string()
+        }
+    }
+
+    fn create_dialog_spec(&self) -> Option<ShellDialogWindowSpec> {
+        self.scene.create_dialog.as_ref()?;
+        Some(ShellDialogWindowSpec::fixed(
+            self.create_dialog_title(),
+            create_dialog_window_size_scaled(self.scene.ui_scale()),
+            self.open_with_window_theme(),
+        ))
+    }
+
+    fn ensure_create_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+        let Some(spec) = self.create_dialog_spec() else {
+            self.close_create_dialog_window();
+            return false;
+        };
+        if !self.ensure_dialog_window(event_loop, ShellDialogWindowKind::Create, &spec) {
+            self.scene.create_dialog_detached = false;
+            return false;
+        }
+        self.scene.create_dialog_detached = true;
+        self.close_rename_dialog_window();
+        true
+    }
+
+    fn sync_create_dialog_window(&mut self) {
+        let Some(spec) = self.create_dialog_spec() else {
+            self.close_create_dialog_window();
+            return;
+        };
+        self.sync_dialog_window(ShellDialogWindowKind::Create, &spec);
+    }
+
+    fn close_create_dialog_window(&mut self) {
+        self.close_dialog_window(ShellDialogWindowKind::Create);
+        self.scene.create_dialog_detached = false;
+    }
+
+    fn finish_create_dialog_state_change(&mut self) {
+        if self.scene.is_create_dialog_open() {
+            if self.dialog_windows.is_open(ShellDialogWindowKind::Create) {
+                self.scene.create_dialog_detached = true;
+                self.sync_create_dialog_window();
+            } else {
+                self.request_main_redraw();
+            }
+        } else {
+            self.close_create_dialog_window();
+            self.request_main_redraw();
+        }
+    }
+
+    fn rename_dialog_title(&self) -> String {
+        let Some(dialog) = self.scene.rename_dialog.as_ref() else {
+            return "Rename".to_string();
+        };
+        match (dialog.is_dir, dialog.privileged) {
+            (true, true) => "Rename Folder as Administrator",
+            (false, true) => "Rename File as Administrator",
+            (true, false) => "Rename Folder",
+            (false, false) => "Rename File",
+        }
+        .to_string()
+    }
+
+    fn rename_dialog_spec(&self) -> Option<ShellDialogWindowSpec> {
+        self.scene.rename_dialog.as_ref()?;
+        Some(ShellDialogWindowSpec::fixed(
+            self.rename_dialog_title(),
+            rename_dialog_window_size_scaled(self.scene.ui_scale()),
+            self.open_with_window_theme(),
+        ))
+    }
+
+    fn ensure_rename_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+        let Some(spec) = self.rename_dialog_spec() else {
+            self.close_rename_dialog_window();
+            return false;
+        };
+        if !self.ensure_dialog_window(event_loop, ShellDialogWindowKind::Rename, &spec) {
+            self.scene.rename_dialog_detached = false;
+            return false;
+        }
+        self.scene.rename_dialog_detached = true;
+        self.close_create_dialog_window();
+        true
+    }
+
+    fn sync_rename_dialog_window(&mut self) {
+        let Some(spec) = self.rename_dialog_spec() else {
+            self.close_rename_dialog_window();
+            return;
+        };
+        self.sync_dialog_window(ShellDialogWindowKind::Rename, &spec);
+    }
+
+    fn close_rename_dialog_window(&mut self) {
+        self.close_dialog_window(ShellDialogWindowKind::Rename);
+        self.scene.rename_dialog_detached = false;
+    }
+
+    fn finish_rename_dialog_state_change(&mut self) {
+        if self.scene.is_rename_dialog_open() {
+            if self.dialog_windows.is_open(ShellDialogWindowKind::Rename) {
+                self.scene.rename_dialog_detached = true;
+                self.sync_rename_dialog_window();
+            } else {
+                self.request_main_redraw();
+            }
+        } else {
+            self.close_rename_dialog_window();
+            self.request_main_redraw();
+        }
+    }
+
     fn open_with_dialog_spec(&self) -> Option<ShellDialogWindowSpec> {
         Some(ShellDialogWindowSpec::fixed(
             self.open_with_dialog_title(),
@@ -602,28 +770,11 @@ impl FikaWgpuApp {
             self.close_open_with_dialog_window();
             return false;
         };
-        if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) {
-            self.scene.open_with_chooser_detached = true;
-            dialog.sync(&spec);
-            return true;
+        if !self.ensure_dialog_window(event_loop, ShellDialogWindowKind::OpenWith, &spec) {
+            self.scene.open_with_chooser_detached = false;
+            return false;
         }
-
-        let dialog = match ShellDetachedDialogWindow::create(
-            event_loop,
-            ShellDialogWindowKind::OpenWith,
-            &spec,
-        ) {
-            Ok(dialog) => dialog,
-            Err(error) => {
-                fika_log!("[fika-wgpu] {error}");
-                self.scene.open_with_chooser_detached = false;
-                return false;
-            }
-        };
         self.scene.open_with_chooser_detached = true;
-        self.dialog_windows
-            .set(ShellDialogWindowKind::OpenWith, dialog);
-        self.sync_open_with_dialog_window();
         true
     }
 
@@ -632,13 +783,11 @@ impl FikaWgpuApp {
             self.close_open_with_dialog_window();
             return;
         };
-        if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) {
-            dialog.sync(&spec);
-        }
+        self.sync_dialog_window(ShellDialogWindowKind::OpenWith, &spec);
     }
 
     fn close_open_with_dialog_window(&mut self) {
-        self.dialog_windows.close(ShellDialogWindowKind::OpenWith);
+        self.close_dialog_window(ShellDialogWindowKind::OpenWith);
         self.scene.open_with_chooser_detached = false;
     }
 
@@ -665,6 +814,24 @@ impl FikaWgpuApp {
         } else {
             self.close_open_with_dialog_window();
         }
+    }
+
+    fn reconcile_detached_dialog_lifecycle(&mut self) {
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Create) {
+            if self.scene.is_create_dialog_open() {
+                self.scene.create_dialog_detached = true;
+            } else {
+                self.close_create_dialog_window();
+            }
+        }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Rename) {
+            if self.scene.is_rename_dialog_open() {
+                self.scene.rename_dialog_detached = true;
+            } else {
+                self.close_rename_dialog_window();
+            }
+        }
+        self.reconcile_open_with_dialog_lifecycle();
     }
 
     fn drive_directory_watchers(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -724,6 +891,12 @@ impl FikaWgpuApp {
         self.scene.toggle_dark_mode();
         if let Err(error) = save_dark_mode_setting(&self.settings_path, self.scene.dark_mode) {
             fika_log!("[fika-wgpu] settings-save-error {error}");
+        }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Create) {
+            self.sync_create_dialog_window();
+        }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Rename) {
+            self.sync_rename_dialog_window();
         }
         if self.dialog_windows.is_open(ShellDialogWindowKind::OpenWith) {
             self.sync_open_with_dialog_window();
@@ -1005,6 +1178,223 @@ impl FikaWgpuApp {
             ));
         });
         Ok(())
+    }
+
+    fn create_dialog_window_event(&mut self, event_loop: &dyn ActiveEventLoop, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                let changed = self.scene.close_create_dialog();
+                self.close_create_dialog_window();
+                if changed {
+                    self.request_main_redraw();
+                }
+            }
+            WindowEvent::SurfaceResized(size) => {
+                if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::Create) {
+                    dialog.resize(size);
+                    dialog.request_redraw();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let Some(scale_factor) = self
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::Create)
+                    .map(ShellDetachedDialogWindow::scale_factor)
+                else {
+                    return;
+                };
+                if let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size)
+                    && self.scene.set_scale_factor(scale_factor, size)
+                {
+                    self.request_main_redraw();
+                }
+                self.sync_create_dialog_window();
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+            }
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => {
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+                let size = self
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::Create)
+                    .map(ShellDetachedDialogWindow::renderer_size)
+                    .unwrap_or_else(|| PhysicalSize::new(1, 1));
+                let shortcut =
+                    self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                match create_command_for_key_event(&event, shortcut) {
+                    CreateCommand::Commit => self.commit_create_dialog(event_loop),
+                    CreateCommand::Ignore => {}
+                    command => {
+                        if self.scene.apply_create_command(command, size) {
+                            self.finish_create_dialog_state_change();
+                        }
+                    }
+                }
+            }
+            WindowEvent::PointerMoved { .. } | WindowEvent::PointerLeft { .. } => {
+                if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::Create) {
+                    dialog.set_cursor(CursorIcon::Default);
+                }
+            }
+            WindowEvent::PointerButton {
+                state,
+                position,
+                button,
+                ..
+            } => {
+                if state != ElementState::Pressed {
+                    return;
+                }
+                let Some(mouse_button) = button.mouse_button() else {
+                    return;
+                };
+                if mouse_button != MouseButton::Left {
+                    return;
+                }
+                let Some(size) = self
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::Create)
+                    .map(ShellDetachedDialogWindow::renderer_size)
+                else {
+                    return;
+                };
+                let point = ViewPoint {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                };
+                match self.scene.create_dialog_click_at_screen_point(point, size) {
+                    CreateDialogClick::Outside | CreateDialogClick::Cancel => {
+                        if self.scene.close_create_dialog() {
+                            self.close_create_dialog_window();
+                            self.request_main_redraw();
+                        }
+                    }
+                    CreateDialogClick::Commit => self.commit_create_dialog(event_loop),
+                    CreateDialogClick::Kind(kind) => {
+                        if self
+                            .scene
+                            .apply_create_command(CreateCommand::SetKind(kind), size)
+                        {
+                            self.finish_create_dialog_state_change();
+                        }
+                    }
+                    CreateDialogClick::Inside => {}
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                self.render_create_dialog_now(event_loop, "create-dialog-redraw");
+            }
+            _ => {}
+        }
+    }
+
+    fn rename_dialog_window_event(&mut self, event_loop: &dyn ActiveEventLoop, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                let changed = self.scene.close_rename_dialog();
+                self.close_rename_dialog_window();
+                if changed {
+                    self.request_main_redraw();
+                }
+            }
+            WindowEvent::SurfaceResized(size) => {
+                if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::Rename) {
+                    dialog.resize(size);
+                    dialog.request_redraw();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                let Some(scale_factor) = self
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::Rename)
+                    .map(ShellDetachedDialogWindow::scale_factor)
+                else {
+                    return;
+                };
+                if let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size)
+                    && self.scene.set_scale_factor(scale_factor, size)
+                {
+                    self.request_main_redraw();
+                }
+                self.sync_rename_dialog_window();
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+            }
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => {
+                if event.state != ElementState::Pressed {
+                    return;
+                }
+                let shortcut =
+                    self.modifiers.state().control_key() || self.modifiers.state().meta_key();
+                match rename_command_for_key_event(&event, shortcut) {
+                    RenameCommand::Commit => self.commit_rename_dialog(event_loop),
+                    RenameCommand::Ignore => {}
+                    command => {
+                        if self.scene.apply_rename_command(command) {
+                            self.finish_rename_dialog_state_change();
+                        }
+                    }
+                }
+            }
+            WindowEvent::PointerMoved { .. } | WindowEvent::PointerLeft { .. } => {
+                if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::Rename) {
+                    dialog.set_cursor(CursorIcon::Default);
+                }
+            }
+            WindowEvent::PointerButton {
+                state,
+                position,
+                button,
+                ..
+            } => {
+                if state != ElementState::Pressed {
+                    return;
+                }
+                let Some(mouse_button) = button.mouse_button() else {
+                    return;
+                };
+                if mouse_button != MouseButton::Left {
+                    return;
+                }
+                let Some(size) = self
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::Rename)
+                    .map(ShellDetachedDialogWindow::renderer_size)
+                else {
+                    return;
+                };
+                let point = ViewPoint {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                };
+                match self.scene.rename_dialog_click_at_screen_point(point, size) {
+                    RenameDialogClick::Outside | RenameDialogClick::Cancel => {
+                        if self.scene.close_rename_dialog() {
+                            self.close_rename_dialog_window();
+                            self.request_main_redraw();
+                        }
+                    }
+                    RenameDialogClick::Commit => self.commit_rename_dialog(event_loop),
+                    RenameDialogClick::Inside => {}
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                self.render_rename_dialog_now(event_loop, "rename-dialog-redraw");
+            }
+            _ => {}
+        }
     }
 
     fn open_with_dialog_window_event(
@@ -1333,8 +1723,16 @@ impl ApplicationHandler for FikaWgpuApp {
     ) {
         if let Some(kind) = self.dialog_windows.window_kind_for_id(window_id) {
             match kind {
+                ShellDialogWindowKind::Create => {
+                    self.create_dialog_window_event(event_loop, event);
+                    return;
+                }
                 ShellDialogWindowKind::OpenWith => {
                     self.open_with_dialog_window_event(event_loop, event);
+                    return;
+                }
+                ShellDialogWindowKind::Rename => {
+                    self.rename_dialog_window_event(event_loop, event);
                     return;
                 }
             }
@@ -1423,7 +1821,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
-                if self.scene.is_rename_dialog_open() {
+                if self.rename_dialog_is_main_overlay() {
                     match rename_command_for_key_event(&event, shortcut) {
                         RenameCommand::Commit => self.commit_rename_dialog(event_loop),
                         RenameCommand::Ignore => {}
@@ -1437,7 +1835,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
-                if self.scene.is_create_dialog_open() {
+                if self.create_dialog_is_main_overlay() {
                     match create_command_for_key_event(&event, shortcut) {
                         CreateCommand::Commit => self.commit_create_dialog(event_loop),
                         CreateCommand::Ignore => {}
@@ -1592,11 +1990,11 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
-                if self.scene.is_rename_dialog_open() {
+                if self.rename_dialog_is_main_overlay() {
                     self.set_window_cursor(CursorIcon::Default);
                     return;
                 }
-                if self.scene.is_create_dialog_open() {
+                if self.create_dialog_is_main_overlay() {
                     self.set_window_cursor(CursorIcon::Default);
                     return;
                 }
@@ -1751,7 +2149,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
-                if self.scene.is_rename_dialog_open() {
+                if self.rename_dialog_is_main_overlay() {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
                         match self.scene.rename_dialog_click_at_screen_point(point, size) {
                             RenameDialogClick::Outside | RenameDialogClick::Cancel => {
@@ -1767,7 +2165,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     }
                     return;
                 }
-                if self.scene.is_create_dialog_open() {
+                if self.create_dialog_is_main_overlay() {
                     if state == ElementState::Pressed && mouse_button == MouseButton::Left {
                         match self.scene.create_dialog_click_at_screen_point(point, size) {
                             CreateDialogClick::Outside | CreateDialogClick::Cancel => {
@@ -2173,9 +2571,9 @@ impl FikaWgpuApp {
                 if self
                     .scene
                     .open_create_dialog_from_context_with_kind(kind, privileged)
-                    && let Some(window) = self.window.as_ref()
                 {
-                    window.request_redraw();
+                    self.ensure_create_dialog_window(event_loop);
+                    self.request_main_redraw();
                 }
                 return;
             }
@@ -2246,24 +2644,21 @@ impl FikaWgpuApp {
                 }
             }
             ShellContextMenuAction::CreateNew => {
-                if self.scene.open_create_dialog_from_context()
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.open_create_dialog_from_context() {
+                    self.ensure_create_dialog_window(event_loop);
+                    self.request_main_redraw();
                 }
             }
             ShellContextMenuAction::Rename => {
-                if self.scene.open_rename_dialog_from_context(false)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.open_rename_dialog_from_context(false) {
+                    self.ensure_rename_dialog_window(event_loop);
+                    self.request_main_redraw();
                 }
             }
             ShellContextMenuAction::RenameAsAdministrator => {
-                if self.scene.open_rename_dialog_from_context(true)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.open_rename_dialog_from_context(true) {
+                    self.ensure_rename_dialog_window(event_loop);
+                    self.request_main_redraw();
                 }
             }
             ShellContextMenuAction::AddToPlaces => self.add_context_target_to_places(event_loop),
@@ -2399,10 +2794,9 @@ impl FikaWgpuApp {
             }
             FileKeyboardCommand::Paste => self.paste_from_clipboard_into_active_pane(event_loop),
             FileKeyboardCommand::Rename => {
-                if self.scene.open_rename_dialog_from_active_selection(false)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.open_rename_dialog_from_active_selection(false) {
+                    self.ensure_rename_dialog_window(event_loop);
+                    self.request_main_redraw();
                 }
             }
             FileKeyboardCommand::Delete => match self.scene.delete_active_selection(size) {
@@ -3075,10 +3469,8 @@ impl FikaWgpuApp {
         let request = match self.scene.rename_entry_request() {
             Ok(request) => request,
             Err(error) => {
-                if self.scene.set_rename_dialog_error(error)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.set_rename_dialog_error(error) {
+                    self.finish_rename_dialog_state_change();
                 }
                 return;
             }
@@ -3094,10 +3486,8 @@ impl FikaWgpuApp {
                     task_error_detail(&error, administrator_available),
                     request.privileged,
                 ));
-                if self.scene.set_rename_dialog_error(error)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.set_rename_dialog_error(error) {
+                    self.finish_rename_dialog_state_change();
                 }
                 return;
             }
@@ -3130,6 +3520,7 @@ impl FikaWgpuApp {
 
         let affected_dir = request.target.parent().map(Path::to_path_buf);
         self.scene.close_rename_dialog_after_success(&request);
+        self.close_rename_dialog_window();
         let reload_result = affected_dir
             .as_deref()
             .ok_or_else(|| format!("rename target has no parent: {}", request.target.display()))
@@ -3156,10 +3547,8 @@ impl FikaWgpuApp {
         let request = match self.scene.create_entry_request() {
             Ok(request) => request,
             Err(error) => {
-                if self.scene.set_create_dialog_error(error)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.set_create_dialog_error(error) {
+                    self.finish_create_dialog_state_change();
                 }
                 return;
             }
@@ -3175,10 +3564,8 @@ impl FikaWgpuApp {
                     task_error_detail(&error, administrator_available),
                     request.privileged,
                 ));
-                if self.scene.set_create_dialog_error(error)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
+                if self.scene.set_create_dialog_error(error) {
+                    self.finish_create_dialog_state_change();
                 }
                 return;
             }
@@ -3206,6 +3593,7 @@ impl FikaWgpuApp {
         }
 
         self.scene.close_create_dialog_after_success(&request);
+        self.close_create_dialog_window();
         match self.scene.reload_panes_showing_path(&request.parent, size) {
             Ok(_) => {
                 self.scene
@@ -3489,6 +3877,32 @@ impl FikaWgpuApp {
         renderer.prewarm_scene_caches(&mut self.scene, reason);
     }
 
+    fn render_create_dialog_now(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
+        let Some(dialog_state) = self.scene.create_dialog.as_ref() else {
+            self.close_create_dialog_window();
+            return;
+        };
+        let scale = self.scene.ui_scale();
+        let Some(dialog_window) = self.dialog_windows.get_mut(ShellDialogWindowKind::Create) else {
+            return;
+        };
+        let (renderer, window) = dialog_window.renderer_and_window_mut();
+        renderer.render_create_dialog(window, event_loop, dialog_state, scale, reason);
+    }
+
+    fn render_rename_dialog_now(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
+        let Some(dialog_state) = self.scene.rename_dialog.as_ref() else {
+            self.close_rename_dialog_window();
+            return;
+        };
+        let scale = self.scene.ui_scale();
+        let Some(dialog_window) = self.dialog_windows.get_mut(ShellDialogWindowKind::Rename) else {
+            return;
+        };
+        let (renderer, window) = dialog_window.renderer_and_window_mut();
+        renderer.render_rename_dialog(window, event_loop, dialog_state, scale, reason);
+    }
+
     fn render_open_with_dialog_now(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
@@ -3512,7 +3926,7 @@ impl FikaWgpuApp {
         reason: &'static str,
         force_log: bool,
     ) {
-        self.reconcile_open_with_dialog_lifecycle();
+        self.reconcile_detached_dialog_lifecycle();
         let rendered = {
             let Some(window) = self.window.as_ref() else {
                 return;
@@ -3813,7 +4227,9 @@ struct ShellScene {
     drop_menu: Option<ShellDropMenu>,
     properties_overlay: Option<ShellPropertiesOverlay>,
     create_dialog: Option<ShellCreateDialog>,
+    create_dialog_detached: bool,
     rename_dialog: Option<ShellRenameDialog>,
+    rename_dialog_detached: bool,
     open_with_chooser: Option<ShellOpenWithChooser>,
     open_with_chooser_detached: bool,
     trash_conflict_dialog: Option<ShellTrashConflictDialog>,
@@ -3929,7 +4345,9 @@ impl ShellScene {
             drop_menu: None,
             properties_overlay: None,
             create_dialog: None,
+            create_dialog_detached: false,
             rename_dialog: None,
+            rename_dialog_detached: false,
             open_with_chooser: None,
             open_with_chooser_detached: false,
             trash_conflict_dialog: None,
@@ -6573,8 +6991,8 @@ impl ShellScene {
             || self.context_menu.is_some()
             || self.properties_overlay.is_some()
             || self.task_detail_dialog.is_some()
-            || self.create_dialog.is_some()
-            || self.rename_dialog.is_some()
+            || (self.create_dialog.is_some() && !self.create_dialog_detached)
+            || (self.rename_dialog.is_some() && !self.rename_dialog_detached)
             || (self.open_with_chooser.is_some() && !self.open_with_chooser_detached)
             || self.trash_conflict_dialog.is_some()
     }
@@ -8351,10 +8769,12 @@ impl ShellScene {
         };
         let changed = self.rename_dialog.as_ref() != Some(&dialog);
         self.rename_dialog = Some(dialog);
+        self.rename_dialog_detached = false;
         self.context_menu = None;
         self.drop_menu = None;
         self.properties_overlay = None;
         self.create_dialog = None;
+        self.create_dialog_detached = false;
         self.rubber_band = None;
         if changed {
             self.rename_changes += 1;
@@ -8838,7 +9258,10 @@ impl ShellScene {
         let dialog = ShellCreateDialog::new(*pane, path.clone(), kind, privileged);
         let changed = self.create_dialog.as_ref() != Some(&dialog);
         self.create_dialog = Some(dialog);
+        self.create_dialog_detached = false;
         self.properties_overlay = None;
+        self.rename_dialog = None;
+        self.rename_dialog_detached = false;
         self.rubber_band = None;
         if changed {
             self.create_changes += 1;
@@ -8948,6 +9371,7 @@ impl ShellScene {
         if self.create_dialog.take().is_none() {
             return false;
         }
+        self.create_dialog_detached = false;
         self.create_changes += 1;
         fika_log!(
             "[fika-wgpu] create-new open=0 changes={}",
@@ -8960,6 +9384,7 @@ impl ShellScene {
         if self.create_dialog.take().is_none() {
             return false;
         }
+        self.create_dialog_detached = false;
         self.create_changes += 1;
         fika_log!(
             "[fika-wgpu] create-new created kind={} path={} changes={}",
@@ -9073,8 +9498,10 @@ impl ShellScene {
         };
         let changed = self.rename_dialog.as_ref() != Some(&dialog);
         self.rename_dialog = Some(dialog);
+        self.rename_dialog_detached = false;
         self.properties_overlay = None;
         self.create_dialog = None;
+        self.create_dialog_detached = false;
         self.rubber_band = None;
         if changed {
             self.rename_changes += 1;
@@ -9176,6 +9603,7 @@ impl ShellScene {
         if self.rename_dialog.take().is_none() {
             return false;
         }
+        self.rename_dialog_detached = false;
         self.rename_changes += 1;
         fika_log!("[fika-wgpu] rename open=0 changes={}", self.rename_changes);
         true
@@ -9185,6 +9613,7 @@ impl ShellScene {
         if self.rename_dialog.take().is_none() {
             return false;
         }
+        self.rename_dialog_detached = false;
         self.rename_changes += 1;
         fika_log!(
             "[fika-wgpu] rename source={} target={} dir={} privileged={} changes={}",
@@ -12038,7 +12467,9 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        if let Some(dialog) = self.create_dialog.as_ref() {
+        if !self.create_dialog_detached
+            && let Some(dialog) = self.create_dialog.as_ref()
+        {
             shell::create_rename::paint::push_create_dialog_overlay(
                 dialog,
                 self.ui_scale(),
@@ -12055,7 +12486,9 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
     ) {
-        if let Some(dialog) = self.rename_dialog.as_ref() {
+        if !self.rename_dialog_detached
+            && let Some(dialog) = self.rename_dialog.as_ref()
+        {
             shell::create_rename::paint::push_rename_dialog_overlay(
                 dialog,
                 self.ui_scale(),
@@ -14012,6 +14445,58 @@ impl WgpuState {
                     vertices,
                     text_builder,
                     icon_builder,
+                    size,
+                );
+            },
+        )
+    }
+
+    fn render_create_dialog(
+        &mut self,
+        window: &dyn Window,
+        event_loop: &dyn ActiveEventLoop,
+        dialog: &ShellCreateDialog,
+        scale: f32,
+        reason: &'static str,
+    ) -> ShellRenderOutcome {
+        self.render_detached_dialog(
+            window,
+            event_loop,
+            scale,
+            reason,
+            ShellDialogWindowKind::Create.as_str(),
+            |vertices, text_builder, _icon_builder, size| {
+                shell::create_rename::paint::push_create_dialog(
+                    dialog,
+                    scale,
+                    vertices,
+                    text_builder,
+                    size,
+                );
+            },
+        )
+    }
+
+    fn render_rename_dialog(
+        &mut self,
+        window: &dyn Window,
+        event_loop: &dyn ActiveEventLoop,
+        dialog: &ShellRenameDialog,
+        scale: f32,
+        reason: &'static str,
+    ) -> ShellRenderOutcome {
+        self.render_detached_dialog(
+            window,
+            event_loop,
+            scale,
+            reason,
+            ShellDialogWindowKind::Rename.as_str(),
+            |vertices, text_builder, _icon_builder, size| {
+                shell::create_rename::paint::push_rename_dialog(
+                    dialog,
+                    scale,
+                    vertices,
+                    text_builder,
                     size,
                 );
             },
@@ -20139,7 +20624,9 @@ mod tests {
             drop_menu: None,
             properties_overlay: None,
             create_dialog: None,
+            create_dialog_detached: false,
             rename_dialog: None,
+            rename_dialog_detached: false,
             open_with_chooser: None,
             open_with_chooser_detached: false,
             trash_conflict_dialog: None,

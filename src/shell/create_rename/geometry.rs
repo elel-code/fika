@@ -36,6 +36,18 @@ pub(crate) fn create_dialog_rect_scaled(
     }
 }
 
+pub(crate) fn create_dialog_window_size_scaled(scale_factor: f32) -> PhysicalSize<u32> {
+    let margin = scaled_dialog_metric(CREATE_DIALOG_MARGIN, scale_factor);
+    PhysicalSize::new(
+        (scaled_dialog_metric(CREATE_DIALOG_WIDTH, scale_factor) + margin * 2.0)
+            .ceil()
+            .max(1.0) as u32,
+        (scaled_dialog_metric(CREATE_DIALOG_HEIGHT, scale_factor) + margin * 2.0)
+            .ceil()
+            .max(1.0) as u32,
+    )
+}
+
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) fn create_kind_button_rect(dialog_rect: ViewRect, kind: CreateEntryKind) -> ViewRect {
@@ -154,6 +166,18 @@ pub(crate) fn rename_dialog_rect_scaled(
         width: dialog_width,
         height: dialog_height,
     }
+}
+
+pub(crate) fn rename_dialog_window_size_scaled(scale_factor: f32) -> PhysicalSize<u32> {
+    let margin = scaled_dialog_metric(RENAME_DIALOG_MARGIN, scale_factor);
+    PhysicalSize::new(
+        (scaled_dialog_metric(RENAME_DIALOG_WIDTH, scale_factor) + margin * 2.0)
+            .ceil()
+            .max(1.0) as u32,
+        (scaled_dialog_metric(RENAME_DIALOG_HEIGHT, scale_factor) + margin * 2.0)
+            .ceil()
+            .max(1.0) as u32,
+    )
 }
 
 #[cfg(test)]
