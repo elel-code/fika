@@ -3,6 +3,7 @@ pub(crate) mod autosmoke;
 pub(crate) mod clipboard;
 pub(crate) mod context_menu;
 pub(crate) mod create_rename;
+pub(crate) mod dialog_window;
 pub(crate) mod directory_watch;
 pub(crate) mod dolphin;
 pub(crate) mod drop_menu;

@@ -123,6 +123,9 @@ use shell::create_rename::{
     CreateDialogClick, CreateEntryKind, CreateEntryRequest, RenameDialogClick, RenameEntryRequest,
     ShellCreateDialog, ShellRenameDialog, unique_child_name, validate_create_name,
 };
+use shell::dialog_window::{
+    ShellDetachedDialogWindow, ShellDialogWindowKind, ShellDialogWindowSpec, ShellDialogWindows,
+};
 use shell::directory_watch::ShellDirectoryWatcherRuntime;
 use shell::dolphin::item_paint::{dolphin_item_paint, dolphin_selection_core_rect};
 use shell::dolphin::style::{BREEZE_ITEM_ROUNDNESS, place_row_background_color};
@@ -445,12 +448,6 @@ fn window_title(scene: &ShellScene) -> String {
     }
 }
 
-struct OpenWithDialogWindow {
-    renderer: WgpuState,
-    window: Box<dyn Window>,
-    cursor_icon: CursorIcon,
-}
-
 struct FikaWgpuApp {
     scene: ShellScene,
     mime_applications: MimeApplicationCache,
@@ -464,7 +461,7 @@ struct FikaWgpuApp {
     modifiers: Modifiers,
     // Drop order matters: renderer borrows display/window handles.
     renderer: Option<WgpuState>,
-    open_with_dialog: Option<OpenWithDialogWindow>,
+    dialog_windows: ShellDialogWindows,
     clipboard: Option<ShellClipboard>,
     window: Option<Box<dyn Window>>,
     cursor_icon: CursorIcon,
@@ -506,7 +503,7 @@ impl FikaWgpuApp {
             next_task_id: 1,
             modifiers: Modifiers::default(),
             renderer: None,
-            open_with_dialog: None,
+            dialog_windows: ShellDialogWindows::default(),
             clipboard: None,
             window: None,
             cursor_icon: CursorIcon::Default,
@@ -536,14 +533,9 @@ impl FikaWgpuApp {
     }
 
     fn set_open_with_dialog_cursor(&mut self, cursor_icon: CursorIcon) {
-        let Some(dialog) = self.open_with_dialog.as_mut() else {
-            return;
-        };
-        if dialog.cursor_icon == cursor_icon {
-            return;
+        if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) {
+            dialog.set_cursor(cursor_icon);
         }
-        dialog.cursor_icon = cursor_icon;
-        dialog.window.set_cursor(WinitCursor::Icon(cursor_icon));
     }
 
     fn update_window_cursor_for_scene(&mut self, size: PhysicalSize<u32>) {
@@ -561,15 +553,17 @@ impl FikaWgpuApp {
     }
 
     fn request_open_with_dialog_redraw(&self) -> bool {
-        let Some(dialog) = self.open_with_dialog.as_ref() else {
-            return false;
-        };
-        dialog.window.request_redraw();
-        true
+        self.dialog_windows
+            .get(ShellDialogWindowKind::OpenWith)
+            .is_some_and(|dialog| {
+                dialog.request_redraw();
+                true
+            })
     }
 
     fn open_with_chooser_is_main_overlay(&self) -> bool {
-        self.scene.is_open_with_chooser_open() && self.open_with_dialog.is_none()
+        self.scene.is_open_with_chooser_open()
+            && !self.dialog_windows.is_open(ShellDialogWindowKind::OpenWith)
     }
 
     fn open_with_dialog_title(&self) -> String {
@@ -595,79 +589,62 @@ impl FikaWgpuApp {
         }
     }
 
+    fn open_with_dialog_spec(&self) -> Option<ShellDialogWindowSpec> {
+        Some(ShellDialogWindowSpec::fixed(
+            self.open_with_dialog_title(),
+            self.open_with_dialog_surface_size()?,
+            self.open_with_window_theme(),
+        ))
+    }
+
     fn ensure_open_with_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
-        let Some(size) = self.open_with_dialog_surface_size() else {
+        let Some(spec) = self.open_with_dialog_spec() else {
             self.close_open_with_dialog_window();
             return false;
         };
-        if self.open_with_dialog.is_some() {
+        if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) {
             self.scene.open_with_chooser_detached = true;
-            self.sync_open_with_dialog_window();
+            dialog.sync(&spec);
             return true;
         }
 
-        let title = self.open_with_dialog_title();
-        let attrs = WindowAttributes::default()
-            .with_title(title)
-            .with_surface_size(size)
-            .with_min_surface_size(size)
-            .with_max_surface_size(size)
-            .with_resizable(false)
-            .with_theme(Some(self.open_with_window_theme()));
-        let window = match event_loop.create_window(attrs) {
-            Ok(window) => window,
+        let dialog = match ShellDetachedDialogWindow::create(
+            event_loop,
+            ShellDialogWindowKind::OpenWith,
+            &spec,
+        ) {
+            Ok(dialog) => dialog,
             Err(error) => {
-                fika_log!("[fika-wgpu] open-with-dialog create failed: {error}");
-                self.scene.open_with_chooser_detached = false;
-                return false;
-            }
-        };
-        let renderer = match WgpuState::new(window.as_ref()) {
-            Ok(renderer) => renderer,
-            Err(error) => {
-                fika_log!("[fika-wgpu] open-with-dialog renderer init failed: {error}");
+                fika_log!("[fika-wgpu] {error}");
                 self.scene.open_with_chooser_detached = false;
                 return false;
             }
         };
         self.scene.open_with_chooser_detached = true;
-        self.open_with_dialog = Some(OpenWithDialogWindow {
-            renderer,
-            window,
-            cursor_icon: CursorIcon::Default,
-        });
+        self.dialog_windows
+            .set(ShellDialogWindowKind::OpenWith, dialog);
         self.sync_open_with_dialog_window();
         true
     }
 
     fn sync_open_with_dialog_window(&mut self) {
-        let Some(size) = self.open_with_dialog_surface_size() else {
+        let Some(spec) = self.open_with_dialog_spec() else {
             self.close_open_with_dialog_window();
             return;
         };
-        let title = self.open_with_dialog_title();
-        let theme = self.open_with_window_theme();
-        let Some(dialog) = self.open_with_dialog.as_mut() else {
-            return;
-        };
-        dialog.window.set_title(&title);
-        dialog.window.set_theme(Some(theme));
-        dialog.window.set_min_surface_size(Some(size.into()));
-        dialog.window.set_max_surface_size(Some(size.into()));
-        if let Some(applied) = dialog.window.request_surface_size(size.into()) {
-            dialog.renderer.resize(applied);
+        if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) {
+            dialog.sync(&spec);
         }
-        dialog.window.request_redraw();
     }
 
     fn close_open_with_dialog_window(&mut self) {
-        self.open_with_dialog = None;
+        self.dialog_windows.close(ShellDialogWindowKind::OpenWith);
         self.scene.open_with_chooser_detached = false;
     }
 
     fn finish_open_with_dialog_state_change(&mut self) {
         if self.scene.is_open_with_chooser_open() {
-            if self.open_with_dialog.is_some() {
+            if self.dialog_windows.is_open(ShellDialogWindowKind::OpenWith) {
                 self.scene.open_with_chooser_detached = true;
                 self.sync_open_with_dialog_window();
             } else {
@@ -680,7 +657,7 @@ impl FikaWgpuApp {
     }
 
     fn reconcile_open_with_dialog_lifecycle(&mut self) {
-        if self.open_with_dialog.is_none() {
+        if !self.dialog_windows.is_open(ShellDialogWindowKind::OpenWith) {
             return;
         }
         if self.scene.is_open_with_chooser_open() {
@@ -748,7 +725,7 @@ impl FikaWgpuApp {
         if let Err(error) = save_dark_mode_setting(&self.settings_path, self.scene.dark_mode) {
             fika_log!("[fika-wgpu] settings-save-error {error}");
         }
-        if self.open_with_dialog.is_some() {
+        if self.dialog_windows.is_open(ShellDialogWindowKind::OpenWith) {
             self.sync_open_with_dialog_window();
         }
         true
@@ -1044,16 +1021,16 @@ impl FikaWgpuApp {
                 }
             }
             WindowEvent::SurfaceResized(size) => {
-                if let Some(dialog) = self.open_with_dialog.as_mut() {
-                    dialog.renderer.resize(size);
-                    dialog.window.request_redraw();
+                if let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) {
+                    dialog.resize(size);
+                    dialog.request_redraw();
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 let Some(scale_factor) = self
-                    .open_with_dialog
-                    .as_ref()
-                    .map(|dialog| dialog.window.scale_factor() as f32)
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::OpenWith)
+                    .map(ShellDetachedDialogWindow::scale_factor)
                 else {
                     return;
                 };
@@ -1062,9 +1039,9 @@ impl FikaWgpuApp {
                     .as_ref()
                     .map(|renderer| renderer.size)
                     .unwrap_or_else(|| {
-                        self.open_with_dialog
-                            .as_ref()
-                            .map(|dialog| dialog.renderer.size)
+                        self.dialog_windows
+                            .get(ShellDialogWindowKind::OpenWith)
+                            .map(ShellDetachedDialogWindow::renderer_size)
                             .unwrap_or_else(|| PhysicalSize::new(1, 1))
                     });
                 if self.scene.set_scale_factor(scale_factor, main_size) {
@@ -1097,9 +1074,9 @@ impl FikaWgpuApp {
             }
             WindowEvent::PointerMoved { position, .. } => {
                 let Some(size) = self
-                    .open_with_dialog
-                    .as_ref()
-                    .map(|dialog| dialog.renderer.size)
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::OpenWith)
+                    .map(ShellDetachedDialogWindow::renderer_size)
                 else {
                     return;
                 };
@@ -1126,9 +1103,9 @@ impl FikaWgpuApp {
                 ..
             } => {
                 let Some(size) = self
-                    .open_with_dialog
-                    .as_ref()
-                    .map(|dialog| dialog.renderer.size)
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::OpenWith)
+                    .map(ShellDetachedDialogWindow::renderer_size)
                 else {
                     return;
                 };
@@ -1354,13 +1331,13 @@ impl ApplicationHandler for FikaWgpuApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if self
-            .open_with_dialog
-            .as_ref()
-            .is_some_and(|dialog| dialog.window.id() == window_id)
-        {
-            self.open_with_dialog_window_event(event_loop, event);
-            return;
+        if let Some(kind) = self.dialog_windows.window_kind_for_id(window_id) {
+            match kind {
+                ShellDialogWindowKind::OpenWith => {
+                    self.open_with_dialog_window_event(event_loop, event);
+                    return;
+                }
+            }
         }
         if self
             .window
@@ -1372,7 +1349,7 @@ impl ApplicationHandler for FikaWgpuApp {
         match event {
             WindowEvent::CloseRequested => {
                 self.renderer = None;
-                self.open_with_dialog = None;
+                self.dialog_windows.close_all();
                 self.clipboard = None;
                 self.window = None;
                 event_loop.exit();
@@ -3522,16 +3499,11 @@ impl FikaWgpuApp {
             return;
         };
         let scale = self.scene.ui_scale();
-        let Some(dialog) = self.open_with_dialog.as_mut() else {
+        let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) else {
             return;
         };
-        dialog.renderer.render_open_with_dialog(
-            dialog.window.as_ref(),
-            event_loop,
-            chooser,
-            scale,
-            reason,
-        );
+        let (renderer, window) = dialog.renderer_and_window_mut();
+        renderer.render_open_with_dialog(window, event_loop, chooser, scale, reason);
     }
 
     fn render_now(
@@ -13830,13 +13802,19 @@ impl WgpuState {
         scene.prewarm_file_item_text_labels(projections, &mut text_builder, mode)
     }
 
-    fn render_open_with_dialog(
+    fn render_detached_dialog(
         &mut self,
         window: &dyn Window,
         event_loop: &dyn ActiveEventLoop,
-        chooser: &ShellOpenWithChooser,
         scale: f32,
         reason: &'static str,
+        dialog_label: &'static str,
+        paint: impl FnOnce(
+            &mut Vec<QuadVertex>,
+            &mut TextFrameBuilder<'_>,
+            &mut IconFrameBuilder<'_>,
+            PhysicalSize<u32>,
+        ),
     ) -> ShellRenderOutcome {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
@@ -13855,7 +13833,7 @@ impl WgpuState {
                         return ShellRenderOutcome::NotReady;
                     }
                     wgpu::CurrentSurfaceTexture::Validation => {
-                        fika_log!("[fika-wgpu] open-with-dialog surface validation error");
+                        fika_log!("[fika-wgpu] {dialog_label}-dialog surface validation error");
                         event_loop.exit();
                         return ShellRenderOutcome::NotReady;
                     }
@@ -13865,7 +13843,7 @@ impl WgpuState {
                 return ShellRenderOutcome::NotReady;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
-                fika_log!("[fika-wgpu] open-with-dialog surface validation error");
+                fika_log!("[fika-wgpu] {dialog_label}-dialog surface validation error");
                 event_loop.exit();
                 return ShellRenderOutcome::NotReady;
             }
@@ -13907,9 +13885,7 @@ impl WgpuState {
                 0,
             );
             let mut vertices = Vec::with_capacity(256);
-            shell::open_with::paint::push_open_with_chooser_dialog(
-                chooser,
-                scale,
+            paint(
                 &mut vertices,
                 &mut text_builder,
                 &mut icon_builder,
@@ -13956,12 +13932,12 @@ impl WgpuState {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("fika-wgpu-open-with-dialog-frame"),
+                label: Some("fika-wgpu-detached-dialog-frame"),
             });
         let [r, g, b, a] = POPUP_SURFACE;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("fika-wgpu-open-with-dialog-pass"),
+                label: Some("fika-wgpu-detached-dialog-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
@@ -13993,13 +13969,13 @@ impl WgpuState {
         self.frame_count += 1;
         if self.frame_count == 1 || fika_frame_log_all_enabled() {
             fika_log!(
-                "[fika-wgpu] open-with-dialog frame={} reason={} size={}x{} scale={:.2} query_len={} icons={} icon_deferred={} text_labels={} text_deferred={} swash={}/{} reset={} vertex_uploads={}/{}",
+                "[fika-wgpu] detached-dialog kind={} frame={} reason={} size={}x{} scale={:.2} icons={} icon_deferred={} text_labels={} text_deferred={} swash={}/{} reset={} vertex_uploads={}/{}",
+                dialog_label,
                 self.frame_count,
                 reason,
                 self.size.width,
                 self.size.height,
                 scale,
-                chooser.query.len(),
                 icon_stats.icons,
                 icon_stats.deferred + icon_stats.raster_deferred,
                 text_stats.labels,
@@ -14013,6 +13989,33 @@ impl WgpuState {
         }
 
         ShellRenderOutcome::Presented
+    }
+
+    fn render_open_with_dialog(
+        &mut self,
+        window: &dyn Window,
+        event_loop: &dyn ActiveEventLoop,
+        chooser: &ShellOpenWithChooser,
+        scale: f32,
+        reason: &'static str,
+    ) -> ShellRenderOutcome {
+        self.render_detached_dialog(
+            window,
+            event_loop,
+            scale,
+            reason,
+            ShellDialogWindowKind::OpenWith.as_str(),
+            |vertices, text_builder, icon_builder, size| {
+                shell::open_with::paint::push_open_with_chooser_dialog(
+                    chooser,
+                    scale,
+                    vertices,
+                    text_builder,
+                    icon_builder,
+                    size,
+                );
+            },
+        )
     }
 
     fn render(
