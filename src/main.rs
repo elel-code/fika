@@ -270,21 +270,17 @@ use shell::service_menu::ServiceMenuLaunchRequest;
 use shell::shortcuts::{
     CreateCommand, FilterCommand, LocationCommand, OpenWithCommand, PathNavigationAction,
     RenameCommand, SelectionCommand, ZoomAction, create_command_for_key_event,
-    dark_mode_toggle_requested_for_key_event, escape_requested_for_key_event,
-    file_keyboard_command_for_key_event, filter_command_for_key_event,
-    hidden_toggle_requested_for_key_event, is_activation_key, location_command_for_key_event,
-    navigation_action_for_key, open_with_command_for_key_event, path_navigation_action_for_key,
-    path_navigation_action_for_mouse_button, reload_requested_for_key_event,
-    rename_command_for_key_event, selection_command_for_key_event, view_mode_for_key_event,
-    zoom_action_for_key_event, zoom_action_for_scroll_delta,
+    open_with_command_for_key_event, path_navigation_action_for_mouse_button,
+    rename_command_for_key_event,
 };
 #[cfg(test)]
 use shell::shortcuts::{
     FileKeyboardCommand, create_command_for_key_parts, dark_mode_toggle_requested_for_key_parts,
     file_keyboard_command_for_key_parts, filter_command_for_key_parts,
     hidden_toggle_requested_for_key_parts, location_command_for_key_parts,
-    reload_requested_for_key_parts, rename_command_for_key_parts, selection_command_for_key_parts,
-    view_mode_for_key_parts, zoom_action_for_key,
+    path_navigation_action_for_key, reload_requested_for_key_parts, rename_command_for_key_parts,
+    selection_command_for_key_parts, view_mode_for_key_parts, zoom_action_for_key,
+    zoom_action_for_scroll_delta,
 };
 #[cfg(test)]
 use shell::tasks::geometry::{
@@ -1695,184 +1691,13 @@ impl ApplicationHandler for FikaWgpuApp {
                 is_synthetic: false,
                 ..
             } => {
-                if event.state != ElementState::Pressed {
-                    return;
-                }
-                let Some(renderer) = self.renderer.as_ref() else {
-                    return;
-                };
-                let shortcut =
-                    self.modifiers.state().control_key() || self.modifiers.state().meta_key();
-                if self.scene.is_trash_conflict_dialog_open() {
-                    if escape_requested_for_key_event(&event) {
-                        if self.scene.close_trash_conflict_dialog()
-                            && let Some(window) = self.window.as_ref()
-                        {
-                            window.request_redraw();
-                        }
-                    }
-                    return;
-                }
-                if self.scene.is_task_detail_dialog_open() {
-                    if escape_requested_for_key_event(&event) {
-                        if self.scene.close_task_detail_dialog()
-                            && let Some(window) = self.window.as_ref()
-                        {
-                            window.request_redraw();
-                        }
-                    }
-                    return;
-                }
-                if self.scene.is_properties_overlay_open() && escape_requested_for_key_event(&event)
-                {
-                    if self.scene.close_properties_overlay()
-                        && let Some(window) = self.window.as_ref()
-                    {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if self.scene.is_drop_menu_open() && escape_requested_for_key_event(&event) {
-                    if self.scene.close_drop_menu()
-                        && let Some(window) = self.window.as_ref()
-                    {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if self.scene.is_context_menu_open() && escape_requested_for_key_event(&event) {
-                    if self.scene.close_context_menu()
-                        && let Some(window) = self.window.as_ref()
-                    {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if dark_mode_toggle_requested_for_key_event(
-                    &event,
-                    shortcut,
-                    self.modifiers.state().shift_key(),
-                ) {
-                    if self.toggle_user_dark_mode() {
-                        self.present_scene_change(event_loop, "toggle-dark-mode");
-                    }
-                    return;
-                }
-                if let Some(command) = location_command_for_key_event(
-                    &event,
-                    shortcut,
-                    self.scene.is_location_editing(),
-                ) {
-                    if command == LocationCommand::Commit {
-                        self.commit_location_draft(event_loop);
-                    } else if self.scene.apply_location_command(command, renderer.size)
-                        && let Some(window) = self.window.as_ref()
-                    {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if let Some(command) =
-                    filter_command_for_key_event(&event, shortcut, self.scene.filter_active)
-                {
-                    if self.scene.apply_filter_command(command, renderer.size)
-                        && let Some(window) = self.window.as_ref()
-                    {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if let Some(command) = file_keyboard_command_for_key_event(&event, shortcut) {
-                    self.perform_file_keyboard_command(event_loop, command);
-                    return;
-                }
-                if let Some(view_mode) = view_mode_for_key_event(&event, shortcut) {
-                    if self.set_user_view_mode(view_mode, renderer.size) {
-                        self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
-                        if let Some(window) = self.window.as_ref() {
-                            window.set_title(&window_title(&self.scene));
-                            window.request_redraw();
-                        }
-                        self.prewarm_current_scene_caches("switch-immediate");
-                        self.render_now(event_loop, "switch-immediate", true);
-                    }
-                    return;
-                }
-                if shortcut && let Some(zoom_action) = zoom_action_for_key_event(&event) {
-                    if self.scene.zoom(zoom_action, renderer.size) {
-                        self.queue_scene_change("zoom", ZOOM_REDRAW_FRAMES);
-                    }
-                    return;
-                }
-                if let Some(command) = selection_command_for_key_event(&event, shortcut) {
-                    if self.scene.apply_selection_command(command)
-                        && let Some(window) = self.window.as_ref()
-                    {
-                        window.request_redraw();
-                    }
-                    return;
-                }
-                if reload_requested_for_key_event(&event, shortcut) {
-                    self.reload_scene_path(event_loop);
-                    return;
-                }
-                if hidden_toggle_requested_for_key_event(&event, shortcut) {
-                    if self.toggle_user_hidden_visibility(renderer.size) {
-                        self.present_scene_change(event_loop, "toggle-hidden");
-                    }
-                    return;
-                }
-                if is_activation_key(&event.logical_key) {
-                    if let Some((pane, path)) = self.scene.selected_directory_path() {
-                        self.load_path_into_pane(event_loop, pane, path, "activate-directory");
-                    } else if let Some(request) = self.scene.selected_file_open_request() {
-                        self.launch_open_file_request(&request);
-                    }
-                    return;
-                }
-                if let Some(action) = path_navigation_action_for_key(
-                    &event.logical_key,
-                    self.modifiers.state().alt_key(),
-                ) {
-                    self.perform_path_navigation(event_loop, action);
-                    return;
-                }
-                let Some(action) = navigation_action_for_key(&event.logical_key) else {
-                    return;
-                };
-                let extend = self.modifiers.state().shift_key();
-                if self.scene.navigate(action, extend, renderer.size)
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
-                }
+                self.handle_main_keyboard_input(event_loop, &event);
             }
             WindowEvent::PointerMoved { position, .. } => {
-                let Some(renderer) = self.renderer.as_ref() else {
-                    return;
-                };
-                let size = renderer.size;
-                let point = ViewPoint {
-                    x: position.x as f32,
-                    y: position.y as f32,
-                };
-                if self.scene.is_task_detail_dialog_open() {
-                    self.set_window_cursor(CursorIcon::Default);
-                    return;
-                }
-                let changed = self.scene.set_pointer(point, size);
-                self.update_window_cursor_for_scene(size);
-                if changed && let Some(window) = self.window.as_ref() {
-                    window.request_redraw();
-                }
+                self.handle_main_pointer_moved(position);
             }
             WindowEvent::PointerLeft { .. } => {
-                self.set_window_cursor(CursorIcon::Default);
-                if self.scene.clear_pointer()
-                    && let Some(window) = self.window.as_ref()
-                {
-                    window.request_redraw();
-                }
+                self.handle_main_pointer_left();
             }
             WindowEvent::DragEntered { paths, position } => {
                 self.external_drag_entered(paths, position);
@@ -2155,23 +1980,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let Some(renderer) = self.renderer.as_ref() else {
-                    return;
-                };
-                let delta_y = scroll_delta_y(delta, self.scene.ui_scale());
-                let shortcut =
-                    self.modifiers.state().control_key() || self.modifiers.state().meta_key();
-                if shortcut {
-                    if let Some(zoom_action) = zoom_action_for_scroll_delta(delta_y)
-                        && self.scene.zoom(zoom_action, renderer.size)
-                    {
-                        self.queue_scene_change("wheel-zoom", ZOOM_REDRAW_FRAMES);
-                    }
-                    return;
-                }
-                if self.scene.scroll_by(delta_y, renderer.size) {
-                    self.queue_scene_change("wheel-scroll", SCROLL_REDRAW_FRAMES);
-                }
+                self.handle_main_mouse_wheel(delta);
             }
             WindowEvent::RedrawRequested => {
                 let force_log = self.pending_redraw_frames > 0;

@@ -62,6 +62,10 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `src/app_actions/view.rs`；`load_path_into_pane` 进入 `navigation.rs`；
   trash restore conflict wrapper 进入 `trash.rs`；external drag enter/move/drop/left wrapper
   进入 `src/app_actions/drag.rs`。
+- 主窗口输入分支收敛：
+  main window keyboard shortcut handling 迁入 `src/app_actions/keyboard.rs`，pointer hover /
+  cursor handling 迁入 `src/app_actions/pointer.rs`，mouse wheel zoom/scroll scheduling
+  迁入 `src/app_actions/scroll.rs`；`main.rs` 的 `window_event` 对应分支只保留事件路由。
 - Open With query hit testing 收敛：
   search box 的 pointer hit test 进入 `src/shell/open_with/geometry.rs`，scene 的
   cursor 判断不再直接拼 query rect。
@@ -179,8 +183,8 @@ operation dispatcher。
 
 ## 当前推荐顺序
 
-1. Command / Action 层后续：进一步收敛 keyboard/mouse event 中的内联 view switching、
-   zoom/scroll scheduling 和 selection activation。
+1. Command / Action 层后续：进一步收敛 main pointer button 分支中的 dialog/context/drop
+   activation、selection activation 和 toolbar/path-bar click routing。
 2. Async operation dispatcher。
 3. Render surface / frame pipeline。
 4. Animation registry。
