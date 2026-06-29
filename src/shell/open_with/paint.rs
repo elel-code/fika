@@ -1,9 +1,7 @@
 use fika_core::ViewRect;
 use winit::dpi::PhysicalSize;
 
-use crate::shell::dolphin::style::{
-    BREEZE_ITEM_ROUNDNESS, details_row_background_color, item_background_color,
-};
+use crate::shell::dolphin::style::{BREEZE_ITEM_ROUNDNESS, item_background_color};
 use crate::shell::icon_roles::NamedIconFallback;
 use crate::shell::metrics::{
     OPEN_WITH_CHOOSER_MAX_ROWS, OPEN_WITH_CHOOSER_ROW_HEIGHT, OPEN_WITH_CHOOSER_TITLE_HEIGHT,
@@ -16,11 +14,7 @@ use crate::shell::open_with::geometry::{
     open_with_chooser_rect_scaled, open_with_chooser_scrollbar_rects_scaled,
 };
 use crate::shell::open_with::{OpenWithTreeRow, ShellOpenWithChooser};
-use crate::shell::popup::style::{
-    POPUP_BORDER, POPUP_BUTTON_PRIMARY, POPUP_BUTTON_SECONDARY, POPUP_DIVIDER, POPUP_FIELD_FOCUS,
-    POPUP_HEADER, POPUP_INPUT, POPUP_MARKER_NEUTRAL, POPUP_SURFACE, popup_body_text,
-    popup_error_text, popup_inverse_text, popup_muted_text, popup_soft_text, popup_title_text,
-};
+use crate::shell::popup::style::PopupTheme;
 use crate::{
     IconDrawLayer, IconFrameBuilder, LabelAlignment, LabelWrap, QuadVertex, TextFrameBuilder,
     path_name_or_display, push_clipped_rect_outline, push_clipped_rounded_highlight,
@@ -29,6 +23,7 @@ use crate::{
 
 pub(crate) fn push_open_with_chooser_dialog(
     chooser: &ShellOpenWithChooser,
+    theme: PopupTheme,
     scale: f32,
     caret_visible: bool,
     vertices: &mut Vec<QuadVertex>,
@@ -36,11 +31,21 @@ pub(crate) fn push_open_with_chooser_dialog(
     icons: &mut IconFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    push_open_with_chooser_surface(chooser, scale, caret_visible, vertices, text, icons, size);
+    push_open_with_chooser_surface(
+        chooser,
+        theme,
+        scale,
+        caret_visible,
+        vertices,
+        text,
+        icons,
+        size,
+    );
 }
 
 fn push_open_with_chooser_surface(
     chooser: &ShellOpenWithChooser,
+    theme: PopupTheme,
     scale: f32,
     caret_visible: bool,
     vertices: &mut Vec<QuadVertex>,
@@ -64,8 +69,8 @@ fn push_open_with_chooser_surface(
         rect,
         screen,
         dialog_radius,
-        POPUP_SURFACE,
-        POPUP_BORDER,
+        theme.surface,
+        theme.border,
         scale,
         size,
     );
@@ -82,7 +87,7 @@ fn push_open_with_chooser_surface(
         header_rect,
         rect,
         dialog_inner_radius,
-        POPUP_HEADER,
+        theme.header,
         size,
     );
     if header_rect.height > dialog_inner_radius {
@@ -94,7 +99,7 @@ fn push_open_with_chooser_surface(
                 width: header_rect.width,
                 height: (header_rect.height - dialog_inner_radius).max(1.0),
             },
-            POPUP_HEADER,
+            theme.header,
             size,
         );
     }
@@ -108,7 +113,7 @@ fn push_open_with_chooser_surface(
         },
         rect,
         scaled_dialog_metric(1.0, scale),
-        POPUP_DIVIDER,
+        theme.divider,
         size,
     );
     text.push_label(
@@ -120,7 +125,7 @@ fn push_open_with_chooser_surface(
             height: scaled_dialog_metric(18.0, scale),
         },
         rect,
-        popup_title_text(),
+        theme.title_text,
     );
     text.push_label(
         chooser.mime_type.as_deref().unwrap_or("unknown MIME"),
@@ -131,7 +136,7 @@ fn push_open_with_chooser_surface(
             height: scaled_dialog_metric(14.0, scale),
         },
         rect,
-        popup_muted_text(),
+        theme.muted_text,
     );
 
     let query = open_with_chooser_query_rect_scaled(rect, scale);
@@ -140,8 +145,8 @@ fn push_open_with_chooser_surface(
         query,
         rect,
         scaled_dialog_metric(7.0, scale),
-        POPUP_INPUT,
-        POPUP_DIVIDER,
+        theme.input,
+        theme.divider,
         scale,
         size,
     );
@@ -155,7 +160,7 @@ fn push_open_with_chooser_surface(
         },
         query,
         scaled_dialog_metric(1.0, scale),
-        POPUP_FIELD_FOCUS,
+        theme.field_focus,
         size,
     );
     let search_icon = ViewRect {
@@ -171,7 +176,7 @@ fn push_open_with_chooser_surface(
         query,
         IconDrawLayer::Overlay,
     ) {
-        push_open_with_search_icon(vertices, search_icon, query, scale, size);
+        push_open_with_search_icon(vertices, search_icon, query, theme, scale, size);
     }
     let query_text_rect = open_with_chooser_query_text_rect_scaled(rect, scale);
     if chooser.query.is_empty() {
@@ -179,7 +184,7 @@ fn push_open_with_chooser_surface(
             "Search applications",
             query_text_rect,
             query,
-            popup_muted_text(),
+            theme.muted_text,
             LabelAlignment::Start,
         );
     } else {
@@ -187,7 +192,7 @@ fn push_open_with_chooser_surface(
             &chooser.query,
             query_text_rect,
             query,
-            popup_body_text(),
+            theme.body_text,
             LabelAlignment::Start,
         );
     }
@@ -217,7 +222,7 @@ fn push_open_with_chooser_surface(
             },
             query,
             caret_width / 2.0,
-            POPUP_FIELD_FOCUS,
+            theme.field_focus,
             size,
         );
     }
@@ -233,8 +238,8 @@ fn push_open_with_chooser_surface(
         list,
         rect,
         scaled_dialog_metric(8.0, scale),
-        POPUP_INPUT,
-        POPUP_DIVIDER,
+        theme.input,
+        theme.divider,
         scale,
         size,
     );
@@ -249,7 +254,7 @@ fn push_open_with_chooser_surface(
                 height: scaled_dialog_metric(18.0, scale),
             },
             list,
-            popup_muted_text(),
+            theme.muted_text,
         );
     } else {
         for (visible_row, tree_row) in visible.iter().copied().enumerate() {
@@ -268,7 +273,7 @@ fn push_open_with_chooser_surface(
             };
             let selected = row == chooser.selected_index;
             let row_radius = scaled_dialog_metric(BREEZE_ITEM_ROUNDNESS, scale);
-            let row_background = details_row_background_color(false, false, visible_row % 2 == 1);
+            let row_background = theme.list_row_background(visible_row % 2 == 1);
             push_clipped_rounded_rect(vertices, row_rect, list, row_radius, row_background, size);
             if selected {
                 push_clipped_rounded_highlight(
@@ -277,7 +282,7 @@ fn push_open_with_chooser_surface(
                     list,
                     row_radius,
                     item_background_color(true, false),
-                    POPUP_FIELD_FOCUS,
+                    theme.field_focus,
                     scaled_dialog_metric(1.25, scale),
                     size,
                 );
@@ -294,9 +299,9 @@ fn push_open_with_chooser_surface(
                         },
                         row_clip,
                         if selected {
-                            popup_title_text()
+                            theme.title_text
                         } else {
-                            popup_body_text()
+                            theme.body_text
                         },
                         LabelAlignment::Center,
                     );
@@ -326,9 +331,9 @@ fn push_open_with_chooser_surface(
                         },
                         row_clip,
                         if selected {
-                            popup_title_text()
+                            theme.title_text
                         } else {
-                            popup_body_text()
+                            theme.body_text
                         },
                     );
                 }
@@ -382,9 +387,9 @@ fn push_open_with_chooser_surface(
                         },
                         row_clip,
                         if selected {
-                            popup_title_text()
+                            theme.title_text
                         } else {
-                            popup_body_text()
+                            theme.body_text
                         },
                     );
                     text.push_label(
@@ -400,9 +405,9 @@ fn push_open_with_chooser_surface(
                         },
                         row_clip,
                         if selected {
-                            popup_soft_text()
+                            theme.soft_text
                         } else {
-                            popup_muted_text()
+                            theme.muted_text
                         },
                     );
                 }
@@ -429,14 +434,14 @@ fn push_open_with_chooser_surface(
         rect,
         scaled_dialog_metric(4.0, scale),
         if chooser.set_as_default {
-            POPUP_BUTTON_PRIMARY
+            theme.button_primary
         } else {
-            POPUP_INPUT
+            theme.input
         },
         if default_enabled {
-            POPUP_BORDER
+            theme.border
         } else {
-            POPUP_DIVIDER
+            theme.divider
         },
         scale,
         size,
@@ -460,9 +465,9 @@ fn push_open_with_chooser_surface(
         },
         rect,
         if default_enabled {
-            popup_body_text()
+            theme.body_text
         } else {
-            popup_muted_text()
+            theme.muted_text
         },
     );
 
@@ -482,7 +487,7 @@ fn push_open_with_chooser_surface(
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            popup_muted_text(),
+            theme.muted_text,
         );
     }
 
@@ -496,7 +501,7 @@ fn push_open_with_chooser_surface(
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            popup_error_text(),
+            theme.error_text,
         );
     }
 
@@ -513,11 +518,11 @@ fn push_open_with_chooser_surface(
             rect,
             scaled_dialog_metric(5.0, scale),
             if active && enabled {
-                POPUP_BUTTON_PRIMARY
+                theme.button_primary
             } else {
-                POPUP_BUTTON_SECONDARY
+                theme.button_secondary
             },
-            POPUP_BORDER,
+            theme.border,
             scale,
             size,
         );
@@ -531,11 +536,11 @@ fn push_open_with_chooser_surface(
             },
             rect,
             if active && enabled {
-                popup_inverse_text()
+                theme.inverse_text
             } else if enabled {
-                popup_body_text()
+                theme.body_text
             } else {
-                popup_muted_text()
+                theme.muted_text
             },
             LabelAlignment::Center,
         );
@@ -581,6 +586,7 @@ fn push_open_with_search_icon(
     vertices: &mut Vec<QuadVertex>,
     rect: ViewRect,
     clip: ViewRect,
+    theme: PopupTheme,
     scale: f32,
     size: PhysicalSize<u32>,
 ) {
@@ -591,7 +597,7 @@ fn push_open_with_search_icon(
         width: rect.width * 0.72,
         height: rect.height * 0.72,
     };
-    push_clipped_rect_outline(vertices, lens, clip, stroke, POPUP_MARKER_NEUTRAL, size);
+    push_clipped_rect_outline(vertices, lens, clip, stroke, theme.marker_neutral, size);
     push_clipped_rounded_rect(
         vertices,
         ViewRect {
@@ -602,7 +608,7 @@ fn push_open_with_search_icon(
         },
         clip,
         stroke / 2.0,
-        POPUP_MARKER_NEUTRAL,
+        theme.marker_neutral,
         size,
     );
 }

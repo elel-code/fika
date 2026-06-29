@@ -29,6 +29,9 @@ pub(crate) struct ShellTheme {
     chrome: UiColor,
     sidebar: UiColor,
     divider: UiColor,
+    field: UiColor,
+    field_separator: UiColor,
+    details_header: UiColor,
     primary_text: TextColor,
     muted_text: TextColor,
     section_text: TextColor,
@@ -38,6 +41,13 @@ pub(crate) struct ShellTheme {
     task_completed: UiColor,
     task_failed: UiColor,
     task_cancelled: UiColor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ShellToolbarButtonColors {
+    pub(crate) border: UiColor,
+    pub(crate) fill: UiColor,
+    pub(crate) icon: UiColor,
 }
 
 impl ShellTheme {
@@ -87,6 +97,18 @@ impl ShellTheme {
         self.divider
     }
 
+    pub(crate) fn field(self) -> UiColor {
+        self.field
+    }
+
+    pub(crate) fn field_separator(self) -> UiColor {
+        self.field_separator
+    }
+
+    pub(crate) fn details_header(self) -> UiColor {
+        self.details_header
+    }
+
     pub(crate) fn primary_text(self) -> TextColor {
         self.primary_text
     }
@@ -107,6 +129,31 @@ impl ShellTheme {
         self.accent
     }
 
+    pub(crate) fn toolbar_button(self, active: bool) -> ShellToolbarButtonColors {
+        match (self.mode, active) {
+            (ShellThemeMode::Light, true) => ShellToolbarButtonColors {
+                border: self.accent,
+                fill: [0.918, 0.945, 1.000, 1.0],
+                icon: [0.122, 0.310, 0.749, 1.0],
+            },
+            (ShellThemeMode::Light, false) => ShellToolbarButtonColors {
+                border: [0.694, 0.729, 0.776, 1.0],
+                fill: [0.984, 0.986, 0.990, 1.0],
+                icon: [0.420, 0.466, 0.545, 1.0],
+            },
+            (ShellThemeMode::Dark, true) => ShellToolbarButtonColors {
+                border: self.accent,
+                fill: [0.102, 0.173, 0.286, 1.0],
+                icon: [0.576, 0.773, 0.992, 1.0],
+            },
+            (ShellThemeMode::Dark, false) => ShellToolbarButtonColors {
+                border: self.divider,
+                fill: [0.145, 0.157, 0.176, 1.0],
+                icon: [0.580, 0.639, 0.718, 1.0],
+            },
+        }
+    }
+
     pub(crate) fn task_status_color(self, kind: ShellTaskStatusKind) -> UiColor {
         match kind {
             ShellTaskStatusKind::Running => self.task_running,
@@ -124,6 +171,9 @@ impl ShellTheme {
             chrome: [0.973, 0.976, 0.984, 1.0],
             sidebar: [0.973, 0.976, 0.984, 1.0],
             divider: [0.784, 0.808, 0.839, 1.0],
+            field: [1.000, 1.000, 1.000, 1.0],
+            field_separator: [0.835, 0.851, 0.875, 1.0],
+            details_header: [0.953, 0.961, 0.973, 1.0],
             primary_text: TextColor::rgb(36, 41, 47),
             muted_text: TextColor::rgb(89, 99, 110),
             section_text: TextColor::rgb(107, 114, 128),
@@ -144,6 +194,9 @@ impl ShellTheme {
             chrome: [0.125, 0.137, 0.153, 1.0],
             sidebar: [0.118, 0.129, 0.145, 1.0],
             divider: [0.255, 0.278, 0.310, 1.0],
+            field: [0.145, 0.157, 0.176, 1.0],
+            field_separator: [0.255, 0.278, 0.310, 1.0],
+            details_header: [0.125, 0.137, 0.153, 1.0],
             primary_text: TextColor::rgb(226, 232, 240),
             muted_text: TextColor::rgb(148, 163, 184),
             section_text: TextColor::rgb(156, 163, 175),
@@ -176,5 +229,10 @@ mod tests {
             light.task_status_color(ShellTaskStatusKind::Failed),
             [0.820, 0.184, 0.184, 1.0]
         );
+        assert_eq!(
+            dark.toolbar_button(false).border,
+            [0.255, 0.278, 0.310, 1.0]
+        );
+        assert_eq!(light.toolbar_button(true).fill, [0.918, 0.945, 1.000, 1.0]);
     }
 }

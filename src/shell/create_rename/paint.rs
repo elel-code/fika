@@ -11,11 +11,7 @@ use crate::shell::create_rename::{CreateEntryKind, ShellCreateDialog, ShellRenam
 use crate::shell::metrics::{
     CREATE_DIALOG_TITLE_HEIGHT, RENAME_DIALOG_TITLE_HEIGHT, scaled_dialog_metric,
 };
-use crate::shell::popup::style::{
-    POPUP_BORDER, POPUP_BUTTON_PRIMARY, POPUP_BUTTON_PRIMARY_SOFT, POPUP_BUTTON_SECONDARY,
-    POPUP_BUTTON_WARNING, POPUP_DIVIDER, POPUP_FIELD_FOCUS, POPUP_HEADER, POPUP_INPUT,
-    POPUP_SURFACE, popup_body_text, popup_error_text, popup_inverse_text, popup_title_text,
-};
+use crate::shell::popup::style::PopupTheme;
 use crate::{
     LabelAlignment, LabelWrap, QuadVertex, TextFrameBuilder, push_clipped_rect_outline,
     push_clipped_rounded_rect, push_rect,
@@ -23,16 +19,18 @@ use crate::{
 
 pub(crate) fn push_create_dialog(
     dialog: &ShellCreateDialog,
+    theme: PopupTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    push_create_dialog_surface(dialog, scale, vertices, text, size);
+    push_create_dialog_surface(dialog, theme, scale, vertices, text, size);
 }
 
 fn push_create_dialog_surface(
     dialog: &ShellCreateDialog,
+    theme: PopupTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
@@ -47,10 +45,10 @@ fn push_create_dialog_surface(
         rect,
         screen,
         scaled_dialog_metric(8.0, scale),
-        POPUP_SURFACE,
+        theme.surface,
         size,
     );
-    push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
+    push_clipped_rect_outline(vertices, rect, screen, 1.0, theme.border, size);
     push_rect(
         vertices,
         ViewRect {
@@ -59,7 +57,7 @@ fn push_create_dialog_surface(
             width: rect.width,
             height: title_height,
         },
-        POPUP_HEADER,
+        theme.header,
         size,
     );
     push_rect(
@@ -70,7 +68,7 @@ fn push_create_dialog_surface(
             width: rect.width,
             height: scaled_dialog_metric(1.0, scale).max(1.0),
         },
-        POPUP_DIVIDER,
+        theme.divider,
         size,
     );
     let title = if dialog.privileged {
@@ -87,7 +85,7 @@ fn push_create_dialog_surface(
             height: scaled_dialog_metric(18.0, scale),
         },
         rect,
-        popup_title_text(),
+        theme.title_text,
     );
 
     for kind in [CreateEntryKind::Folder, CreateEntryKind::File] {
@@ -99,13 +97,13 @@ fn push_create_dialog_surface(
             rect,
             scaled_dialog_metric(5.0, scale),
             if active {
-                POPUP_BUTTON_PRIMARY_SOFT
+                theme.button_primary_soft
             } else {
-                POPUP_BUTTON_SECONDARY
+                theme.button_secondary
             },
             size,
         );
-        push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+        push_clipped_rect_outline(vertices, button, rect, 1.0, theme.border, size);
         text.push_label_aligned(
             kind.label(),
             ViewRect {
@@ -116,9 +114,9 @@ fn push_create_dialog_surface(
             },
             rect,
             if active {
-                popup_inverse_text()
+                theme.inverse_text
             } else {
-                popup_body_text()
+                theme.body_text
             },
             LabelAlignment::Center,
         );
@@ -130,11 +128,11 @@ fn push_create_dialog_surface(
         input,
         rect,
         scaled_dialog_metric(5.0, scale),
-        POPUP_INPUT,
+        theme.input,
         size,
     );
-    push_clipped_rect_outline(vertices, input, rect, 1.0, POPUP_FIELD_FOCUS, size);
-    push_dialog_input_text(vertices, text, &dialog.name, input, scale, size);
+    push_clipped_rect_outline(vertices, input, rect, 1.0, theme.field_focus, size);
+    push_dialog_input_text(vertices, text, &dialog.name, input, theme, scale, size);
 
     if let Some(error) = dialog.error.as_ref() {
         text.push_label(
@@ -146,7 +144,7 @@ fn push_create_dialog_surface(
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            popup_error_text(),
+            theme.error_text,
         );
     }
 
@@ -160,6 +158,7 @@ fn push_create_dialog_surface(
             button,
             active,
             dialog.privileged,
+            theme,
             rect,
             scale,
             size,
@@ -169,16 +168,18 @@ fn push_create_dialog_surface(
 
 pub(crate) fn push_rename_dialog(
     dialog: &ShellRenameDialog,
+    theme: PopupTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    push_rename_dialog_surface(dialog, scale, vertices, text, size);
+    push_rename_dialog_surface(dialog, theme, scale, vertices, text, size);
 }
 
 fn push_rename_dialog_surface(
     dialog: &ShellRenameDialog,
+    theme: PopupTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
@@ -193,10 +194,10 @@ fn push_rename_dialog_surface(
         rect,
         screen,
         scaled_dialog_metric(8.0, scale),
-        POPUP_SURFACE,
+        theme.surface,
         size,
     );
-    push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
+    push_clipped_rect_outline(vertices, rect, screen, 1.0, theme.border, size);
     push_rect(
         vertices,
         ViewRect {
@@ -205,7 +206,7 @@ fn push_rename_dialog_surface(
             width: rect.width,
             height: title_height,
         },
-        POPUP_HEADER,
+        theme.header,
         size,
     );
     push_rect(
@@ -216,7 +217,7 @@ fn push_rename_dialog_surface(
             width: rect.width,
             height: scaled_dialog_metric(1.0, scale).max(1.0),
         },
-        POPUP_DIVIDER,
+        theme.divider,
         size,
     );
     let title = match (dialog.is_dir, dialog.privileged) {
@@ -234,7 +235,7 @@ fn push_rename_dialog_surface(
             height: scaled_dialog_metric(18.0, scale),
         },
         rect,
-        popup_title_text(),
+        theme.title_text,
     );
 
     let input = rename_dialog_input_rect_scaled(rect, scale);
@@ -243,11 +244,11 @@ fn push_rename_dialog_surface(
         input,
         rect,
         scaled_dialog_metric(5.0, scale),
-        POPUP_INPUT,
+        theme.input,
         size,
     );
-    push_clipped_rect_outline(vertices, input, rect, 1.0, POPUP_FIELD_FOCUS, size);
-    push_dialog_input_text(vertices, text, &dialog.name, input, scale, size);
+    push_clipped_rect_outline(vertices, input, rect, 1.0, theme.field_focus, size);
+    push_dialog_input_text(vertices, text, &dialog.name, input, theme, scale, size);
 
     if let Some(error) = dialog.error.as_ref() {
         text.push_label(
@@ -259,7 +260,7 @@ fn push_rename_dialog_surface(
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            popup_error_text(),
+            theme.error_text,
         );
     }
 
@@ -273,6 +274,7 @@ fn push_rename_dialog_surface(
             button,
             active,
             dialog.privileged,
+            theme,
             rect,
             scale,
             size,
@@ -285,6 +287,7 @@ fn push_dialog_input_text(
     text: &mut TextFrameBuilder<'_>,
     value: &str,
     input: ViewRect,
+    theme: PopupTheme,
     scale: f32,
     size: PhysicalSize<u32>,
 ) {
@@ -298,7 +301,7 @@ fn push_dialog_input_text(
         value,
         text_rect,
         input,
-        popup_body_text(),
+        theme.body_text,
         LabelAlignment::Start,
     );
     let cursor_x = text.measure_label_cursor_x(
@@ -326,7 +329,7 @@ fn push_dialog_input_text(
         },
         input,
         caret_width / 2.0,
-        POPUP_FIELD_FOCUS,
+        theme.field_focus,
         size,
     );
 }
@@ -338,6 +341,7 @@ fn push_dialog_button(
     button: ViewRect,
     active: bool,
     privileged: bool,
+    theme: PopupTheme,
     clip: ViewRect,
     scale: f32,
     size: PhysicalSize<u32>,
@@ -348,15 +352,15 @@ fn push_dialog_button(
         clip,
         scaled_dialog_metric(5.0, scale),
         if active && privileged {
-            POPUP_BUTTON_WARNING
+            theme.button_warning
         } else if active {
-            POPUP_BUTTON_PRIMARY
+            theme.button_primary
         } else {
-            POPUP_BUTTON_SECONDARY
+            theme.button_secondary
         },
         size,
     );
-    push_clipped_rect_outline(vertices, button, clip, 1.0, POPUP_BORDER, size);
+    push_clipped_rect_outline(vertices, button, clip, 1.0, theme.border, size);
     text.push_label_aligned(
         label,
         ViewRect {
@@ -367,9 +371,9 @@ fn push_dialog_button(
         },
         clip,
         if active {
-            popup_inverse_text()
+            theme.inverse_text
         } else {
-            popup_body_text()
+            theme.body_text
         },
         LabelAlignment::Center,
     );

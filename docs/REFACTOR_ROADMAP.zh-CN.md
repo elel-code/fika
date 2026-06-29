@@ -223,9 +223,20 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   highlight 等角色色的边界，并开始引入
   `/home/yk/Code/fika/reference/dde-file-manager` 作为功能和美化参考。Fika 新增
   `src/shell/theme.rs` 承载 light/dark palette、view surface/content、
-  chrome/sidebar/divider、文本角色和 task status 色。旧的 `*_color(dark_mode)` helper
-  先保留为兼容层并委托给 `ShellTheme`，新的 status paint 已直接消费 `ShellTheme`，
-  避免绘制路径继续散落 dark/light 分支和重复构造 `TextColor`。
+  chrome/sidebar/divider、field/details header、文本角色、toolbar button 角色和
+  task status 色。status paint、app toolbar、Places sidebar、filter bar、location
+  bar、details header 和 item text color 已直接消费 `ShellTheme`，旧的 surface/chrome/text
+  helper 被删除，main frame 与 text prewarm 路径也改为按 pass 复用 theme。这样后续继续
+  按 Deepin delegate 的角色色边界迁移时，不需要在每个绘制函数里散落 dark/light 分支
+  和重复构造 `TextColor`。
+- Popup / menu theme adapters：
+  `src/shell/popup/style.rs::PopupTheme` 作为 `ShellTheme` 到 dialog/popup paint 的模块
+  adapter，集中承载 backdrop、surface、header、input、button、warning 和 status
+  角色色；Properties、Task detail、Trash conflict、Open With、Create 和 Rename paint
+  已从旧 `POPUP_*` 常量迁移为按 pass 传入同一个 `PopupTheme`。Detached dialog 的 clear
+  color 也从 app scene theme 传入 renderer，避免独立窗口继续维护一套固定 light palette。
+  Context menu / drop menu 新增模块内 `ContextMenuPaintTheme` adapter，surface、hover、
+  separator、border 和 text 角色色跟随 `ShellTheme`，只保留 action glyph 的语义色。
 - Action Outcome / Presentation 调度边界：
   `src/app_actions/outcome.rs` 统一承载 action 执行后的 `None`、`Redraw`、`Queue`、
   `Present` 结果；除 `outcome.rs` 外的 `src/app_actions/*` 不再直接调用主窗口

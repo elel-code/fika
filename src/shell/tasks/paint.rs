@@ -4,12 +4,7 @@ use fika_core::ViewRect;
 use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::{TASK_DETAIL_TITLE_HEIGHT, scaled_dialog_metric};
-use crate::shell::popup::style::{
-    POPUP_BACKDROP, POPUP_BORDER, POPUP_BUTTON_DANGER, POPUP_BUTTON_PRIMARY,
-    POPUP_BUTTON_SECONDARY, POPUP_DIVIDER, POPUP_HEADER, POPUP_PANEL, POPUP_STATUS_CANCELLED,
-    POPUP_STATUS_COMPLETED, POPUP_STATUS_FAILED, POPUP_STATUS_RUNNING, POPUP_SURFACE,
-    popup_body_text, popup_inverse_text, popup_soft_text, popup_status_text, popup_title_text,
-};
+use crate::shell::popup::style::PopupTheme;
 use crate::shell::tasks::geometry::{
     task_detail_cancel_button_rect_scaled, task_detail_clear_button_rect_scaled,
     task_detail_dialog_rect_scaled, task_detail_dismiss_button_rect_scaled,
@@ -23,6 +18,7 @@ use crate::{
 
 pub(crate) fn push_task_detail_dialog_overlay(
     statuses: &VecDeque<ShellTaskStatus>,
+    theme: PopupTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
@@ -34,7 +30,7 @@ pub(crate) fn push_task_detail_dialog_overlay(
         width: size.width.max(1) as f32,
         height: size.height.max(1) as f32,
     };
-    push_rect(vertices, screen, POPUP_BACKDROP, size);
+    push_rect(vertices, screen, theme.backdrop, size);
     let rect = task_detail_dialog_rect_scaled(statuses.len(), size, scale);
     let title_height = scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale);
     let margin = scaled_dialog_metric(18.0, scale);
@@ -43,10 +39,10 @@ pub(crate) fn push_task_detail_dialog_overlay(
         rect,
         screen,
         scaled_dialog_metric(8.0, scale),
-        POPUP_SURFACE,
+        theme.surface,
         size,
     );
-    push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
+    push_clipped_rect_outline(vertices, rect, screen, 1.0, theme.border, size);
     push_rect(
         vertices,
         ViewRect {
@@ -55,7 +51,7 @@ pub(crate) fn push_task_detail_dialog_overlay(
             width: rect.width,
             height: title_height,
         },
-        POPUP_HEADER,
+        theme.header,
         size,
     );
     push_rect(
@@ -66,7 +62,7 @@ pub(crate) fn push_task_detail_dialog_overlay(
             width: rect.width,
             height: scaled_dialog_metric(1.0, scale).max(1.0),
         },
-        POPUP_DIVIDER,
+        theme.divider,
         size,
     );
     text.push_label_aligned(
@@ -78,7 +74,7 @@ pub(crate) fn push_task_detail_dialog_overlay(
             height: scaled_dialog_metric(18.0, scale),
         },
         rect,
-        popup_title_text(),
+        theme.title_text,
         LabelAlignment::Start,
     );
 
@@ -89,16 +85,11 @@ pub(crate) fn push_task_detail_dialog_overlay(
             row,
             rect,
             scaled_dialog_metric(6.0, scale),
-            POPUP_PANEL,
+            theme.panel,
             size,
         );
-        push_clipped_rect_outline(vertices, row, rect, 1.0, POPUP_DIVIDER, size);
-        let accent_color = match status.kind {
-            ShellTaskStatusKind::Running => POPUP_STATUS_RUNNING,
-            ShellTaskStatusKind::Completed => POPUP_STATUS_COMPLETED,
-            ShellTaskStatusKind::Failed => POPUP_STATUS_FAILED,
-            ShellTaskStatusKind::Cancelled => POPUP_STATUS_CANCELLED,
-        };
+        push_clipped_rect_outline(vertices, row, rect, 1.0, theme.divider, size);
+        let accent_color = theme.status_fill(status.kind);
         let strip_width = scaled_dialog_metric(3.0, scale).max(1.0);
         push_clipped_rounded_rect(
             vertices,
@@ -132,7 +123,7 @@ pub(crate) fn push_task_detail_dialog_overlay(
                 height: scaled_dialog_metric(18.0, scale),
             },
             row,
-            popup_body_text(),
+            theme.body_text,
             LabelAlignment::Start,
         );
         let detail = status.detail_label();
@@ -145,7 +136,7 @@ pub(crate) fn push_task_detail_dialog_overlay(
                 height: scaled_dialog_metric(18.0, scale),
             },
             row,
-            popup_soft_text(),
+            theme.soft_text,
             LabelAlignment::Start,
         );
         text.push_label_aligned(
@@ -157,7 +148,7 @@ pub(crate) fn push_task_detail_dialog_overlay(
                 height: scaled_dialog_metric(16.0, scale),
             },
             row,
-            popup_status_text(status.kind),
+            theme.status_text(status.kind),
             LabelAlignment::Start,
         );
 
@@ -169,13 +160,13 @@ pub(crate) fn push_task_detail_dialog_overlay(
             rect,
             scaled_dialog_metric(5.0, scale),
             if row_action_is_cancel {
-                POPUP_BUTTON_DANGER
+                theme.button_danger
             } else {
-                POPUP_BUTTON_SECONDARY
+                theme.button_secondary
             },
             size,
         );
-        push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+        push_clipped_rect_outline(vertices, button, rect, 1.0, theme.border, size);
         text.push_label_aligned(
             if row_action_is_cancel {
                 "Cancel"
@@ -190,9 +181,9 @@ pub(crate) fn push_task_detail_dialog_overlay(
             },
             rect,
             if row_action_is_cancel {
-                popup_inverse_text()
+                theme.inverse_text
             } else {
-                popup_body_text()
+                theme.body_text
             },
             LabelAlignment::Center,
         );
@@ -207,13 +198,13 @@ pub(crate) fn push_task_detail_dialog_overlay(
             rect,
             scaled_dialog_metric(5.0, scale),
             if active {
-                POPUP_BUTTON_PRIMARY
+                theme.button_primary
             } else {
-                POPUP_BUTTON_SECONDARY
+                theme.button_secondary
             },
             size,
         );
-        push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+        push_clipped_rect_outline(vertices, button, rect, 1.0, theme.border, size);
         text.push_label_aligned(
             label,
             ViewRect {
@@ -224,9 +215,9 @@ pub(crate) fn push_task_detail_dialog_overlay(
             },
             rect,
             if active {
-                popup_inverse_text()
+                theme.inverse_text
             } else {
-                popup_body_text()
+                theme.body_text
             },
             LabelAlignment::Center,
         );

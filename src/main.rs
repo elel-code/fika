@@ -282,7 +282,7 @@ use shell::pane_layout::{
 use shell::perf::{
     ShellFrameLatencyAsyncResults, ShellFrameLatencyCounters, ShellFrameLatencyTracker,
 };
-use shell::popup::style::*;
+use shell::popup::style::PopupTheme;
 use shell::prewarm::{
     IconRasterPrewarmStats, IconRolePrewarmStats, TextLabelPrewarmMode, TextLabelPrewarmStats,
     default_text_raster_miss_budget, icon_role_prewarm_budget_for_frame,
@@ -2220,12 +2220,21 @@ impl FikaWgpuApp {
             return;
         };
         let scale = self.scene.ui_scale();
+        let popup_theme = PopupTheme::from_shell_theme(self.scene.theme());
         let Some(dialog_window) = self.dialog_windows.get_mut(ShellDialogWindowKind::Create) else {
             return;
         };
         let layout_size = dialog_window.layout_size();
         let (renderer, window) = dialog_window.renderer_and_window_mut();
-        renderer.render_create_dialog(window, event_loop, dialog_state, scale, layout_size, reason);
+        renderer.render_create_dialog(
+            window,
+            event_loop,
+            dialog_state,
+            popup_theme,
+            scale,
+            layout_size,
+            reason,
+        );
     }
 
     fn render_rename_dialog_now(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
@@ -2234,12 +2243,21 @@ impl FikaWgpuApp {
             return;
         };
         let scale = self.scene.ui_scale();
+        let popup_theme = PopupTheme::from_shell_theme(self.scene.theme());
         let Some(dialog_window) = self.dialog_windows.get_mut(ShellDialogWindowKind::Rename) else {
             return;
         };
         let layout_size = dialog_window.layout_size();
         let (renderer, window) = dialog_window.renderer_and_window_mut();
-        renderer.render_rename_dialog(window, event_loop, dialog_state, scale, layout_size, reason);
+        renderer.render_rename_dialog(
+            window,
+            event_loop,
+            dialog_state,
+            popup_theme,
+            scale,
+            layout_size,
+            reason,
+        );
     }
 
     fn render_open_with_dialog_now(
@@ -2253,6 +2271,7 @@ impl FikaWgpuApp {
         };
         let scale = self.scene.ui_scale();
         let caret_visible = self.scene.text_caret_visible();
+        let popup_theme = PopupTheme::from_shell_theme(self.scene.theme());
         let Some(dialog) = self.dialog_windows.get_mut(ShellDialogWindowKind::OpenWith) else {
             return;
         };
@@ -2262,6 +2281,7 @@ impl FikaWgpuApp {
             window,
             event_loop,
             chooser,
+            popup_theme,
             scale,
             layout_size,
             caret_visible,
@@ -8894,8 +8914,8 @@ impl ShellScene {
             theme.view_mode_surface(slot0_projection.view.view_mode),
             size,
         );
-        self.push_app_toolbar(&mut vertices, size);
-        self.push_places_sidebar(&mut vertices, text, icons, size);
+        self.push_app_toolbar(&mut vertices, size, theme);
+        self.push_places_sidebar(&mut vertices, text, icons, size, theme);
         if let Some(metrics) = self.split_pane_metrics(size) {
             push_rect(&mut vertices, metrics.divider, theme.divider(), size);
         }
@@ -8903,19 +8923,30 @@ impl ShellScene {
         let mut content_scrollbar_visible = false;
         for projection in projections {
             let scrollbar_visible =
-                self.push_pane_projection(&mut vertices, text, icons, projection, size);
+                self.push_pane_projection(&mut vertices, text, icons, projection, size, theme);
             if projection.geometry.kind == ShellPaneId::SLOT_0 {
                 content_scrollbar_visible = scrollbar_visible;
             }
             self.queue_thumbnail_read_ahead_for_projection(projection, icons);
         }
         if let Some(overlay_text) = overlay_text {
+            let popup_theme = PopupTheme::from_shell_theme(theme);
             self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, size);
-            self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, size);
-            self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, size);
-            self.push_properties_overlay(&mut overlay_vertices, overlay_text, size);
-            self.push_task_detail_dialog_overlay(&mut overlay_vertices, overlay_text, size);
-            self.push_trash_conflict_dialog_overlay(&mut overlay_vertices, overlay_text, size);
+            self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, theme, size);
+            self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
+            self.push_properties_overlay(&mut overlay_vertices, overlay_text, popup_theme, size);
+            self.push_task_detail_dialog_overlay(
+                &mut overlay_vertices,
+                overlay_text,
+                popup_theme,
+                size,
+            );
+            self.push_trash_conflict_dialog_overlay(
+                &mut overlay_vertices,
+                overlay_text,
+                popup_theme,
+                size,
+            );
         }
 
         SceneFrame {
@@ -8946,12 +8977,13 @@ impl ShellScene {
         label: &str,
         active: bool,
         cursor: Option<usize>,
+        theme: ShellTheme,
     ) {
         let radius = self.scale_metric(7.0);
         let border_color = if active {
-            [0.184, 0.435, 0.929, 1.0]
+            theme.accent()
         } else {
-            [0.784, 0.808, 0.839, 1.0]
+            theme.divider()
         };
         push_clipped_rounded_rect(vertices, rect, clip, radius, border_color, size);
         if let Some(inner) = inset_rect(rect, self.scale_metric(1.0)) {
@@ -8960,7 +8992,7 @@ impl ShellScene {
                 inner,
                 clip,
                 (radius - self.scale_metric(1.0)).max(1.0),
-                [1.000, 1.000, 1.000, 1.0],
+                theme.field(),
                 size,
             );
         }
@@ -8985,7 +9017,7 @@ impl ShellScene {
                 height: (rect.height - self.scale_metric(14.0)).max(1.0),
             },
             clip,
-            [0.835, 0.851, 0.875, 1.0],
+            theme.field_separator(),
             size,
         );
         let text_rect = self.location_text_rect_for_path_bar_rect(rect);
@@ -9002,7 +9034,7 @@ impl ShellScene {
             label,
             text_rect,
             clip,
-            primary_text_color(self.dark_mode),
+            theme.primary_text(),
             LabelAlignment::Start,
         );
         if active && cursor.is_some() && self.text_caret_visible() {
@@ -9480,6 +9512,7 @@ impl ShellScene {
         let mut stats = TextLabelPrewarmStats::default();
         let raster_us_start = text.raster_us;
         let deadline = Instant::now() + text_label_prewarm_budget_for_mode(mode);
+        let theme = self.theme();
 
         for projection in projections {
             for item in &projection.visible_items {
@@ -9488,7 +9521,8 @@ impl ShellScene {
                     stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
                     return stats;
                 }
-                let outcome = self.prewarm_projection_text_label(projection, item.layout, text);
+                let outcome =
+                    self.prewarm_projection_text_label(projection, item.layout, text, theme);
                 if outcome != LabelCacheOutcome::Skipped {
                     stats.entries += 1;
                 }
@@ -9539,7 +9573,7 @@ impl ShellScene {
                 let Some(layout) = layout.item(layout_index) else {
                     continue;
                 };
-                let outcome = self.prewarm_projection_text_label(projection, layout, text);
+                let outcome = self.prewarm_projection_text_label(projection, layout, text, theme);
                 if outcome != LabelCacheOutcome::Skipped {
                     stats.read_ahead += 1;
                 }
@@ -9556,6 +9590,7 @@ impl ShellScene {
         projection: &ShellPaneProjection<'_>,
         layout: ItemLayout,
         text: &mut TextFrameBuilder<'_>,
+        theme: ShellTheme,
     ) -> LabelCacheOutcome {
         let Some(entry_index) = projection
             .view
@@ -9569,8 +9604,7 @@ impl ShellScene {
             return LabelCacheOutcome::Skipped;
         };
         let selected = projection.view.selection.contains(entry_index);
-        let text_color =
-            pane_item_text_color(projection.view.view_mode, entry, selected, self.dark_mode);
+        let text_color = pane_item_text_color(projection.view.view_mode, entry, selected, theme);
         match projection.view.view_mode {
             ShellViewMode::Compact => text.prewarm_label_aligned_wrapped(
                 entry.name.as_ref(),
@@ -9600,13 +9634,14 @@ impl ShellScene {
         icons: &mut IconFrameBuilder<'_>,
         projection: &ShellPaneProjection<'_>,
         size: PhysicalSize<u32>,
+        theme: ShellTheme,
     ) -> bool {
         let pane_id = projection.geometry.kind;
         let pane = projection.geometry.pane;
         let top_bar = projection.geometry.top_bar;
         let status_bar = projection.geometry.status_bar;
 
-        push_rect(vertices, top_bar, chrome_color(self.dark_mode), size);
+        push_rect(vertices, top_bar, theme.chrome(), size);
         if let Some(path_rect) = self.pane_path_bar_rect(pane_id, size) {
             let location_active = self.location_bar_active_for_pane(pane_id);
             let path_label = self.location_label_for_pane(pane_id);
@@ -9620,6 +9655,7 @@ impl ShellScene {
                 &path_label,
                 location_active,
                 path_cursor,
+                theme,
             );
         }
 
@@ -9631,26 +9667,26 @@ impl ShellScene {
                 width: pane.width,
                 height: (status_bar.y - top_bar.bottom()).max(1.0),
             },
-            view_mode_content_color(projection.view.view_mode, self.dark_mode),
+            theme.view_mode_content(projection.view.view_mode),
             size,
         );
         self.push_pane_body_border(vertices, projection, size);
         if pane_id == ShellPaneId::SLOT_0 {
-            self.push_filter_bar(vertices, text, size);
+            self.push_filter_bar(vertices, text, size, theme);
         }
         if projection.view.view_mode == ShellViewMode::Details {
-            self.push_details_header_for_projection(vertices, text, projection, size);
+            self.push_details_header_for_projection(vertices, text, projection, size, theme);
         }
 
         for item in projection.visible_items.iter().copied() {
-            self.push_pane_item(vertices, text, icons, projection, item, size);
+            self.push_pane_item(vertices, text, icons, projection, item, size, theme);
         }
         if self.rubber_band.is_some() && pane_id == self.active_pane() {
             self.push_rubber_band_for_projection(vertices, projection, size);
         }
         let content_scrollbar_visible =
             self.push_content_scrollbar_for_projection(vertices, projection, size);
-        self.push_pane_status_bar(vertices, text, projection, size);
+        self.push_pane_status_bar(vertices, text, projection, size, theme);
         content_scrollbar_visible
     }
 
@@ -9662,6 +9698,7 @@ impl ShellScene {
         projection: &ShellPaneProjection<'_>,
         item: ShellPaneVisibleItem,
         size: PhysicalSize<u32>,
+        theme: ShellTheme,
     ) {
         let layout = item.layout;
         let _slot_id = item.slot_id;
@@ -9805,8 +9842,7 @@ impl ShellScene {
             push_fallback_icon(vertices, entry, icon_rect, content_clip, size);
         }
 
-        let text_color =
-            pane_item_text_color(projection.view.view_mode, entry, selected, self.dark_mode);
+        let text_color = pane_item_text_color(projection.view.view_mode, entry, selected, theme);
         match projection.view.view_mode {
             ShellViewMode::Compact => {
                 text.push_label_aligned_no_wrap(
@@ -9850,7 +9886,7 @@ impl ShellScene {
                     height: text_height,
                 },
                 content_clip,
-                muted_text_color(self.dark_mode),
+                theme.muted_text(),
                 LabelAlignment::Start,
             );
             text.push_label_aligned_no_wrap(
@@ -9867,7 +9903,7 @@ impl ShellScene {
                     height: text_height,
                 },
                 content_clip,
-                muted_text_color(self.dark_mode),
+                theme.muted_text(),
                 LabelAlignment::Start,
             );
         }
@@ -10013,6 +10049,7 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         projection: &ShellPaneProjection<'_>,
         size: PhysicalSize<u32>,
+        theme: ShellTheme,
     ) {
         let header_height = self.details_header_height();
         let header = ViewRect {
@@ -10021,7 +10058,7 @@ impl ShellScene {
             width: projection.geometry.content.width,
             height: header_height,
         };
-        push_rect(vertices, header, [0.953, 0.961, 0.973, 1.0], size);
+        push_rect(vertices, header, theme.details_header(), size);
         push_rect(
             vertices,
             ViewRect {
@@ -10030,7 +10067,7 @@ impl ShellScene {
                 width: header.width,
                 height: 1.0,
             },
-            [0.784, 0.808, 0.839, 1.0],
+            theme.divider(),
             size,
         );
         for (label, x, width) in [
@@ -10059,7 +10096,7 @@ impl ShellScene {
                     height: self.text_line_height(),
                 },
                 header,
-                muted_text_color(self.dark_mode),
+                theme.muted_text(),
                 LabelAlignment::Start,
             );
         }
@@ -10071,6 +10108,7 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         projection: &ShellPaneProjection<'_>,
         size: PhysicalSize<u32>,
+        theme: ShellTheme,
     ) {
         let pane = projection.view;
         let rect = projection.geometry.status_bar;
@@ -10082,7 +10120,7 @@ impl ShellScene {
                 rect,
                 status: &status,
                 active: projection.geometry.kind == self.active_pane(),
-                theme: self.theme(),
+                theme,
                 scale: self.ui_scale(),
                 line_height: self.text_line_height(),
                 size,
@@ -10090,51 +10128,28 @@ impl ShellScene {
         );
     }
 
-    fn push_app_toolbar(&self, vertices: &mut Vec<QuadVertex>, size: PhysicalSize<u32>) {
+    fn push_app_toolbar(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        size: PhysicalSize<u32>,
+        theme: ShellTheme,
+    ) {
         let toolbar = self.app_toolbar_rect(size);
         push_rect(
             vertices,
             toolbar,
-            view_mode_surface_color(self.panes[ShellPaneId::SLOT_0].view_mode, self.dark_mode),
+            theme.view_mode_surface(self.panes[ShellPaneId::SLOT_0].view_mode),
             size,
         );
 
         let button = self.places_toggle_rect(size);
-        let border_color = if self.places_visible {
-            [0.184, 0.435, 0.929, 1.0]
-        } else if self.dark_mode {
-            divider_color(true)
-        } else {
-            [0.694, 0.729, 0.776, 1.0]
-        };
-        let fill_color = if self.places_visible {
-            if self.dark_mode {
-                [0.102, 0.173, 0.286, 1.0]
-            } else {
-                [0.918, 0.945, 1.000, 1.0]
-            }
-        } else if self.dark_mode {
-            [0.145, 0.157, 0.176, 1.0]
-        } else {
-            [0.984, 0.986, 0.990, 1.0]
-        };
-        let icon_color = if self.places_visible {
-            if self.dark_mode {
-                [0.576, 0.773, 0.992, 1.0]
-            } else {
-                [0.122, 0.310, 0.749, 1.0]
-            }
-        } else if self.dark_mode {
-            [0.580, 0.639, 0.718, 1.0]
-        } else {
-            [0.420, 0.466, 0.545, 1.0]
-        };
+        let button_colors = theme.toolbar_button(self.places_visible);
         push_clipped_rounded_rect(
             vertices,
             button,
             toolbar,
             self.scale_metric(6.0),
-            border_color,
+            button_colors.border,
             size,
         );
         if let Some(inner) = inset_rect(button, self.scale_metric(1.0)) {
@@ -10143,7 +10158,7 @@ impl ShellScene {
                 inner,
                 toolbar,
                 self.scale_metric(5.0),
-                fill_color,
+                button_colors.fill,
                 size,
             );
         }
@@ -10164,7 +10179,7 @@ impl ShellScene {
                 height: icon.height - self.scale_metric(4.0),
             },
             toolbar,
-            icon_color,
+            button_colors.icon,
             size,
         );
         push_clipped_rect_outline(
@@ -10177,47 +10192,19 @@ impl ShellScene {
             },
             toolbar,
             self.scale_metric(1.0),
-            icon_color,
+            button_colors.icon,
             size,
         );
 
         let split_button = self.split_view_button_rect(size);
         let split_open = self.panes.is_open(ShellPaneId::SLOT_1);
-        let split_border = if split_open {
-            [0.184, 0.435, 0.929, 1.0]
-        } else if self.dark_mode {
-            divider_color(true)
-        } else {
-            [0.694, 0.729, 0.776, 1.0]
-        };
-        let split_fill = if split_open {
-            if self.dark_mode {
-                [0.102, 0.173, 0.286, 1.0]
-            } else {
-                [0.918, 0.945, 1.000, 1.0]
-            }
-        } else if self.dark_mode {
-            [0.145, 0.157, 0.176, 1.0]
-        } else {
-            [0.984, 0.986, 0.990, 1.0]
-        };
-        let split_icon_color = if split_open {
-            if self.dark_mode {
-                [0.576, 0.773, 0.992, 1.0]
-            } else {
-                [0.122, 0.310, 0.749, 1.0]
-            }
-        } else if self.dark_mode {
-            [0.580, 0.639, 0.718, 1.0]
-        } else {
-            [0.420, 0.466, 0.545, 1.0]
-        };
+        let split_colors = theme.toolbar_button(split_open);
         push_clipped_rounded_rect(
             vertices,
             split_button,
             toolbar,
             self.scale_metric(6.0),
-            split_border,
+            split_colors.border,
             size,
         );
         if let Some(inner) = inset_rect(split_button, self.scale_metric(1.0)) {
@@ -10226,7 +10213,7 @@ impl ShellScene {
                 inner,
                 toolbar,
                 self.scale_metric(5.0),
-                split_fill,
+                split_colors.fill,
                 size,
             );
         }
@@ -10246,7 +10233,7 @@ impl ShellScene {
             },
             toolbar,
             self.scale_metric(1.0),
-            split_icon_color,
+            split_colors.icon,
             size,
         );
         push_clipped_rect(
@@ -10258,7 +10245,7 @@ impl ShellScene {
                 height: split_icon.height - self.scale_metric(4.0),
             },
             toolbar,
-            split_icon_color,
+            split_colors.icon,
             size,
         );
         if split_open {
@@ -10276,7 +10263,7 @@ impl ShellScene {
                     height: self.scale_metric(1.0),
                 },
                 toolbar,
-                split_icon_color,
+                split_colors.icon,
                 size,
             );
         }
@@ -10288,6 +10275,7 @@ impl ShellScene {
         text: &mut TextFrameBuilder<'_>,
         icons: &mut IconFrameBuilder<'_>,
         size: PhysicalSize<u32>,
+        theme: ShellTheme,
     ) {
         let sidebar = self.places_sidebar_rect(size);
         if sidebar.width <= 0.0 || sidebar.height <= 0.0 {
@@ -10300,7 +10288,7 @@ impl ShellScene {
             panel,
             sidebar,
             panel_radius,
-            divider_color(self.dark_mode),
+            theme.divider(),
             size,
         );
         if let Some(inner_panel) = inset_rect(panel, self.scale_metric(1.0)) {
@@ -10309,7 +10297,7 @@ impl ShellScene {
                 inner_panel,
                 sidebar,
                 (panel_radius - self.scale_metric(1.0)).max(1.0),
-                sidebar_color(self.dark_mode),
+                theme.sidebar(),
                 size,
             );
         }
@@ -10321,7 +10309,7 @@ impl ShellScene {
                 width: self.scale_metric(PLACES_SIDEBAR_SPLITTER_WIDTH),
                 height: sidebar.height,
             },
-            divider_color(self.dark_mode),
+            theme.divider(),
             size,
         );
 
@@ -10348,7 +10336,7 @@ impl ShellScene {
                 height: text_height,
             },
             panel,
-            primary_text_color(self.dark_mode),
+            theme.primary_text(),
             LabelAlignment::Start,
         );
 
@@ -10367,7 +10355,7 @@ impl ShellScene {
                         place.group,
                         section,
                         panel,
-                        section_text_color(self.dark_mode),
+                        theme.section_text(),
                         LabelAlignment::Start,
                     );
                 }
@@ -10452,9 +10440,9 @@ impl ShellScene {
                     },
                     panel,
                     if active {
-                        accent_text_color(self.dark_mode)
+                        theme.accent_text()
                     } else {
-                        primary_text_color(self.dark_mode)
+                        theme.primary_text()
                     },
                     LabelAlignment::Start,
                 );
@@ -10470,7 +10458,7 @@ impl ShellScene {
                         },
                         panel,
                         dot_size / 2.0,
-                        [0.184, 0.435, 0.929, 1.0],
+                        theme.accent(),
                         size,
                     );
                 }
@@ -10503,7 +10491,7 @@ impl ShellScene {
         if let Some((track, thumb)) = self.places_scrollbar_rects(size) {
             push_scrollbar(vertices, track, thumb, panel, size);
         }
-        self.push_places_task_area(vertices, text, size);
+        self.push_places_task_area(vertices, text, size, theme);
     }
 
     fn push_places_task_area(
@@ -10511,6 +10499,7 @@ impl ShellScene {
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
+        theme: ShellTheme,
     ) {
         let Some(rect) = self.places_task_area_rect(size) else {
             return;
@@ -10522,7 +10511,7 @@ impl ShellScene {
                 rect,
                 sidebar: self.places_sidebar_rect(size),
                 statuses: &self.task_statuses,
-                theme: self.theme(),
+                theme,
                 scale: self.ui_scale(),
                 small_line_height: self.small_text_line_height(),
                 size,
@@ -10535,11 +10524,12 @@ impl ShellScene {
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
         size: PhysicalSize<u32>,
+        theme: ShellTheme,
     ) {
         let Some(rect) = self.filter_bar_rect(size) else {
             return;
         };
-        push_rect(vertices, rect, chrome_color(self.dark_mode), size);
+        push_rect(vertices, rect, theme.chrome(), size);
         push_rect(
             vertices,
             ViewRect {
@@ -10548,7 +10538,7 @@ impl ShellScene {
                 width: rect.width,
                 height: 1.0,
             },
-            divider_color(self.dark_mode),
+            theme.divider(),
             size,
         );
         text.push_label(
@@ -10560,7 +10550,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            muted_text_color(self.dark_mode),
+            theme.muted_text(),
         );
         let pattern = if self.filter_pattern.is_empty() {
             ""
@@ -10576,7 +10566,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            primary_text_color(self.dark_mode),
+            theme.primary_text(),
         );
     }
 
@@ -10750,7 +10740,7 @@ impl ShellScene {
                 height: self.text_line_height(),
             },
             rect,
-            primary_text_color(self.dark_mode),
+            self.theme().primary_text(),
             LabelAlignment::Start,
         );
 
@@ -10818,11 +10808,13 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
         if let Some(menu) = self.drop_menu.as_ref() {
             shell::context_menu::paint::push_drop_menu_overlay(
                 menu,
+                theme,
                 self.ui_scale(),
                 vertices,
                 text,
@@ -10836,12 +10828,14 @@ impl ShellScene {
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
         icons: &mut IconFrameBuilder<'_>,
+        theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
         if let Some(menu) = self.context_menu.as_ref() {
             shell::context_menu::paint::push_context_menu_overlay(
                 menu,
                 self.show_hidden,
+                theme,
                 self.ui_scale(),
                 vertices,
                 text,
@@ -10855,11 +10849,13 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        popup_theme: PopupTheme,
         size: PhysicalSize<u32>,
     ) {
         if let Some(overlay) = self.properties_overlay.as_ref() {
             shell::properties::paint::push_properties_overlay(
                 overlay,
+                popup_theme,
                 self.ui_scale(),
                 vertices,
                 text,
@@ -10872,11 +10868,13 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        popup_theme: PopupTheme,
         size: PhysicalSize<u32>,
     ) {
         if self.task_detail_dialog.is_some() {
             shell::tasks::paint::push_task_detail_dialog_overlay(
                 &self.task_statuses,
+                popup_theme,
                 self.ui_scale(),
                 vertices,
                 text,
@@ -10889,6 +10887,7 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        popup_theme: PopupTheme,
         size: PhysicalSize<u32>,
     ) {
         let Some(dialog) = self.trash_conflict_dialog.as_ref() else {
@@ -10900,7 +10899,7 @@ impl ShellScene {
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        push_rect(vertices, screen, POPUP_BACKDROP, size);
+        push_rect(vertices, screen, popup_theme.backdrop, size);
         let scale = self.ui_scale();
         let rect = trash_conflict_dialog_rect_scaled(dialog, size, scale);
         let title_height = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_TITLE_HEIGHT, scale);
@@ -10910,10 +10909,17 @@ impl ShellScene {
             rect,
             screen,
             scaled_dialog_metric(8.0, scale),
-            POPUP_SURFACE,
+            popup_theme.surface,
             size,
         );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BUTTON_WARNING, size);
+        push_clipped_rect_outline(
+            vertices,
+            rect,
+            screen,
+            1.0,
+            popup_theme.button_warning,
+            size,
+        );
         push_rect(
             vertices,
             ViewRect {
@@ -10922,7 +10928,7 @@ impl ShellScene {
                 width: rect.width,
                 height: title_height,
             },
-            POPUP_WARNING_HEADER,
+            popup_theme.warning_header,
             size,
         );
         push_rect(
@@ -10933,7 +10939,7 @@ impl ShellScene {
                 width: rect.width,
                 height: scaled_dialog_metric(1.0, scale).max(1.0),
             },
-            POPUP_WARNING_DIVIDER,
+            popup_theme.warning_divider,
             size,
         );
         text.push_label(
@@ -10945,7 +10951,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            popup_warning_text(),
+            popup_theme.warning_text,
         );
 
         let count = dialog.conflicts.len();
@@ -10958,7 +10964,7 @@ impl ShellScene {
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            popup_body_text(),
+            popup_theme.body_text,
         );
         if let Some(conflict) = dialog.first_conflict() {
             text.push_label(
@@ -10970,7 +10976,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                popup_soft_text(),
+                popup_theme.soft_text,
             );
             text.push_label(
                 &format!("Trash: {}", conflict.trash_path.display()),
@@ -10981,7 +10987,7 @@ impl ShellScene {
                     height: scaled_dialog_metric(18.0, scale),
                 },
                 rect,
-                popup_soft_text(),
+                popup_theme.soft_text,
             );
         }
 
@@ -10994,13 +11000,13 @@ impl ShellScene {
                 rect,
                 scaled_dialog_metric(5.0, scale),
                 if active {
-                    POPUP_BUTTON_WARNING
+                    popup_theme.button_warning
                 } else {
-                    POPUP_BUTTON_SECONDARY
+                    popup_theme.button_secondary
                 },
                 size,
             );
-            push_clipped_rect_outline(vertices, button, rect, 1.0, POPUP_BORDER, size);
+            push_clipped_rect_outline(vertices, button, rect, 1.0, popup_theme.border, size);
             text.push_label_aligned(
                 label,
                 ViewRect {
@@ -11011,9 +11017,9 @@ impl ShellScene {
                 },
                 rect,
                 if active {
-                    popup_inverse_text()
+                    popup_theme.inverse_text
                 } else {
-                    popup_body_text()
+                    popup_theme.body_text
                 },
                 LabelAlignment::Center,
             );
@@ -12640,8 +12646,9 @@ impl WgpuState {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        popup_theme: PopupTheme,
     ) {
-        let [r, g, b, a] = POPUP_SURFACE;
+        let [r, g, b, a] = popup_theme.surface;
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("fika-wgpu-detached-dialog-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -12906,6 +12913,7 @@ impl WgpuState {
         &mut self,
         window: &dyn Window,
         _event_loop: &dyn ActiveEventLoop,
+        popup_theme: PopupTheme,
         scale: f32,
         layout_size: PhysicalSize<u32>,
         reason: &'static str,
@@ -12942,7 +12950,7 @@ impl WgpuState {
 
         let (view, mut encoder) =
             self.begin_surface_frame_encoding(&frame, "fika-wgpu-detached-dialog-frame");
-        self.encode_detached_dialog_pass(&mut encoder, &view);
+        self.encode_detached_dialog_pass(&mut encoder, &view, popup_theme);
         let presented_frame = self.submit_surface_frame(window, frame, encoder);
         if presented_frame == 1 || fika_frame_log_all_enabled() {
             fika_log!(
@@ -12973,6 +12981,7 @@ impl WgpuState {
         window: &dyn Window,
         event_loop: &dyn ActiveEventLoop,
         chooser: &ShellOpenWithChooser,
+        popup_theme: PopupTheme,
         scale: f32,
         layout_size: PhysicalSize<u32>,
         caret_visible: bool,
@@ -12981,6 +12990,7 @@ impl WgpuState {
         self.render_detached_dialog(
             window,
             event_loop,
+            popup_theme,
             scale,
             layout_size,
             reason,
@@ -12988,6 +12998,7 @@ impl WgpuState {
             |vertices, text_builder, icon_builder, size| {
                 shell::open_with::paint::push_open_with_chooser_dialog(
                     chooser,
+                    popup_theme,
                     scale,
                     caret_visible,
                     vertices,
@@ -13004,6 +13015,7 @@ impl WgpuState {
         window: &dyn Window,
         event_loop: &dyn ActiveEventLoop,
         dialog: &ShellCreateDialog,
+        popup_theme: PopupTheme,
         scale: f32,
         layout_size: PhysicalSize<u32>,
         reason: &'static str,
@@ -13011,6 +13023,7 @@ impl WgpuState {
         self.render_detached_dialog(
             window,
             event_loop,
+            popup_theme,
             scale,
             layout_size,
             reason,
@@ -13018,6 +13031,7 @@ impl WgpuState {
             |vertices, text_builder, _icon_builder, size| {
                 shell::create_rename::paint::push_create_dialog(
                     dialog,
+                    popup_theme,
                     scale,
                     vertices,
                     text_builder,
@@ -13032,6 +13046,7 @@ impl WgpuState {
         window: &dyn Window,
         event_loop: &dyn ActiveEventLoop,
         dialog: &ShellRenameDialog,
+        popup_theme: PopupTheme,
         scale: f32,
         layout_size: PhysicalSize<u32>,
         reason: &'static str,
@@ -13039,6 +13054,7 @@ impl WgpuState {
         self.render_detached_dialog(
             window,
             event_loop,
+            popup_theme,
             scale,
             layout_size,
             reason,
@@ -13046,6 +13062,7 @@ impl WgpuState {
             |vertices, text_builder, _icon_builder, size| {
                 shell::create_rename::paint::push_rename_dialog(
                     dialog,
+                    popup_theme,
                     scale,
                     vertices,
                     text_builder,
@@ -18021,42 +18038,6 @@ fn view_mode_clear_color(view_mode: ShellViewMode, dark_mode: bool) -> wgpu::Col
     ShellTheme::for_dark_mode(dark_mode).view_mode_clear(view_mode)
 }
 
-fn view_mode_surface_color(view_mode: ShellViewMode, dark_mode: bool) -> [f32; 4] {
-    ShellTheme::for_dark_mode(dark_mode).view_mode_surface(view_mode)
-}
-
-fn view_mode_content_color(view_mode: ShellViewMode, dark_mode: bool) -> [f32; 4] {
-    ShellTheme::for_dark_mode(dark_mode).view_mode_content(view_mode)
-}
-
-fn chrome_color(dark_mode: bool) -> [f32; 4] {
-    ShellTheme::for_dark_mode(dark_mode).chrome()
-}
-
-fn sidebar_color(dark_mode: bool) -> [f32; 4] {
-    ShellTheme::for_dark_mode(dark_mode).sidebar()
-}
-
-fn divider_color(dark_mode: bool) -> [f32; 4] {
-    ShellTheme::for_dark_mode(dark_mode).divider()
-}
-
-fn primary_text_color(dark_mode: bool) -> TextColor {
-    ShellTheme::for_dark_mode(dark_mode).primary_text()
-}
-
-fn muted_text_color(dark_mode: bool) -> TextColor {
-    ShellTheme::for_dark_mode(dark_mode).muted_text()
-}
-
-fn section_text_color(dark_mode: bool) -> TextColor {
-    ShellTheme::for_dark_mode(dark_mode).section_text()
-}
-
-fn accent_text_color(dark_mode: bool) -> TextColor {
-    ShellTheme::for_dark_mode(dark_mode).accent_text()
-}
-
 fn details_size_label(entry: &Entry) -> String {
     if entry.is_dir {
         "Folder".to_string()
@@ -18130,18 +18111,18 @@ fn pane_item_text_color(
     view_mode: ShellViewMode,
     entry: &Entry,
     selected: bool,
-    dark_mode: bool,
+    theme: ShellTheme,
 ) -> TextColor {
     if selected {
-        if dark_mode {
+        if theme.is_dark() {
             TextColor::rgb(241, 245, 249)
         } else {
             TextColor::rgb(15, 23, 42)
         }
     } else if view_mode != ShellViewMode::Details && entry.is_dir {
-        accent_text_color(dark_mode)
+        theme.accent_text()
     } else {
-        primary_text_color(dark_mode)
+        theme.primary_text()
     }
 }
 
@@ -31511,7 +31492,8 @@ text/plain=writer.desktop;\n",
             Vec::new(),
         );
 
-        let outcome = scene.prewarm_projection_text_label(&projection, item, &mut text);
+        let outcome =
+            scene.prewarm_projection_text_label(&projection, item, &mut text, scene.theme());
         drop(text);
 
         assert!(matches!(

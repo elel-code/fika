@@ -19,6 +19,7 @@ use crate::shell::metrics::{
     CONTEXT_MENU_ICON_SIZE, CONTEXT_MENU_ROW_HEIGHT, CONTEXT_MENU_TEXT_LINE_HEIGHT,
     CONTEXT_MENU_VERTICAL_PADDING,
 };
+use crate::shell::theme::{ShellTheme, UiColor};
 use crate::{
     IconDrawLayer, IconFrameBuilder, LabelAlignment, QuadVertex, TextFrameBuilder,
     push_clipped_rect, push_clipped_rect_outline, push_clipped_rounded_rect, push_rect,
@@ -46,13 +47,52 @@ enum ContextMenuGlyph {
     Remove,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ContextMenuPaintTheme {
+    surface: UiColor,
+    hover: UiColor,
+    separator: UiColor,
+    border: UiColor,
+    text: TextColor,
+    hover_text: TextColor,
+    muted_text: TextColor,
+}
+
+impl ContextMenuPaintTheme {
+    fn from_shell_theme(theme: ShellTheme) -> Self {
+        if theme.is_dark() {
+            Self {
+                surface: theme.field(),
+                hover: theme.toolbar_button(true).fill,
+                separator: theme.divider(),
+                border: theme.divider(),
+                text: theme.primary_text(),
+                hover_text: theme.accent_text(),
+                muted_text: theme.muted_text(),
+            }
+        } else {
+            Self {
+                surface: [1.000, 1.000, 1.000, 1.0],
+                hover: [0.918, 0.945, 1.000, 1.0],
+                separator: [0.898, 0.906, 0.922, 1.0],
+                border: [0.784, 0.808, 0.839, 1.0],
+                text: TextColor::rgb(36, 41, 47),
+                hover_text: TextColor::rgb(31, 79, 191),
+                muted_text: TextColor::rgb(89, 99, 110),
+            }
+        }
+    }
+}
+
 pub(crate) fn push_drop_menu_overlay(
     menu: &ShellDropMenu,
+    shell_theme: ShellTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
+    let theme = ContextMenuPaintTheme::from_shell_theme(shell_theme);
     let rect = drop_menu_rect_scaled(menu, size, scale);
     let padding_y = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale);
     let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale);
@@ -67,7 +107,7 @@ pub(crate) fn push_drop_menu_overlay(
         rect,
         clip,
         scaled_context_menu_metric(6.0, scale),
-        [1.000, 1.000, 1.000, 1.0],
+        theme.surface,
         size,
     );
 
@@ -79,7 +119,7 @@ pub(crate) fn push_drop_menu_overlay(
             height: row_height,
         };
         if menu.hovered_row == Some(row) {
-            push_rect(vertices, row_rect, [0.918, 0.945, 1.000, 1.0], size);
+            push_rect(vertices, row_rect, theme.hover, size);
         }
         if matches!(item.command, ShellDropMenuCommand::Cancel) {
             push_clipped_rect(
@@ -91,7 +131,7 @@ pub(crate) fn push_drop_menu_overlay(
                     height: scale.round().max(1.0),
                 },
                 rect,
-                [0.898, 0.906, 0.922, 1.0],
+                theme.separator,
                 size,
             );
         }
@@ -113,22 +153,24 @@ pub(crate) fn push_drop_menu_overlay(
                 height: text_height,
             },
             rect,
-            menu_text_color(menu.hovered_row == Some(row)),
+            menu_text_color(menu.hovered_row == Some(row), theme),
             LabelAlignment::Start,
         );
     }
-    push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
+    push_clipped_rect_outline(vertices, rect, clip, 1.0, theme.border, size);
 }
 
 pub(crate) fn push_context_menu_overlay(
     menu: &ShellContextMenu,
     show_hidden: bool,
+    shell_theme: ShellTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     icons: &mut IconFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
+    let theme = ContextMenuPaintTheme::from_shell_theme(shell_theme);
     let rect = context_menu_rect_scaled(menu, size, scale);
     let padding_y = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale);
     let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale);
@@ -143,7 +185,7 @@ pub(crate) fn push_context_menu_overlay(
         rect,
         clip,
         scaled_context_menu_metric(6.0, scale),
-        [1.000, 1.000, 1.000, 1.0],
+        theme.surface,
         size,
     );
 
@@ -156,7 +198,7 @@ pub(crate) fn push_context_menu_overlay(
             height: row_height,
         };
         if menu.hovered_row == Some(row) {
-            push_rect(vertices, row_rect, [0.918, 0.945, 1.000, 1.0], size);
+            push_rect(vertices, row_rect, theme.hover, size);
         }
         if context_menu_separator_before(&menu.target, row) {
             push_clipped_rect(
@@ -168,7 +210,7 @@ pub(crate) fn push_context_menu_overlay(
                     height: scale.round().max(1.0),
                 },
                 rect,
-                [0.898, 0.906, 0.922, 1.0],
+                theme.separator,
                 size,
             );
         }
@@ -193,7 +235,7 @@ pub(crate) fn push_context_menu_overlay(
                 height: text_height,
             },
             rect,
-            menu_text_color(menu.hovered_row == Some(row)),
+            menu_text_color(menu.hovered_row == Some(row), theme),
             LabelAlignment::Start,
         );
         if item.submenu.is_some() {
@@ -206,13 +248,13 @@ pub(crate) fn push_context_menu_overlay(
                     height: text_height,
                 },
                 rect,
-                TextColor::rgb(89, 99, 110),
+                theme.muted_text,
                 LabelAlignment::Center,
             );
         }
     }
-    push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
-    push_context_submenu_overlay(menu, show_hidden, scale, vertices, text, icons, size);
+    push_clipped_rect_outline(vertices, rect, clip, 1.0, theme.border, size);
+    push_context_submenu_overlay(menu, show_hidden, theme, scale, vertices, text, icons, size);
 }
 
 pub(crate) fn context_menu_named_icon_request(
@@ -238,6 +280,7 @@ pub(crate) fn context_menu_named_icon_request(
 fn push_context_submenu_overlay(
     menu: &ShellContextMenu,
     show_hidden: bool,
+    theme: ContextMenuPaintTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
@@ -264,7 +307,7 @@ fn push_context_submenu_overlay(
         rect,
         clip,
         scaled_context_menu_metric(6.0, scale),
-        [1.000, 1.000, 1.000, 1.0],
+        theme.surface,
         size,
     );
     for (row, item) in items.iter().enumerate() {
@@ -275,7 +318,7 @@ fn push_context_submenu_overlay(
             height: row_height,
         };
         if menu.hovered_submenu_row == Some(row) {
-            push_rect(vertices, row_rect, [0.918, 0.945, 1.000, 1.0], size);
+            push_rect(vertices, row_rect, theme.hover, size);
         }
         if item.separator_before {
             push_clipped_rect(
@@ -287,7 +330,7 @@ fn push_context_submenu_overlay(
                     height: scale.round().max(1.0),
                 },
                 rect,
-                [0.898, 0.906, 0.922, 1.0],
+                theme.separator,
                 size,
             );
         }
@@ -308,11 +351,11 @@ fn push_context_submenu_overlay(
                 height: text_height,
             },
             rect,
-            menu_text_color(menu.hovered_submenu_row == Some(row)),
+            menu_text_color(menu.hovered_submenu_row == Some(row), theme),
             LabelAlignment::Start,
         );
     }
-    push_clipped_rect_outline(vertices, rect, clip, 1.0, [0.784, 0.808, 0.839, 1.0], size);
+    push_clipped_rect_outline(vertices, rect, clip, 1.0, theme.border, size);
 }
 
 fn push_context_menu_item_icon(
@@ -676,10 +719,27 @@ fn screen_rect(size: PhysicalSize<u32>) -> ViewRect {
     }
 }
 
-fn menu_text_color(hovered: bool) -> TextColor {
+fn menu_text_color(hovered: bool, theme: ContextMenuPaintTheme) -> TextColor {
     if hovered {
-        TextColor::rgb(31, 79, 191)
+        theme.hover_text
     } else {
-        TextColor::rgb(36, 41, 47)
+        theme.text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_menu_theme_follows_shell_theme_mode() {
+        let light = ContextMenuPaintTheme::from_shell_theme(ShellTheme::for_dark_mode(false));
+        let dark_shell = ShellTheme::for_dark_mode(true);
+        let dark = ContextMenuPaintTheme::from_shell_theme(dark_shell);
+
+        assert_eq!(light.surface, [1.000, 1.000, 1.000, 1.0]);
+        assert_eq!(dark.surface, dark_shell.field());
+        assert_eq!(dark.border, dark_shell.divider());
+        assert_eq!(menu_text_color(true, dark), dark_shell.accent_text());
     }
 }

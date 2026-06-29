@@ -228,9 +228,9 @@ Deepin reference:
 - Source: /home/yk/Code/fika/reference/dde-file-manager/src/plugins/filemanager/dfmplugin-workspace/views/baseitemdelegate.cpp；/home/yk/Code/fika/reference/dde-file-manager/src/dfm-base/widgets/dfmwindow/filemanagerwindow.cpp
 - Symbol: BaseItemDelegate uses DPalette/DPaletteHelper/DGuiApplicationHelper；FileManagerWindow connects DGuiApplicationHelper::themeTypeChanged and DPlatformTheme::iconThemeNameChanged
 - Deepin boundary: item delegate 和 window chrome 不直接散落 light/dark 常量，而从 DTK palette/theme helper 接收颜色和主题变更。
-- Fika mapping: src/shell/theme.rs::ShellTheme；src/shell/status/paint.rs::PaneStatusBarPaint / PlacesTaskAreaPaint；src/main.rs::ShellScene::theme and legacy *_color helpers.
-- Divergence: Fika 没有 DTK/QPalette；目前先建立静态 light/dark token table，并让旧 helper 委托给 ShellTheme，逐步迁移绘制模块直接消费 theme token。status paint 已完成直接消费，主 paint 仍保留兼容 helper，避免一次性大改影响 damage/hash 测试。
-- Verification: cargo fmt；cargo check；cargo test theme_mode_selects_light_and_dark_palettes；cargo test pane_status_text_is_plain_pane_state；cargo test task_area_opens_detail_dialog_and_clear_keeps_running_tasks_visible；cargo test；git diff --check。
+- Fika mapping: src/shell/theme.rs::ShellTheme / ShellToolbarButtonColors；src/shell/popup/style.rs::PopupTheme；src/shell/context_menu/paint.rs::ContextMenuPaintTheme；src/shell/status/paint.rs::PaneStatusBarPaint / PlacesTaskAreaPaint；src/main.rs::ShellScene::theme / build_frame / render_*_dialog.
+- Divergence: Fika 没有 DTK/QPalette；目前先建立静态 light/dark token table。status paint、app toolbar、Places sidebar、filter bar、location bar、details header、item text color、popup/dialog paint 和 context/drop menu chrome 已直接消费 theme token 或模块 adapter，旧的 surface/chrome/divider/text helper 与 `POPUP_*` 常量被删除；main frame、text prewarm 和 detached dialog render 路径按 pass 复用同一个 theme，避免逐 item/label/dialog 重复构造 theme/text colors。action glyph 的语义色仍保留在 context menu 模块内，避免把操作含义色混入全局 palette。
+- Verification: cargo fmt；cargo check；cargo test theme_mode_selects_light_and_dark_palettes；cargo test popup_theme_follows_shell_theme_mode；cargo test context_menu_theme_follows_shell_theme_mode；cargo test pane_status_text_is_plain_pane_state；cargo test task_area_opens_detail_dialog_and_clear_keeps_running_tasks_visible；cargo test；git diff --check。
 ```
 
 ## Review 检查项

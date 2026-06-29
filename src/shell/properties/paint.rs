@@ -2,10 +2,7 @@ use fika_core::ViewRect;
 use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::{PROPERTIES_ROW_HEIGHT, PROPERTIES_TITLE_HEIGHT, scaled_dialog_metric};
-use crate::shell::popup::style::{
-    POPUP_BACKDROP, POPUP_BORDER, POPUP_DIVIDER, POPUP_HEADER, POPUP_ROW_ALT, POPUP_SURFACE,
-    popup_body_text, popup_muted_text, popup_title_text,
-};
+use crate::shell::popup::style::PopupTheme;
 use crate::shell::properties::ShellPropertiesOverlay;
 use crate::shell::properties::geometry::properties_overlay_rect_scaled;
 use crate::{
@@ -14,6 +11,7 @@ use crate::{
 
 pub(crate) fn push_properties_overlay(
     overlay: &ShellPropertiesOverlay,
+    theme: PopupTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
@@ -25,7 +23,7 @@ pub(crate) fn push_properties_overlay(
         width: size.width.max(1) as f32,
         height: size.height.max(1) as f32,
     };
-    push_rect(vertices, screen, POPUP_BACKDROP, size);
+    push_rect(vertices, screen, theme.backdrop, size);
     let rect = properties_overlay_rect_scaled(overlay, size, scale);
     let title_height = scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale);
     let row_height = scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale);
@@ -35,10 +33,10 @@ pub(crate) fn push_properties_overlay(
         rect,
         screen,
         scaled_dialog_metric(8.0, scale),
-        POPUP_SURFACE,
+        theme.surface,
         size,
     );
-    push_clipped_rect_outline(vertices, rect, screen, 1.0, POPUP_BORDER, size);
+    push_clipped_rect_outline(vertices, rect, screen, 1.0, theme.border, size);
     push_rect(
         vertices,
         ViewRect {
@@ -47,7 +45,7 @@ pub(crate) fn push_properties_overlay(
             width: rect.width,
             height: title_height,
         },
-        POPUP_HEADER,
+        theme.header,
         size,
     );
     push_rect(
@@ -58,7 +56,7 @@ pub(crate) fn push_properties_overlay(
             width: rect.width,
             height: scaled_dialog_metric(1.0, scale).max(1.0),
         },
-        POPUP_DIVIDER,
+        theme.divider,
         size,
     );
     text.push_label(
@@ -70,7 +68,7 @@ pub(crate) fn push_properties_overlay(
             height: scaled_dialog_metric(18.0, scale),
         },
         rect,
-        popup_title_text(),
+        theme.title_text,
     );
 
     let rows_y = rect.y + title_height + scaled_dialog_metric(10.0, scale);
@@ -87,7 +85,7 @@ pub(crate) fn push_properties_overlay(
                 },
                 rect,
                 scaled_dialog_metric(5.0, scale),
-                POPUP_ROW_ALT,
+                theme.row_alt,
                 size,
             );
         }
@@ -100,7 +98,7 @@ pub(crate) fn push_properties_overlay(
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            popup_muted_text(),
+            theme.muted_text,
         );
         text.push_label(
             &row.value,
@@ -111,7 +109,7 @@ pub(crate) fn push_properties_overlay(
                 height: scaled_dialog_metric(18.0, scale),
             },
             rect,
-            popup_body_text(),
+            theme.body_text,
         );
     }
 }
