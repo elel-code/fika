@@ -2130,8 +2130,10 @@ impl ApplicationHandler for FikaWgpuApp {
             }
             WindowEvent::SurfaceResized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {
+                    let previous_size = renderer.size;
                     renderer.resize(size);
-                    self.scene.clamp_scroll(renderer.size);
+                    self.scene
+                        .reflow_pane_items_after_window_resize(previous_size, renderer.size);
                 }
                 if let Some(window) = self.window.as_ref() {
                     window.request_redraw();
@@ -2141,9 +2143,19 @@ impl ApplicationHandler for FikaWgpuApp {
                 if let (Some(renderer), Some(window)) =
                     (self.renderer.as_mut(), self.window.as_ref())
                 {
+                    let previous_size = renderer.size;
+                    let previous_rects = self
+                        .scene
+                        .visible_item_rects_by_path_for_open_panes(previous_size);
                     renderer.resize(window.surface_size());
-                    self.scene
-                        .set_scale_factor(window.scale_factor() as f32, renderer.size);
+                    let next_size = renderer.size;
+                    let scale_changed = self
+                        .scene
+                        .set_scale_factor(window.scale_factor() as f32, next_size);
+                    if scale_changed || previous_size != next_size {
+                        self.scene
+                            .start_item_reflow_transitions_for_panes(previous_rects, next_size);
+                    }
                     window.request_redraw();
                 }
             }
@@ -2984,15 +2996,54 @@ impl ShellScene {
         rects
     }
 
+    fn visible_item_rects_by_path_for_open_panes(
+        &self,
+        size: PhysicalSize<u32>,
+    ) -> Vec<(ShellPaneId, HashMap<PathBuf, ViewRect>)> {
+        ShellPaneId::ALL
+            .into_iter()
+            .filter_map(|pane| {
+                let rects = self.visible_item_rects_by_path_for_pane(pane, size);
+                (!rects.is_empty()).then_some((pane, rects))
+            })
+            .collect()
+    }
+
+    fn reflow_pane_items_after_window_resize(
+        &mut self,
+        previous_size: PhysicalSize<u32>,
+        next_size: PhysicalSize<u32>,
+    ) -> bool {
+        if previous_size == next_size {
+            self.clamp_scroll(next_size);
+            return false;
+        }
+        let previous_rects = self.visible_item_rects_by_path_for_open_panes(previous_size);
+        self.clamp_scroll(next_size);
+        self.start_item_reflow_transitions_for_panes(previous_rects, next_size)
+    }
+
     fn start_item_reflow_transitions(
         &mut self,
         pane: ShellPaneId,
         previous_rects: HashMap<PathBuf, ViewRect>,
         size: PhysicalSize<u32>,
-    ) {
+    ) -> bool {
         let next_rects = self.visible_item_rects_by_path_for_pane(pane, size);
         self.animations
-            .start_item_reflow(pane, previous_rects, next_rects);
+            .start_item_reflow(pane, previous_rects, next_rects)
+    }
+
+    fn start_item_reflow_transitions_for_panes(
+        &mut self,
+        previous_rects_by_pane: Vec<(ShellPaneId, HashMap<PathBuf, ViewRect>)>,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        previous_rects_by_pane
+            .into_iter()
+            .fold(false, |started, (pane, previous_rects)| {
+                self.start_item_reflow_transitions(pane, previous_rects, size) || started
+            })
     }
 
     fn item_reflow_offset_for_path(&self, pane: ShellPaneId, path: &Path) -> Option<(f32, f32)> {
@@ -19391,6 +19442,45 @@ mod tests {
         assert_ne!(scene.animation_dirty_value_with_hover(true), 0);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn window_resize_animates_visible_item_reflow() {
+        let mut scene = test_scene(
+            (0..8)
+                .map(|index| test_entry(&format!("item-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        let narrow = PhysicalSize::new(520, 360);
+        let wide = PhysicalSize::new(800, 360);
+        let narrow_columns = match scene.layout(narrow) {
+            ShellLayout::Icons(layout) => layout.columns_per_row(),
+            _ => unreachable!(),
+        };
+        let wide_columns = match scene.layout(wide) {
+            ShellLayout::Icons(layout) => layout.columns_per_row(),
+            _ => unreachable!(),
+        };
+        assert!(narrow_columns < wide_columns);
+
+        assert!(scene.reflow_pane_items_after_window_resize(narrow, wide));
+        let target = PathBuf::from("/tmp/item-02.txt");
+        let transition = scene
+            .animations
+            .item_reflow_transitions()
+            .iter()
+            .find(|transition| transition.path == target)
+            .expect("item should reflow when resize changes icon columns");
+        let next_rect = scene
+            .visible_item_rects_by_path_for_pane(ShellPaneId::SLOT_0, wide)
+            .remove(&target)
+            .expect("target should remain visible after resize");
+
+        assert_eq!(transition.pane, ShellPaneId::SLOT_0);
+        assert_eq!(transition.to, next_rect);
+        assert!(transition.moved());
+        assert!(scene.animation_active());
     }
 
     #[test]
