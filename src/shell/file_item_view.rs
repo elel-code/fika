@@ -6,12 +6,10 @@ use crate::shell::metrics::{
 };
 use crate::shell::pane::ShellPaneProjection;
 
-#[path = "dolphin/item_paint.rs"]
 pub(crate) mod item_paint;
-#[path = "dolphin/style.rs"]
 pub(crate) mod style;
-#[path = "dolphin/text.rs"]
 pub(crate) mod text;
+pub(crate) mod text_layout;
 
 pub(crate) fn dolphin_icon_size_for_zoom_level(level: i32) -> f32 {
     match level.clamp(DOLPHIN_ZOOM_LEVEL_MIN, DOLPHIN_ZOOM_LEVEL_MAX) {
@@ -22,6 +20,26 @@ pub(crate) fn dolphin_icon_size_for_zoom_level(level: i32) -> f32 {
         4 => 64.0,
         level => (64 + ((level - 4) << 4)) as f32,
     }
+}
+
+pub(crate) fn dolphin_icons_zoom_factor_for_level(level: i32) -> f32 {
+    (level.clamp(DOLPHIN_ZOOM_LEVEL_MIN, DOLPHIN_ZOOM_LEVEL_MAX) as f32 / 13.0).exp()
+}
+
+pub(crate) fn dolphin_icons_item_width(
+    icon_size: f32,
+    padding: f32,
+    text_width_index: f32,
+    average_char_width: f32,
+    ui_scale: f32,
+    zoom_level: i32,
+) -> f32 {
+    let zoom_factor = dolphin_icons_zoom_factor_for_level(zoom_level);
+    let font_factor = average_char_width / 9.0;
+    ((16.0 * ui_scale + text_width_index * 64.0 * font_factor * zoom_factor)
+        .max(icon_size + padding * 2.0 * zoom_factor))
+    .floor()
+    .max(1.0)
 }
 
 pub(crate) fn visible_layout_range_for_projection(

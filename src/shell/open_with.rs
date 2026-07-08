@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use fika_core::{DesktopLaunchPlan, MimeApplication, MimeApplicationCache};
 
-use crate::shell::dolphin::text::estimated_text_cursor_for_offset;
+use crate::shell::file_item_view::text::estimated_text_cursor_for_offset;
 use crate::shell::metrics::OPEN_WITH_CHOOSER_MAX_ROWS;
 use crate::shell::shortcuts::OpenWithCommand;
 

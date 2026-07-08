@@ -1,0 +1,364 @@
+struct FikaWgpuApp {
+    scene: ShellScene,
+    mime_applications: MimeApplicationCache,
+    settings_path: PathBuf,
+    directory_watchers: ShellDirectoryWatcherRuntime,
+    async_task_tx: Sender<ShellAsyncTaskResult>,
+    async_task_rx: Receiver<ShellAsyncTaskResult>,
+    active_task_controllers: HashMap<ShellTaskId, OperationController>,
+    active_task_base_details: HashMap<ShellTaskId, String>,
+    next_task_id: ShellTaskId,
+    modifiers: Modifiers,
+    // Drop order matters: renderer owns a surface tied to the window handle.
+    renderer: Option<WgpuState>,
+    dialog_windows: ShellDialogWindows,
+    dialog_close_main_close_guard_until: Option<Instant>,
+    clipboard: Option<ShellClipboard>,
+    window: Option<Arc<dyn Window>>,
+    cursor_icon: CursorIcon,
+    pending_redraw_frames: u8,
+    pending_render_reason: Option<&'static str>,
+    last_location_text_caret_dirty_value: u64,
+    last_open_with_text_caret_dirty_value: u64,
+    auto_cycle_views: bool,
+    next_auto_cycle: Instant,
+    autosmoke_zoom_actions: VecDeque<ZoomAction>,
+    next_autosmoke_zoom: Instant,
+    autosmoke_zoom_interval: Duration,
+    autosmoke_zoom_allow_pending_redraw: bool,
+    autosmoke_scroll_actions: VecDeque<AutosmokeScrollAction>,
+    next_autosmoke_scroll: Instant,
+    autosmoke_scroll_interval: Duration,
+    autosmoke_scroll_allow_pending_redraw: bool,
+    dialog_lifecycle_smoke: Option<DialogLifecycleSmoke>,
+}
+include!("app_controller/window_lifecycle.rs");
+include!("app_controller/dialog_windows.rs");
+include!("app_controller/async_tasks.rs");
+impl ApplicationHandler for FikaWgpuApp {
+    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.drive_directory_watchers(event_loop);
+        if let Some(deadline) = self.directory_watchers.next_reload_deadline() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        }
+    }
+
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
+        let attrs = WindowAttributes::default()
+            .with_title(window_title(&self.scene))
+            .with_surface_size(PhysicalSize::new(1100, 720));
+        let attrs = apply_window_platform_semantics(event_loop, attrs, ShellWindowRole::Main);
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(window) => window,
+            Err(error) => {
+                fika_log!("[fika-wgpu] window create failed: {error}");
+                self.exit_event_loop(event_loop, "main-window-create-failed");
+                return;
+            }
+        };
+
+        let window: Arc<dyn Window> = window.into();
+        let mut renderer = match WgpuState::new(window.clone()) {
+            Ok(renderer) => renderer,
+            Err(error) => {
+                fika_log!("[fika-wgpu] renderer init failed: {error}");
+                self.exit_event_loop(event_loop, "main-renderer-init-failed");
+                return;
+            }
+        };
+        let clipboard = match ShellClipboard::from_window(window.as_ref()) {
+            Ok(Some(clipboard)) => {
+                fika_log!(
+                    "[fika-wgpu] clipboard-ready backend={}",
+                    clipboard.backend()
+                );
+                Some(clipboard)
+            }
+            Ok(None) => {
+                fika_log!("[fika-wgpu] clipboard-unavailable backend=unsupported");
+                None
+            }
+            Err(error) => {
+                fika_log!("[fika-wgpu] clipboard-unavailable error={error}");
+                None
+            }
+        };
+
+        self.scene
+            .set_scale_factor(window.scale_factor() as f32, renderer.size);
+
+        fika_log!(
+            "[fika-wgpu] shell-ready size={}x{} scale={:.2}",
+            renderer.size.width,
+            renderer.size.height,
+            window.scale_factor()
+        );
+
+        self.scene.clamp_scroll(renderer.size);
+        renderer.prewarm_scene_caches(&mut self.scene, "startup");
+        self.renderer = Some(renderer);
+        self.clipboard = clipboard;
+        self.window = Some(window);
+
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.drive_directory_watchers(event_loop);
+        self.drain_async_task_results(event_loop);
+        let progress_changed = self.refresh_active_task_progress();
+        let animation_pruned = self.scene.prune_finished_animations();
+        if (progress_changed || animation_pruned)
+            && let Some(window) = self.window.as_ref()
+        {
+            window.request_redraw();
+        }
+        if self.auto_cycle_views && Instant::now() >= self.next_auto_cycle {
+            self.next_auto_cycle = Instant::now() + AUTO_CYCLE_INTERVAL;
+            if let Some(renderer) = self.renderer.as_ref() {
+                let next = self.scene.active_view_mode().next();
+                if self.scene.set_view_mode(next, renderer.size) {
+                    self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
+                    if let Some(window) = self.window.as_ref() {
+                        window.set_title(&window_title(&self.scene));
+                        window.request_redraw();
+                    }
+                    self.prewarm_current_scene_caches("auto-cycle");
+                    self.render_now(event_loop, "auto-cycle", true);
+                }
+            }
+        }
+        if let Some(renderer) = self.renderer.as_ref()
+            && renderer.frame_count > 0
+        {
+            let size = renderer.size;
+            self.drive_autosmoke_zoom(size);
+            self.drive_autosmoke_scroll(size);
+        }
+        self.drive_dialog_lifecycle_autosmoke(event_loop);
+        self.drain_dialog_window_deferred_closes();
+
+        let autosmoke_work_pending = self.autosmoke_work_pending();
+        let animation_active = self.scene.animation_active();
+        let next_text_caret_deadline = self.scene.next_text_caret_blink_deadline();
+        let location_caret_active = self.scene.location_text_caret_active();
+        let location_caret_dirty_value = self.scene.location_text_caret_dirty_value();
+        let location_caret_blink_due = location_caret_active
+            && location_caret_dirty_value != self.last_location_text_caret_dirty_value;
+        self.last_location_text_caret_dirty_value = if location_caret_active {
+            location_caret_dirty_value
+        } else {
+            0
+        };
+        let open_with_caret_active = self.scene.open_with_text_caret_active();
+        let open_with_caret_dirty_value = self.scene.open_with_text_caret_dirty_value();
+        let open_with_caret_blink_due = open_with_caret_active
+            && open_with_caret_dirty_value != self.last_open_with_text_caret_dirty_value;
+        self.last_open_with_text_caret_dirty_value = if open_with_caret_active {
+            open_with_caret_dirty_value
+        } else {
+            0
+        };
+        let dialog_redraw_requested =
+            open_with_caret_blink_due && self.request_open_with_dialog_redraw();
+        let needs_redraw = self.renderer.as_ref().is_some_and(|renderer| {
+            renderer.frame_count == 0
+                || renderer.rendered_view_switches != self.scene.view_switches
+                || self.pending_redraw_frames > 0
+                || animation_active
+                || location_caret_blink_due
+                || (autosmoke_work_pending && renderer.frame_count > 0)
+        });
+        let next_autosmoke_deadline = [
+            (!self.autosmoke_zoom_actions.is_empty()).then_some(self.next_autosmoke_zoom),
+            (!self.autosmoke_scroll_actions.is_empty()).then_some(self.next_autosmoke_scroll),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        let next_idle_deadline = [
+            self.auto_cycle_views.then_some(self.next_auto_cycle),
+            next_autosmoke_deadline,
+            self.dialog_windows.next_deferred_close_deadline(),
+            self.scene.next_animation_frame_deadline(),
+            next_text_caret_deadline,
+            self.directory_watchers.next_reload_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+
+        if needs_redraw && let Some(window) = self.window.as_ref() {
+            window.request_redraw();
+        }
+
+        if needs_redraw || dialog_redraw_requested {
+            event_loop.set_control_flow(ControlFlow::Poll);
+        } else if !self.active_task_controllers.is_empty() {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + Duration::from_millis(100),
+            ));
+        } else if let Some(deadline) = next_idle_deadline {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.trace_window_event(window_id, &event);
+        if let Some(kind) = self.dialog_windows.window_kind_for_id(window_id) {
+            match kind {
+                ShellDialogWindowKind::Create => {
+                    self.create_dialog_window_event(event_loop, event);
+                    return;
+                }
+                ShellDialogWindowKind::OpenWith => {
+                    self.open_with_dialog_window_event(event_loop, event);
+                    return;
+                }
+                ShellDialogWindowKind::Rename => {
+                    self.rename_dialog_window_event(event_loop, event);
+                    return;
+                }
+            }
+        }
+        if self.dialog_windows.is_recently_closed_window(window_id) {
+            if matches!(event, WindowEvent::CloseRequested)
+                && window_manager_close_request_exits_application(
+                    ShellWindowCloseRequestTarget::RecentlyClosedDialog,
+                    self.dialog_windows.has_modal_window(),
+                )
+                && self.window.is_some()
+            {
+                self.close_main_window_from_window_manager_request(
+                    event_loop,
+                    "recently-closed-dialog-close-requested",
+                );
+            }
+            return;
+        }
+        let Some(main_window_id) = self.window.as_ref().map(|window| window.id()) else {
+            return;
+        };
+        if main_window_id != window_id {
+            return;
+        }
+        let modal_disposition = self.dialog_windows.modal_event_disposition(&event);
+        if modal_disposition.blocks() {
+            if modal_disposition.requests_attention() {
+                self.dialog_windows.request_modal_attention();
+            }
+            return;
+        }
+        match event {
+            WindowEvent::CloseRequested => {
+                if window_manager_close_request_exits_application(
+                    ShellWindowCloseRequestTarget::Main,
+                    self.dialog_windows.has_modal_window(),
+                ) {
+                    self.close_main_window_from_window_manager_request(
+                        event_loop,
+                        "main-close-requested",
+                    );
+                }
+            }
+            WindowEvent::SurfaceResized(size) => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    let previous_size = renderer.size;
+                    renderer.resize(size);
+                    self.scene
+                        .reflow_pane_items_after_window_resize(previous_size, renderer.size);
+                }
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let (Some(renderer), Some(window)) =
+                    (self.renderer.as_mut(), self.window.as_ref())
+                {
+                    let previous_size = renderer.size;
+                    let previous_rects = self
+                        .scene
+                        .visible_item_rects_by_path_for_open_panes(previous_size);
+                    renderer.resize(window.surface_size());
+                    let next_size = renderer.size;
+                    let scale_changed = self
+                        .scene
+                        .set_scale_factor(window.scale_factor() as f32, next_size);
+                    if scale_changed || previous_size != next_size {
+                        self.scene
+                            .start_item_reflow_transitions_for_panes(previous_rects, next_size);
+                    }
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers;
+            }
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => {
+                self.handle_main_keyboard_input(event_loop, &event);
+            }
+            WindowEvent::PointerMoved { position, .. } => {
+                self.handle_main_pointer_moved(position);
+            }
+            WindowEvent::PointerLeft { .. } => {
+                self.handle_main_pointer_left();
+            }
+            WindowEvent::DragEntered { paths, position } => {
+                let outcome = self.external_drag_entered(paths, position);
+                self.apply_window_action_outcome(outcome);
+            }
+            WindowEvent::DragMoved { position } => {
+                let outcome = self.external_drag_moved(position);
+                self.apply_window_action_outcome(outcome);
+            }
+            WindowEvent::DragDropped { paths, position } => {
+                let outcome = self.external_drag_dropped(paths, position);
+                self.apply_window_action_outcome(outcome);
+            }
+            WindowEvent::DragLeft { .. } => {
+                let outcome = self.external_drag_left();
+                self.apply_window_action_outcome(outcome);
+            }
+            WindowEvent::PointerButton {
+                state,
+                position,
+                button,
+                ..
+            } => {
+                self.handle_main_pointer_button(event_loop, state, position, button);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.handle_main_mouse_wheel(delta);
+            }
+            WindowEvent::RedrawRequested => {
+                let force_log = self.pending_redraw_frames > 0;
+                let reason = self.pending_render_reason.take().unwrap_or(if force_log {
+                    "switch-redraw"
+                } else {
+                    "redraw"
+                });
+                self.render_now(event_loop, reason, force_log);
+            }
+            _ => {}
+        }
+    }
+}

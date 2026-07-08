@@ -1,3 +1,5 @@
+pub(crate) mod paint;
+
 use fika_core::{ViewPoint, ViewRect};
 
 use crate::shell::options::ShellViewMode;

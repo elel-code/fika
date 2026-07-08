@@ -1,4 +1,4 @@
-use crate::shell::dolphin::style::DolphinItemPalette;
+use crate::shell::file_item_view::style::DolphinItemPalette;
 use crate::shell::popup::style::PopupTheme;
 use crate::shell::theme::ShellTheme;
 

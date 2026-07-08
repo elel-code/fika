@@ -1,7 +1,7 @@
 use fika_core::ViewRect;
 use winit::dpi::PhysicalSize;
 
-use crate::shell::dolphin::style::BREEZE_ITEM_ROUNDNESS;
+use crate::shell::file_item_view::style::BREEZE_ITEM_ROUNDNESS;
 use crate::shell::icon_roles::NamedIconFallback;
 use crate::shell::metrics::{
     OPEN_WITH_CHOOSER_MAX_ROWS, OPEN_WITH_CHOOSER_ROW_HEIGHT, OPEN_WITH_CHOOSER_TITLE_HEIGHT,

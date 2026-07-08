@@ -10,7 +10,7 @@ use fika_core::{
     metadata_role_results_for_requests, mime_magic_resolution_required,
 };
 
-use crate::shell::dolphin::{
+use crate::shell::file_item_view::{
     shell_dolphin_deferred_all_indexes, shell_dolphin_read_ahead_indexes,
     visible_layout_range_for_projection,
 };
