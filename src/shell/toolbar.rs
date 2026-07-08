@@ -37,15 +37,16 @@ impl ShellToolbarLayout {
 pub(crate) fn app_toolbar_layout(toolbar: ViewRect, scale: f32) -> ShellToolbarLayout {
     let margin = scale_metric(8.0, scale);
     let button_size = scale_metric(28.0, scale).min((toolbar.height - margin).max(1.0));
+    let button_y = toolbar.y + (toolbar.height - button_size) / 2.0;
     let places_toggle = ViewRect {
         x: margin,
-        y: toolbar.y + margin,
+        y: button_y,
         width: button_size,
         height: button_size,
     };
     let split_view = ViewRect {
         x: (toolbar.right() - margin - button_size).max(toolbar.x),
-        y: toolbar.y + margin,
+        y: button_y,
         width: button_size,
         height: button_size,
     };

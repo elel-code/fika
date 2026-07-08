@@ -3063,6 +3063,18 @@ impl ShellScene {
         self.animations.hover_factor()
     }
 
+    fn start_location_focus_shine(&mut self) {
+        self.animations.start_location_focus_shine();
+    }
+
+    fn location_focus_shine_value(&self) -> Option<f32> {
+        self.animations.location_focus_shine_value()
+    }
+
+    fn stop_location_focus_shine(&mut self) -> bool {
+        self.animations.stop_location_focus_shine()
+    }
+
     fn reset_text_caret_blink(&mut self) {
         self.animations.reset_text_caret_blink();
     }
@@ -3211,7 +3223,8 @@ impl ShellScene {
             .as_ref()
             .is_some_and(|draft| draft.pane == pane)
         {
-            self.location_draft = None;
+            let old_draft = self.location_draft.take();
+            self.update_location_focus_shine_after_draft_change(old_draft.as_ref());
         }
         self.rubber_band = None;
         self.scrollbar_drag = None;
@@ -3455,6 +3468,33 @@ impl ShellScene {
         self.location_draft.as_ref().map(|draft| draft.purpose)
     }
 
+    fn location_focus_token_for_draft(
+        &self,
+        draft: &ShellLocationDraft,
+    ) -> (ShellPaneId, LocationDraftPurpose) {
+        (self.normalized_pane_id(draft.pane), draft.purpose)
+    }
+
+    fn update_location_focus_shine_after_draft_change(
+        &mut self,
+        old_draft: Option<&ShellLocationDraft>,
+    ) {
+        let old_focus = old_draft.map(|draft| self.location_focus_token_for_draft(draft));
+        let new_focus = self
+            .location_draft
+            .as_ref()
+            .map(|draft| self.location_focus_token_for_draft(draft));
+        match (old_focus, new_focus) {
+            (old_focus, Some(new_focus)) if Some(new_focus) != old_focus => {
+                self.start_location_focus_shine();
+            }
+            (Some(_), None) => {
+                self.stop_location_focus_shine();
+            }
+            _ => {}
+        }
+    }
+
     fn location_label_for_pane(&self, pane: ShellPaneId) -> String {
         if let Some(draft) = self
             .location_draft
@@ -3526,9 +3566,11 @@ impl ShellScene {
     }
 
     fn close_location_draft(&mut self, size: PhysicalSize<u32>) -> bool {
-        if self.location_draft.take().is_none() {
+        let old_draft = self.location_draft.take();
+        if old_draft.is_none() {
             return false;
         }
+        self.update_location_focus_shine_after_draft_change(old_draft.as_ref());
         self.location_changes += 1;
         self.rubber_band = None;
         self.clamp_scroll(size);
@@ -3585,6 +3627,7 @@ impl ShellScene {
         let location_changed =
             old_draft != self.location_draft || old_filter_active != self.filter_active;
         if location_changed {
+            self.update_location_focus_shine_after_draft_change(old_draft.as_ref());
             self.reset_text_caret_blink();
             self.location_changes += 1;
             self.rubber_band = None;
@@ -3614,6 +3657,7 @@ impl ShellScene {
         self.rubber_band = None;
         let changed = old_draft != self.location_draft;
         if changed {
+            self.update_location_focus_shine_after_draft_change(old_draft.as_ref());
             self.reset_text_caret_blink();
             self.location_changes += 1;
             self.clamp_scroll(size);
@@ -3748,6 +3792,7 @@ impl ShellScene {
         }
 
         self.reset_text_caret_blink();
+        self.update_location_focus_shine_after_draft_change(old_draft.as_ref());
         self.location_changes += 1;
         self.rubber_band = None;
         self.clamp_scroll(size);
@@ -9193,6 +9238,53 @@ impl ShellScene {
         }
     }
 
+    fn push_location_focus_shine(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        rect: ViewRect,
+        clip: ViewRect,
+        current_value: f32,
+        size: PhysicalSize<u32>,
+    ) {
+        let Some(inner) = inset_rect(rect, self.scale_metric(2.0)) else {
+            return;
+        };
+        let Some(clip) = intersect_rect(inner, clip) else {
+            return;
+        };
+        let min_width = (48.0 * self.ui_scale()).min(inner.width.max(1.0));
+        let band_width = (114.0 * self.ui_scale()).clamp(min_width, inner.width.max(min_width));
+        let shine_x = rect.x + (rect.width + band_width) * current_value - band_width;
+        let strips = 24;
+        let strip_width = band_width / strips as f32;
+        let peak = 0.666_463_6;
+        for index in 0..strips {
+            let local = (index as f32 + 0.5) / strips as f32;
+            let falloff = if local <= peak {
+                local / peak
+            } else {
+                1.0 - (local - peak) / (1.0 - peak)
+            }
+            .clamp(0.0, 1.0);
+            let alpha = 0.20 * falloff;
+            if alpha <= 0.0 {
+                continue;
+            }
+            push_clipped_rect(
+                vertices,
+                ViewRect {
+                    x: shine_x + strip_width * index as f32,
+                    y: inner.y,
+                    width: strip_width + 1.0,
+                    height: inner.height,
+                },
+                clip,
+                [0.173, 0.655, 0.973, alpha],
+                size,
+            );
+        }
+    }
+
     fn push_location_bar(
         &self,
         vertices: &mut Vec<QuadVertex>,
@@ -9216,6 +9308,23 @@ impl ShellScene {
                 clip,
                 (radius - self.scale_metric(1.0)).max(1.0),
                 theme.field(),
+                size,
+            );
+        }
+        if editing {
+            if let Some(shine_value) = self.location_focus_shine_value() {
+                self.push_location_focus_shine(vertices, rect, clip, shine_value, size);
+            }
+            let mut focus_border = theme.accent();
+            focus_border[3] = 0.92;
+            push_clipped_rounded_highlight(
+                vertices,
+                rect,
+                clip,
+                radius,
+                [0.0, 0.0, 0.0, 0.0],
+                focus_border,
+                (0.75 * self.ui_scale()).clamp(1.0, 1.5),
                 size,
             );
         }
@@ -9876,22 +9985,6 @@ impl ShellScene {
             size,
         );
         self.push_pane_body_border(vertices, projection, theme, size);
-        if pane_id == self.active_pane() {
-            let accent_height = self.scale_metric(3.0).max(2.0);
-            push_clipped_rounded_rect(
-                vertices,
-                ViewRect {
-                    x: pane.x + self.scale_metric(10.0),
-                    y: pane.y + self.scale_metric(1.0),
-                    width: (pane.width - self.scale_metric(20.0)).max(1.0),
-                    height: accent_height,
-                },
-                pane,
-                accent_height / 2.0,
-                theme.accent(),
-                size,
-            );
-        }
         if pane_id == ShellPaneId::SLOT_0 {
             self.push_filter_bar(vertices, text, size, theme);
         }
@@ -10487,21 +10580,14 @@ impl ShellScene {
         let split_button = layout.split_view;
         let view_mode = layout.view_mode;
         let places_hovered = self.pointer.is_some_and(|point| button.contains(point));
-        let button_colors = theme.toolbar_button(self.places_visible || places_hovered);
-        push_clipped_rounded_rect(
-            vertices,
-            button,
-            toolbar,
-            self.scale_metric(6.0),
-            button_colors.border,
-            size,
-        );
-        if let Some(inner) = inset_rect(button, self.scale_metric(1.0)) {
+        let places_active = self.places_visible || places_hovered;
+        let button_colors = theme.toolbar_button(places_active);
+        if places_active {
             push_clipped_rounded_rect(
                 vertices,
-                inner,
+                button,
                 toolbar,
-                self.scale_metric(5.0),
+                self.scale_metric(6.0),
                 button_colors.fill,
                 size,
             );
@@ -10548,21 +10634,14 @@ impl ShellScene {
         let split_hovered = self
             .pointer
             .is_some_and(|point| split_button.contains(point));
-        let split_colors = theme.toolbar_button(split_open || split_hovered);
-        push_clipped_rounded_rect(
-            vertices,
-            split_button,
-            toolbar,
-            self.scale_metric(6.0),
-            split_colors.border,
-            size,
-        );
-        if let Some(inner) = inset_rect(split_button, self.scale_metric(1.0)) {
+        let split_active = split_open || split_hovered;
+        let split_colors = theme.toolbar_button(split_active);
+        if split_active {
             push_clipped_rounded_rect(
                 vertices,
-                inner,
+                split_button,
                 toolbar,
-                self.scale_metric(5.0),
+                self.scale_metric(6.0),
                 split_colors.fill,
                 size,
             );
@@ -10630,20 +10709,12 @@ impl ShellScene {
         let rect = control.outer;
         let hovered = self.pointer.is_some_and(|point| rect.contains(point));
         let colors = theme.toolbar_button(hovered);
-        push_clipped_rounded_rect(
-            vertices,
-            rect,
-            clip,
-            self.scale_metric(7.0),
-            colors.border,
-            size,
-        );
-        if let Some(inner) = inset_rect(rect, self.scale_metric(1.0)) {
+        if hovered {
             push_clipped_rounded_rect(
                 vertices,
-                inner,
+                rect,
                 clip,
-                self.scale_metric(6.0),
+                self.scale_metric(7.0),
                 colors.fill,
                 size,
             );
@@ -10673,21 +10744,6 @@ impl ShellScene {
                 height: glyph_size,
             };
             self.push_view_mode_glyph(vertices, segment.mode, icon_rect, rect, theme, size);
-        }
-        for separator in segments.into_iter().take(2) {
-            push_clipped_rounded_rect(
-                vertices,
-                ViewRect {
-                    x: separator.rect.right(),
-                    y: rect.y + self.scale_metric(6.0),
-                    width: self.scale_metric(1.0).max(1.0),
-                    height: (rect.height - self.scale_metric(12.0)).max(1.0),
-                },
-                rect,
-                self.scale_metric(0.5).max(0.5),
-                theme.field_separator(),
-                size,
-            );
         }
     }
 
@@ -10870,17 +10926,6 @@ impl ShellScene {
             panel,
             grip_height / 2.0,
             theme.field_separator(),
-            size,
-        );
-        push_clipped_rounded_rect(
-            vertices,
-            ViewRect {
-                width: (grip.width * 0.34).max(self.scale_metric(12.0)),
-                ..grip
-            },
-            panel,
-            grip_height / 2.0,
-            theme.accent(),
             size,
         );
 
@@ -19770,6 +19815,9 @@ mod tests {
         assert!(button.right() <= toolbar.right() - scene.scale_metric(8.0) + 0.5);
         assert!(button.x > toolbar.width / 2.0);
         assert!(button.x > places.right());
+        let toolbar_center_y = toolbar.y + toolbar.height / 2.0;
+        assert!((button.y + button.height / 2.0 - toolbar_center_y).abs() < 0.001);
+        assert!((places.y + places.height / 2.0 - toolbar_center_y).abs() < 0.001);
         assert!(scene.split_view_button_at_screen_point(point, size));
         assert!(!scene.split_view_button_at_screen_point(
             ViewPoint {
@@ -31060,6 +31108,11 @@ text/plain=writer.desktop;\n",
         assert!(scene.apply_location_command(LocationCommand::Activate, size));
         let initial_value = temp.display().to_string();
         assert_eq!(scene.location_draft_value(), Some(initial_value.as_str()));
+        assert!(scene.next_animation_frame_deadline().is_some());
+        assert_ne!(
+            scene.animation_dirty_value_with_hover(true),
+            scene.animation_dirty_value_with_hover(false)
+        );
 
         assert!(scene.apply_location_command(LocationCommand::Insert("a".to_string()), size));
         assert_eq!(scene.location_draft_value(), Some("a"));
@@ -31074,6 +31127,7 @@ text/plain=writer.desktop;\n",
         assert!(scene.apply_location_command(LocationCommand::Cancel, size));
         assert_eq!(scene.location_draft_value(), None);
         assert!(!scene.is_location_editing());
+        assert!(!scene.animation_active());
 
         let _ = std::fs::remove_dir_all(temp);
     }

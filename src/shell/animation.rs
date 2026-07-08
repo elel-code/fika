@@ -6,7 +6,8 @@ use fika_core::ViewRect;
 
 use crate::shell::metrics::{
     HOVER_ANIMATION_DURATION, HOVER_ANIMATION_FRAME, ITEM_REFLOW_ANIMATION_DURATION,
-    ITEM_REFLOW_ANIMATION_FRAME, TEXT_CARET_BLINK_INTERVAL,
+    ITEM_REFLOW_ANIMATION_FRAME, LOCATION_FOCUS_SHINE_DELAY, LOCATION_FOCUS_SHINE_DURATION,
+    LOCATION_FOCUS_SHINE_FRAME, TEXT_CARET_BLINK_INTERVAL,
 };
 use crate::shell::pane::ShellPaneId;
 
@@ -51,6 +52,7 @@ impl ShellItemReflowTransition {
 pub(crate) struct ShellAnimationRuntime {
     item_reflow_transitions: Vec<ShellItemReflowTransition>,
     hover: ShellHoverAnimationRuntime,
+    location_focus_shine: ShellLocationFocusShineRuntime,
     text_caret_blink: ShellTextCaretBlinkRuntime,
     generation: u64,
 }
@@ -107,6 +109,7 @@ impl ShellAnimationRuntime {
             .iter()
             .any(|transition| transition.active(now))
             || self.hover.active_at(now)
+            || self.location_focus_shine.active_at(now)
     }
 
     pub(crate) fn next_frame_deadline(&self) -> Option<Instant> {
@@ -126,6 +129,13 @@ impl ShellAnimationRuntime {
                     .unwrap_or(now + HOVER_ANIMATION_FRAME),
             );
         }
+        if let Some(shine_deadline) = self.location_focus_shine.next_frame_deadline_at(now) {
+            deadline = Some(
+                deadline
+                    .map(|current| current.min(shine_deadline))
+                    .unwrap_or(shine_deadline),
+            );
+        }
         deadline
     }
 
@@ -135,6 +145,18 @@ impl ShellAnimationRuntime {
 
     pub(crate) fn hover_factor(&self) -> f32 {
         self.hover.factor()
+    }
+
+    pub(crate) fn start_location_focus_shine(&mut self) {
+        self.location_focus_shine.start();
+    }
+
+    pub(crate) fn location_focus_shine_value(&self) -> Option<f32> {
+        self.location_focus_shine.value()
+    }
+
+    pub(crate) fn stop_location_focus_shine(&mut self) -> bool {
+        self.location_focus_shine.stop()
     }
 
     pub(crate) fn reset_text_caret_blink(&mut self) {
@@ -155,15 +177,16 @@ impl ShellAnimationRuntime {
 
     pub(crate) fn prune_finished(&mut self) -> bool {
         let hover_pruned = self.hover.prune_finished();
+        let shine_pruned = self.location_focus_shine.prune_finished();
         if self.item_reflow_transitions.is_empty() {
-            return hover_pruned;
+            return hover_pruned || shine_pruned;
         }
         let now = Instant::now();
         let old_len = self.item_reflow_transitions.len();
         self.item_reflow_transitions
             .retain(|transition| transition.active(now));
         if self.item_reflow_transitions.len() == old_len {
-            return hover_pruned;
+            return hover_pruned || shine_pruned;
         }
         self.bump_generation();
         true
@@ -180,7 +203,9 @@ impl ShellAnimationRuntime {
     pub(crate) fn dirty_value_with_hover(&self, include_hover: bool) -> u64 {
         let item_dirty = self.item_reflow_dirty_value();
         if include_hover {
-            item_dirty ^ self.hover.dirty_value().rotate_left(17)
+            item_dirty
+                ^ self.hover.dirty_value().rotate_left(17)
+                ^ self.location_focus_shine.dirty_value().rotate_left(29)
         } else {
             item_dirty
         }
@@ -280,6 +305,99 @@ impl ShellHoverAnimationRuntime {
         let now = Instant::now();
         let frame_ms = HOVER_ANIMATION_FRAME.as_millis().max(1) as u64;
         let frame = now.saturating_duration_since(self.started).as_millis() as u64 / frame_ms;
+        (self.generation << 32) ^ frame
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ShellLocationFocusShineRuntime {
+    started: Instant,
+    active: bool,
+    generation: u64,
+}
+
+impl Default for ShellLocationFocusShineRuntime {
+    fn default() -> Self {
+        Self {
+            started: Instant::now(),
+            active: false,
+            generation: 0,
+        }
+    }
+}
+
+impl ShellLocationFocusShineRuntime {
+    fn start(&mut self) {
+        self.started = Instant::now() + LOCATION_FOCUS_SHINE_DELAY;
+        self.active = true;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn stop(&mut self) -> bool {
+        if !self.active {
+            return false;
+        }
+        self.active = false;
+        self.generation = self.generation.wrapping_add(1);
+        true
+    }
+
+    fn value(&self) -> Option<f32> {
+        self.value_at(Instant::now())
+    }
+
+    fn value_at(&self, now: Instant) -> Option<f32> {
+        if !self.active || now < self.started {
+            return None;
+        }
+        let elapsed = now.duration_since(self.started);
+        if elapsed >= LOCATION_FOCUS_SHINE_DURATION {
+            return None;
+        }
+        let duration = LOCATION_FOCUS_SHINE_DURATION
+            .as_secs_f32()
+            .max(f32::EPSILON);
+        let t = (elapsed.as_secs_f32() / duration).clamp(0.0, 1.0);
+        Some((1.0 - t).powi(2))
+    }
+
+    fn active_at(&self, now: Instant) -> bool {
+        self.active
+            && now >= self.started
+            && now.duration_since(self.started) < LOCATION_FOCUS_SHINE_DURATION
+    }
+
+    fn next_frame_deadline_at(&self, now: Instant) -> Option<Instant> {
+        if !self.active {
+            return None;
+        }
+        if now < self.started {
+            return Some(self.started);
+        }
+        self.active_at(now)
+            .then_some(now + LOCATION_FOCUS_SHINE_FRAME)
+    }
+
+    fn prune_finished(&mut self) -> bool {
+        let now = Instant::now();
+        if !self.active || now < self.started || self.active_at(now) {
+            return false;
+        }
+        self.active = false;
+        self.generation = self.generation.wrapping_add(1);
+        true
+    }
+
+    fn dirty_value(&self) -> u64 {
+        self.dirty_value_at(Instant::now())
+    }
+
+    fn dirty_value_at(&self, now: Instant) -> u64 {
+        if !self.active || now < self.started || !self.active_at(now) {
+            return self.generation << 32;
+        }
+        let frame_ms = LOCATION_FOCUS_SHINE_FRAME.as_millis().max(1) as u64;
+        let frame = now.duration_since(self.started).as_millis() as u64 / frame_ms;
         (self.generation << 32) ^ frame
     }
 }
@@ -394,5 +512,34 @@ mod tests {
         hover.started = Instant::now() - HOVER_ANIMATION_DURATION;
         assert!(hover.prune_finished());
         assert!(!hover.active);
+    }
+
+    #[test]
+    fn location_focus_shine_waits_then_eases_right_to_left_and_prunes() {
+        let mut shine = ShellLocationFocusShineRuntime::default();
+        assert!(!shine.active_at(shine.started));
+
+        shine.start();
+        let started = shine.started;
+        let before_start = started - Duration::from_millis(1);
+        assert!(!shine.active_at(before_start));
+        assert_eq!(shine.value_at(before_start), None);
+        assert_eq!(shine.next_frame_deadline_at(before_start), Some(started));
+        assert_eq!(shine.value_at(started), Some(1.0));
+
+        let midpoint = shine
+            .value_at(started + LOCATION_FOCUS_SHINE_DURATION / 2)
+            .unwrap();
+        assert!(midpoint > 0.0);
+        assert!(midpoint < 1.0);
+        assert_eq!(
+            shine.value_at(started + LOCATION_FOCUS_SHINE_DURATION),
+            None
+        );
+        assert!(!shine.active_at(started + LOCATION_FOCUS_SHINE_DURATION));
+
+        shine.started = Instant::now() - LOCATION_FOCUS_SHINE_DURATION;
+        assert!(shine.prune_finished());
+        assert!(!shine.active);
     }
 }
