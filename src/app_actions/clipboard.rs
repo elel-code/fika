@@ -5,7 +5,7 @@ use crate::{FikaWgpuApp, file_clipboard_role_as_str, paths_task_summary};
 impl FikaWgpuApp {
     pub(crate) fn store_file_clipboard_request(&mut self, request: &FileClipboardExportRequest) {
         if let Some(clipboard) = self.clipboard.as_ref() {
-            match clipboard.store_text(&request.text) {
+            match clipboard.store_file_clipboard(request.role, &request.paths, &request.text) {
                 Ok(()) => self.scene.record_file_clipboard_export(request),
                 Err(error) => {
                     fika_log!(

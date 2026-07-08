@@ -15,8 +15,8 @@ have been removed from the source tree.
 - `winit` comes from official upstream `rust-windowing/winit` `master`.
 - `wgpu` comes from the official crates.io release.
 - `fika-core` stays UI-neutral and owns filesystem/domain behavior.
-- Clipboard integration uses the native clipboard protocols through `arboard`;
-  paste does not shell out to `wl-paste`, `wl-copy`, or `xclip`.
+- Clipboard integration uses Wayland `wl_data_device` directly; paste does not
+  shell out to `wl-paste`, `wl-copy`, or `xclip`.
 - Portal and privileged-helper binaries remain separate integration pieces.
 
 ## Source Layout
