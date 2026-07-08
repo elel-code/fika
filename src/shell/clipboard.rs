@@ -1,13 +1,14 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::{Error as IoError, ErrorKind, Read, Result as IoResult, Write};
-use std::mem;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::fs::File;
+use std::io::{Error as IoError, ErrorKind, Result as IoResult};
+use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
-use fika_core::{FileClipboardRole, encode_file_clipboard_text};
+use compio::io::{AsyncRead, AsyncWrite};
+use compio::runtime::fd::AsyncFd;
+use fika_core::{FileClipboardRole, encode_file_clipboard_text, run_operation_task};
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
 use smithay_client_toolkit::data_device_manager::data_offer::{
@@ -26,8 +27,8 @@ use smithay_client_toolkit::{
     delegate_data_device, delegate_pointer, delegate_registry, delegate_seat, registry_handlers,
 };
 use smithay_client_toolkit::{
+    reexports::calloop::EventLoop as CalloopEventLoop,
     reexports::calloop::channel::{self, Channel, Sender as CalloopSender},
-    reexports::calloop::{EventLoop as CalloopEventLoop, LoopHandle, PostAction},
     reexports::calloop_wayland_source::WaylandSource,
     reexports::client::backend::Backend,
     reexports::client::globals::{GlobalList, registry_queue_init},
@@ -94,35 +95,35 @@ impl ShellClipboard {
         "wayland-wl-data-device"
     }
 
-    pub(crate) fn store_text(&self, text: &str) -> Result<(), String> {
-        self.store_content(ClipboardContent::text(text))
+    pub(crate) fn store_text_async(
+        &self,
+        text: String,
+    ) -> Result<mpsc::Receiver<IoResult<()>>, String> {
+        self.store_content_async(ClipboardContent::text(&text))
     }
 
-    pub(crate) fn store_file_clipboard(
+    pub(crate) fn store_file_clipboard_async(
         &self,
         role: FileClipboardRole,
-        paths: &[PathBuf],
-        text: &str,
-    ) -> Result<(), String> {
-        self.store_content(ClipboardContent::file_list(role, paths, text))
+        paths: Vec<PathBuf>,
+        text: String,
+    ) -> Result<mpsc::Receiver<IoResult<()>>, String> {
+        self.store_content_async(ClipboardContent::file_list(role, &paths, &text))
     }
 
-    pub(crate) fn load_text(&self) -> Result<String, String> {
+    pub(crate) fn load_text_async(&self) -> Result<mpsc::Receiver<IoResult<String>>, String> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.send_command(ClipboardCommand::Load { reply_tx })?;
-        reply_rx
-            .recv()
-            .map_err(|_| "clipboard worker stopped before replying".to_string())?
-            .map_err(|error| error.to_string())
+        Ok(reply_rx)
     }
 
-    fn store_content(&self, content: ClipboardContent) -> Result<(), String> {
+    fn store_content_async(
+        &self,
+        content: ClipboardContent,
+    ) -> Result<mpsc::Receiver<IoResult<()>>, String> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.send_command(ClipboardCommand::Store { content, reply_tx })?;
-        reply_rx
-            .recv()
-            .map_err(|_| "clipboard worker stopped before replying".to_string())?
-            .map_err(|error| error.to_string())
+        Ok(reply_rx)
     }
 
     fn send_command(&self, command: ClipboardCommand) -> Result<(), String> {
@@ -253,6 +254,90 @@ fn normalize_loaded_text(mime: &str, text: String) -> String {
     }
 }
 
+const CLIPBOARD_PIPE_CHUNK: usize = 4096;
+
+fn spawn_compio_read_pipe(
+    mime: String,
+    read_pipe: ReadPipe,
+    reply_tx: mpsc::Sender<IoResult<String>>,
+) {
+    let fail_tx = reply_tx.clone();
+    let spawn_result = thread::Builder::new()
+        .name("fika-clipboard-read".to_string())
+        .spawn(move || {
+            let result = pollster::block_on(run_operation_task(move || async move {
+                read_pipe_text_compio(mime, read_pipe).await
+            }))
+            .map_err(|error| IoError::other(error.to_string()))
+            .and_then(|result| result);
+            let _ = reply_tx.send(result);
+        });
+    if let Err(error) = spawn_result {
+        let _ = fail_tx.send(Err(IoError::other(error.to_string())));
+    }
+}
+
+fn spawn_compio_write_pipe(mime: String, write_pipe: WritePipe, bytes: Arc<[u8]>) {
+    let log_mime = mime.clone();
+    if let Err(error) = thread::Builder::new()
+        .name("fika-clipboard-write".to_string())
+        .spawn(move || {
+            let result = pollster::block_on(run_operation_task(move || async move {
+                write_pipe_bytes_compio(write_pipe, bytes).await
+            }))
+            .map_err(|error| IoError::other(error.to_string()))
+            .and_then(|result| result);
+            if let Err(error) = result {
+                fika_log!("[fika-wgpu] clipboard-send-error mime={mime} error={error}");
+            }
+        })
+    {
+        fika_log!("[fika-wgpu] clipboard-send-thread-error mime={log_mime} error={error}");
+    }
+}
+
+async fn read_pipe_text_compio(mime: String, read_pipe: ReadPipe) -> IoResult<String> {
+    let owned_fd: OwnedFd = read_pipe.into();
+    let mut pipe = AsyncFd::new(File::from(owned_fd))?;
+    let mut content = Vec::new();
+
+    loop {
+        let buffer = Vec::with_capacity(CLIPBOARD_PIPE_CHUNK);
+        let compio::buf::BufResult(result, buffer) = pipe.read(buffer).await;
+        let read = result?;
+        if read == 0 {
+            break;
+        }
+        content.extend_from_slice(&buffer[..read]);
+    }
+
+    let text = String::from_utf8(content)
+        .unwrap_or_else(|error| String::from_utf8_lossy(&error.into_bytes()).into_owned());
+    Ok(normalize_loaded_text(&mime, text))
+}
+
+async fn write_pipe_bytes_compio(write_pipe: WritePipe, bytes: Arc<[u8]>) -> IoResult<()> {
+    let owned_fd: OwnedFd = write_pipe.into();
+    let mut pipe = AsyncFd::new(File::from(owned_fd))?;
+    let mut written = 0;
+
+    while written < bytes.len() {
+        let end = (written + CLIPBOARD_PIPE_CHUNK).min(bytes.len());
+        let buffer = Vec::from(&bytes[written..end]);
+        let compio::buf::BufResult(result, _) = pipe.write(buffer).await;
+        let count = result?;
+        if count == 0 {
+            return Err(IoError::new(
+                ErrorKind::WriteZero,
+                "clipboard pipe accepted zero bytes",
+            ));
+        }
+        written += count;
+    }
+
+    Ok(())
+}
+
 fn clipboard_worker(connection: Connection, command_rx: Channel<ClipboardCommand>) {
     let Ok((globals, event_queue)) = registry_queue_init(&connection) else {
         return;
@@ -261,9 +346,7 @@ fn clipboard_worker(connection: Connection, command_rx: Channel<ClipboardCommand
         return;
     };
     let loop_handle = event_loop.handle();
-    let Some(mut state) =
-        ClipboardWorkerState::new(&globals, &event_queue.handle(), loop_handle.clone())
-    else {
+    let Some(mut state) = ClipboardWorkerState::new(&globals, &event_queue.handle()) else {
         return;
     };
 
@@ -308,7 +391,6 @@ struct ClipboardWorkerState {
     seat_state: SeatState,
     seats: HashMap<ObjectId, ClipboardSeatState>,
     latest_seat: Option<ObjectId>,
-    loop_handle: LoopHandle<'static, Self>,
     queue_handle: QueueHandle<Self>,
     sources: Vec<CopyPasteSource>,
     content: ClipboardContent,
@@ -316,11 +398,7 @@ struct ClipboardWorkerState {
 }
 
 impl ClipboardWorkerState {
-    fn new(
-        globals: &GlobalList,
-        queue_handle: &QueueHandle<Self>,
-        loop_handle: LoopHandle<'static, Self>,
-    ) -> Option<Self> {
+    fn new(globals: &GlobalList, queue_handle: &QueueHandle<Self>) -> Option<Self> {
         let data_device_manager = DataDeviceManagerState::bind(globals, queue_handle).ok()?;
         let seat_state = SeatState::new(globals, queue_handle);
         let mut seats = HashMap::new();
@@ -334,7 +412,6 @@ impl ClipboardWorkerState {
             seat_state,
             seats,
             latest_seat: None,
-            loop_handle,
             queue_handle: queue_handle.clone(),
             sources: Vec::new(),
             content: ClipboardContent::text(""),
@@ -407,67 +484,15 @@ impl ClipboardWorkerState {
         read_pipe: ReadPipe,
         reply_tx: mpsc::Sender<IoResult<String>>,
     ) -> IoResult<()> {
-        set_non_blocking(read_pipe.as_raw_fd())?;
-        let mut buffer = [0; 4096];
-        let mut content = Vec::new();
-        self.loop_handle
-            .insert_source(read_pipe, move |_, file, _| {
-                let file = unsafe { file.get_mut() };
-                loop {
-                    match file.read(&mut buffer) {
-                        Ok(0) => {
-                            let utf8 = String::from_utf8_lossy(&content);
-                            let text = match utf8 {
-                                Cow::Borrowed(_) => {
-                                    let mut bytes = Vec::new();
-                                    mem::swap(&mut content, &mut bytes);
-                                    String::from_utf8(bytes).unwrap_or_default()
-                                }
-                                Cow::Owned(text) => text,
-                            };
-                            let _ = reply_tx.send(Ok(normalize_loaded_text(&mime, text)));
-                            break PostAction::Remove;
-                        }
-                        Ok(n) => content.extend_from_slice(&buffer[..n]),
-                        Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                            break PostAction::Continue;
-                        }
-                        Err(error) => {
-                            let _ = reply_tx.send(Err(error));
-                            break PostAction::Remove;
-                        }
-                    }
-                }
-            })
-            .map(drop)
-            .map_err(|error| IoError::other(error.to_string()))
+        spawn_compio_read_pipe(mime, read_pipe, reply_tx);
+        Ok(())
     }
 
     fn send_request(&mut self, mime: String, write_pipe: WritePipe) {
         let Some(bytes) = self.content.bytes_for_mime(&mime) else {
             return;
         };
-        if set_non_blocking(write_pipe.as_raw_fd()).is_err() {
-            return;
-        }
-        let mut written = 0;
-        let _ = self
-            .loop_handle
-            .insert_source(write_pipe, move |_, file, _| {
-                let file = unsafe { file.get_mut() };
-                loop {
-                    match file.write(&bytes[written..]) {
-                        Ok(n) if written + n == bytes.len() => {
-                            break PostAction::Remove;
-                        }
-                        Ok(n) => written += n,
-                        Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                            break PostAction::Continue;
-                        }
-                        Err(_) => break PostAction::Remove,
-                    }
-                }
-            });
+        spawn_compio_write_pipe(mime, write_pipe, bytes);
     }
 }
 
@@ -713,18 +738,6 @@ impl Drop for ClipboardSeatState {
             }
         }
     }
-}
-
-fn set_non_blocking(raw_fd: RawFd) -> IoResult<()> {
-    let flags = unsafe { libc::fcntl(raw_fd, libc::F_GETFL) };
-    if flags < 0 {
-        return Err(IoError::last_os_error());
-    }
-    let result = unsafe { libc::fcntl(raw_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if result < 0 {
-        return Err(IoError::last_os_error());
-    }
-    Ok(())
 }
 
 #[cfg(test)]

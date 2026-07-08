@@ -5,6 +5,8 @@ use fika_core::{
     TrashViewOperationResult, file_ops, push_unique_path,
 };
 
+use crate::CopyLocationRequest;
+use crate::shell::clipboard::FileClipboardExportRequest;
 use crate::shell::context_menu::ShellContextMenuAction;
 use crate::shell::metrics::WGPU_SHELL_PANE_ID;
 use crate::shell::pane::ShellPaneId;
@@ -72,9 +74,31 @@ pub(crate) struct ShellAsyncTrashViewCompletion {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) enum ShellAsyncClipboardCompletion {
+    StoreFile {
+        request: FileClipboardExportRequest,
+        result: Result<(), String>,
+    },
+    CopyLocation {
+        request: CopyLocationRequest,
+        result: Result<(), String>,
+    },
+    LoadPaste {
+        use_context: bool,
+        privileged: bool,
+        result: Result<String, String>,
+    },
+    Clear {
+        reason: &'static str,
+        result: Result<(), String>,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub(crate) enum ShellAsyncTaskResult {
     Transfer(ShellAsyncTransferCompletion),
     TrashView(ShellAsyncTrashViewCompletion),
+    Clipboard(ShellAsyncClipboardCompletion),
 }
 
 pub(crate) fn transfer_paths_with_privilege(

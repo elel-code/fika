@@ -138,12 +138,8 @@ impl FikaWgpuApp {
                     match apply_result {
                         Ok(result) => {
                             changed = true;
-                            if clear_clipboard
-                                && result.changed()
-                                && let Some(clipboard) = self.clipboard.as_ref()
-                                && let Err(error) = clipboard.store_text("")
-                            {
-                                fika_log!("[fika-wgpu] clipboard-clear-error error={error}");
+                            if clear_clipboard && result.changed() {
+                                self.queue_clipboard_clear("paste-transfer");
                             }
                         }
                         Err(error) => {
@@ -177,6 +173,9 @@ impl FikaWgpuApp {
                             changed = true;
                         }
                     }
+                }
+                ShellAsyncTaskResult::Clipboard(completion) => {
+                    changed |= self.apply_async_clipboard_completion(completion);
                 }
             }
         }
@@ -450,6 +449,7 @@ impl FikaWgpuApp {
             base_detail,
         );
         let tx = self.async_task_tx.clone();
+        let proxy = self.event_loop_proxy.clone();
         thread::spawn(move || {
             let transfer = pollster::block_on(run_operation_task({
                 let controller = controller.clone();
@@ -470,14 +470,19 @@ impl FikaWgpuApp {
             .unwrap_or_else(|error| {
                 transfer_runtime_failure(target_dir.clone(), mode, label, clear_clipboard, error)
             });
-            let _ = tx.send(ShellAsyncTaskResult::Transfer(
-                ShellAsyncTransferCompletion {
-                    task_id,
-                    source,
-                    target_dir,
-                    transfer,
-                },
-            ));
+            if tx
+                .send(ShellAsyncTaskResult::Transfer(
+                    ShellAsyncTransferCompletion {
+                        task_id,
+                        source,
+                        target_dir,
+                        transfer,
+                    },
+                ))
+                .is_ok()
+            {
+                proxy.wake_up();
+            }
         });
     }
 }

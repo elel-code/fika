@@ -169,34 +169,7 @@ impl FikaWgpuApp {
             }
             ContextMenuActionDispatch::CopyLocation => {
                 match self.scene.context_target_copy_location_request() {
-                    Some(request) => {
-                        if let Some(clipboard) = self.clipboard.as_ref() {
-                            match clipboard.store_text(&request.text) {
-                                Ok(()) => self.scene.record_copy_location(&request),
-                                Err(error) => {
-                                    fika_log!(
-                                        "[fika-wgpu] copy-location-error path={} error={error}",
-                                        request.path.display()
-                                    );
-                                    self.scene.record_task_status(ShellTaskStatus::failed(
-                                        "Copy Location failed",
-                                        format!("{}: {error}", request.path.display()),
-                                        false,
-                                    ));
-                                }
-                            }
-                        } else {
-                            fika_log!(
-                                "[fika-wgpu] copy-location-error path={} error=clipboard-unavailable",
-                                request.path.display()
-                            );
-                            self.scene.record_task_status(ShellTaskStatus::failed(
-                                "Copy Location failed",
-                                format!("Clipboard is unavailable for {}", request.path.display()),
-                                false,
-                            ));
-                        }
-                    }
+                    Some(request) => self.store_copy_location_request(request),
                     None => {
                         fika_log!("[fika-wgpu] copy-location-error target=none");
                         self.scene.record_task_status(ShellTaskStatus::failed(

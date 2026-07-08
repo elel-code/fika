@@ -2,6 +2,7 @@ struct FikaWgpuApp {
     scene: ShellScene,
     mime_applications: MimeApplicationCache,
     settings_path: PathBuf,
+    event_loop_proxy: EventLoopProxy,
     directory_watchers: ShellDirectoryWatcherRuntime,
     async_task_tx: Sender<ShellAsyncTaskResult>,
     async_task_rx: Receiver<ShellAsyncTaskResult>,

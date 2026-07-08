@@ -16,6 +16,7 @@ impl FikaWgpuApp {
             .record_async_trash_view_started(task_id, operation, paths.len());
 
         let tx = self.async_task_tx.clone();
+        let proxy = self.event_loop_proxy.clone();
         thread::spawn(move || {
             let result = pollster::block_on(run_operation_task({
                 let paths = paths;
@@ -30,14 +31,19 @@ impl FikaWgpuApp {
                 );
                 trash_view_operation_runtime_failure(operation)
             });
-            let _ = tx.send(ShellAsyncTaskResult::TrashView(
-                ShellAsyncTrashViewCompletion {
-                    task_id,
-                    action,
-                    pane_to_reload,
-                    result,
-                },
-            ));
+            if tx
+                .send(ShellAsyncTaskResult::TrashView(
+                    ShellAsyncTrashViewCompletion {
+                        task_id,
+                        action,
+                        pane_to_reload,
+                        result,
+                    },
+                ))
+                .is_ok()
+            {
+                proxy.wake_up();
+            }
         });
         Ok(())
     }

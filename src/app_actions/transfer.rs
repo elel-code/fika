@@ -25,35 +25,25 @@ impl FikaWgpuApp {
 
     pub(crate) fn paste_from_clipboard_with_target(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        _event_loop: &dyn ActiveEventLoop,
         use_context: bool,
         privileged: bool,
     ) {
+        if self.renderer.is_none() {
+            return;
+        }
+        self.load_clipboard_text_for_paste(use_context, privileged);
+        self.apply_window_action_outcome(ShellActionOutcome::Redraw);
+    }
+
+    pub(crate) fn finish_paste_from_clipboard_text(
+        &mut self,
+        use_context: bool,
+        privileged: bool,
+        text: String,
+    ) -> bool {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        let Some(clipboard) = self.clipboard.as_ref() else {
-            fika_log!("[fika-wgpu] paste-error error=clipboard-unavailable");
-            self.scene.record_task_status(ShellTaskStatus::failed(
-                "Paste failed",
-                "Clipboard is unavailable",
-                false,
-            ));
-            self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-            return;
-        };
-        let text = match clipboard.load_text() {
-            Ok(text) => text,
-            Err(error) => {
-                fika_log!("[fika-wgpu] paste-error load={error}");
-                self.scene.record_task_status(ShellTaskStatus::failed(
-                    "Paste failed",
-                    format!("Clipboard read failed: {error}"),
-                    false,
-                ));
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-                return;
-            }
+            return false;
         };
         if !privileged && let Some(payload) = decode_file_clipboard_text(&text) {
             let target_dir = if use_context {
@@ -69,8 +59,7 @@ impl FikaWgpuApp {
                     "No paste target pane",
                     false,
                 ));
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-                return;
+                return true;
             };
             if is_network_path(&target_dir) {
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -78,8 +67,7 @@ impl FikaWgpuApp {
                     "Remote paste target is not available yet",
                     false,
                 ));
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-                return;
+                return true;
             }
             if payload.paths.iter().any(|path| is_network_path(path)) {
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -87,8 +75,7 @@ impl FikaWgpuApp {
                     "Remote paste source is not available yet",
                     false,
                 ));
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-                return;
+                return true;
             }
             let mode = match payload.role {
                 FileClipboardRole::Copy => FileTransferMode::Copy,
@@ -102,8 +89,7 @@ impl FikaWgpuApp {
                 "Paste",
                 payload.role == FileClipboardRole::Cut,
             );
-            self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-            return;
+            return true;
         }
         let paste_result = if use_context {
             self.scene
@@ -114,15 +100,12 @@ impl FikaWgpuApp {
         };
         match paste_result {
             Ok(result) if result.changed() => {
-                if result.clear_clipboard
-                    && result.failure_count == 0
-                    && let Err(error) = clipboard.store_text("")
-                {
-                    fika_log!("[fika-wgpu] clipboard-clear-error error={error}");
+                if result.clear_clipboard && result.failure_count == 0 {
+                    self.queue_clipboard_clear("paste-text");
                 }
-                self.apply_action_outcome(event_loop, ShellActionOutcome::Present("paste"));
+                true
             }
-            Ok(_) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
+            Ok(_) => true,
             Err(error) => {
                 fika_log!("[fika-wgpu] paste-error {error}");
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -134,7 +117,7 @@ impl FikaWgpuApp {
                     error,
                     privileged,
                 ));
-                self.apply_window_action_outcome(ShellActionOutcome::Redraw);
+                true
             }
         }
     }

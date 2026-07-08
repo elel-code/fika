@@ -8,12 +8,13 @@ impl FikaWgpuApp {
         let (async_task_tx, async_task_rx) = mpsc::channel();
         let autosmoke_zoom = autosmoke_zoom_config();
         let autosmoke_scroll = autosmoke_scroll_config(SCROLL_LINE_PX * 2.0);
-        let mut directory_watchers = ShellDirectoryWatcherRuntime::new(event_loop_proxy);
+        let mut directory_watchers = ShellDirectoryWatcherRuntime::new(event_loop_proxy.clone());
         directory_watchers.sync_with_scene(&scene);
         Self {
             scene,
             mime_applications: MimeApplicationCache::load(),
             settings_path,
+            event_loop_proxy,
             directory_watchers,
             async_task_tx,
             async_task_rx,

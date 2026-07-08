@@ -911,7 +911,6 @@ dependencies = [
  "futures-lite",
  "gio",
  "image",
- "libc",
  "notify",
  "pollster",
  "raw-window-handle",
