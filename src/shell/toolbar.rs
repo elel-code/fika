@@ -50,7 +50,7 @@ pub(crate) fn app_toolbar_layout(toolbar: ViewRect, scale: f32) -> ShellToolbarL
         width: button_size,
         height: button_size,
     };
-    let view_mode = toolbar_view_mode_control(toolbar, places_toggle, split_view, scale);
+    let view_mode = toolbar_view_mode_control(places_toggle, split_view, scale);
     ShellToolbarLayout {
         toolbar,
         places_toggle,
@@ -60,7 +60,6 @@ pub(crate) fn app_toolbar_layout(toolbar: ViewRect, scale: f32) -> ShellToolbarL
 }
 
 fn toolbar_view_mode_control(
-    toolbar: ViewRect,
     places_toggle: ViewRect,
     split_view: ViewRect,
     scale: f32,
@@ -72,9 +71,9 @@ fn toolbar_view_mode_control(
     }
     let outer = ViewRect {
         x: split_view.x - gap_to_split - width,
-        y: toolbar.y + scale_metric(7.0, scale),
+        y: places_toggle.y,
         width,
-        height: (toolbar.height - scale_metric(14.0, scale)).max(1.0),
+        height: places_toggle.height,
     };
     let inner = inset_rect(outer, scale_metric(2.0, scale)).unwrap_or(outer);
     let gap = scale_metric(2.0, scale).min((inner.width / 8.0).max(0.0));

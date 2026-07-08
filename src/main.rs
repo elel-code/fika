@@ -10481,20 +10481,6 @@ impl ShellScene {
                 );
             }
         }
-        let active_indicator = ViewRect {
-            x: header.x + self.scale_metric(10.0),
-            y: header.bottom() - self.scale_metric(3.0).max(2.0),
-            width: self.scale_metric(46.0),
-            height: self.scale_metric(3.0).max(2.0),
-        };
-        push_clipped_rounded_rect(
-            vertices,
-            active_indicator,
-            header,
-            active_indicator.height / 2.0,
-            theme.accent(),
-            size,
-        );
         for (label, x, width) in [
             (
                 "Name",
@@ -10766,13 +10752,16 @@ impl ShellScene {
             ShellViewMode::Icons => {
                 let dot = self.scale_metric(4.0).max(2.0);
                 let gap = self.scale_metric(3.0).max(1.0);
+                let content_size = dot * 2.0 + gap;
+                let origin_x = rect.x + (rect.width - content_size) / 2.0;
+                let origin_y = rect.y + (rect.height - content_size) / 2.0;
                 for row in 0..2 {
                     for column in 0..2 {
                         push_clipped_rounded_rect(
                             vertices,
                             ViewRect {
-                                x: rect.x + column as f32 * (dot + gap),
-                                y: rect.y + row as f32 * (dot + gap),
+                                x: origin_x + column as f32 * (dot + gap),
+                                y: origin_y + row as f32 * (dot + gap),
                                 width: dot,
                                 height: dot,
                             },
@@ -10785,15 +10774,25 @@ impl ShellScene {
                 }
             }
             ShellViewMode::Compact => {
+                let row_height = self.scale_metric(3.0).max(2.0);
+                let row_step = self.scale_metric(5.0);
+                let content_height = row_height + row_step * 2.0;
+                let content_y = rect.y + (rect.height - content_height) / 2.0;
+                let marker_width = self.scale_metric(5.0).min(rect.width).max(1.0);
+                let marker_gap = self
+                    .scale_metric(3.0)
+                    .min((rect.width - marker_width).max(0.0));
+                let line_x = rect.x + marker_width + marker_gap;
+                let line_width = (rect.right() - line_x).max(1.0);
                 for row in 0..3 {
-                    let y = rect.y + self.scale_metric(1.0) + row as f32 * self.scale_metric(5.0);
+                    let y = content_y + row as f32 * row_step;
                     push_clipped_rounded_rect(
                         vertices,
                         ViewRect {
                             x: rect.x,
                             y,
-                            width: self.scale_metric(5.0),
-                            height: self.scale_metric(3.0).max(2.0),
+                            width: marker_width,
+                            height: row_height,
                         },
                         clip,
                         self.scale_metric(1.5),
@@ -10803,10 +10802,10 @@ impl ShellScene {
                     push_clipped_rounded_rect(
                         vertices,
                         ViewRect {
-                            x: rect.x + self.scale_metric(8.0),
+                            x: line_x,
                             y,
-                            width: self.scale_metric(8.0),
-                            height: self.scale_metric(3.0).max(2.0),
+                            width: line_width,
+                            height: row_height,
                         },
                         clip,
                         self.scale_metric(1.5),
@@ -10820,15 +10819,19 @@ impl ShellScene {
                 }
             }
             ShellViewMode::Details => {
+                let row_height = self.scale_metric(3.0).max(2.0);
+                let row_step = self.scale_metric(5.0);
+                let content_height = row_height + row_step * 2.0;
+                let content_y = rect.y + (rect.height - content_height) / 2.0;
                 for row in 0..3 {
-                    let y = rect.y + self.scale_metric(1.0) + row as f32 * self.scale_metric(5.0);
+                    let y = content_y + row as f32 * row_step;
                     push_clipped_rounded_rect(
                         vertices,
                         ViewRect {
                             x: rect.x,
                             y,
                             width: rect.width,
-                            height: self.scale_metric(3.0).max(2.0),
+                            height: row_height,
                         },
                         clip,
                         self.scale_metric(1.5),
@@ -10904,31 +10907,6 @@ impl ShellScene {
         let text_height = self.text_line_height();
         let small_text_height = self.small_text_line_height();
         let item_palette = paint.dolphin_item;
-        let header = ViewRect {
-            x: panel.x + padding_x,
-            y: panel.y + top_padding,
-            width: (panel.width - padding_x * 2.0).max(1.0),
-            height: title_height,
-        };
-        let grip_height = self.scale_metric(3.0).max(2.0);
-        let grip_width = (header.width * 0.36)
-            .min(self.scale_metric(68.0))
-            .max(self.scale_metric(28.0));
-        let grip = ViewRect {
-            x: header.x + self.scale_metric(8.0),
-            y: header.y + (header.height - grip_height) / 2.0,
-            width: grip_width,
-            height: grip_height,
-        };
-        push_clipped_rounded_rect(
-            vertices,
-            grip,
-            panel,
-            grip_height / 2.0,
-            theme.field_separator(),
-            size,
-        );
-
         let mut y = panel.y + top_padding + title_height - self.places_scroll_y;
         let mut previous_group = None;
         for (index, place) in self.places.iter().enumerate() {
@@ -19836,6 +19814,12 @@ mod tests {
             .app_toolbar_layout(size)
             .view_mode
             .expect("wide toolbar should expose a view mode control");
+        let toolbar = scene.app_toolbar_rect(size);
+        let toolbar_center_y = toolbar.y + toolbar.height / 2.0;
+        assert!((control.outer.y + control.outer.height / 2.0 - toolbar_center_y).abs() < 0.001);
+        for segment in control.segments {
+            assert!((segment.rect.y + segment.rect.height / 2.0 - toolbar_center_y).abs() < 0.001);
+        }
         let compact = control
             .segments
             .into_iter()
