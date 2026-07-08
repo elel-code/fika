@@ -153,6 +153,7 @@ use shell::autosmoke::{AutosmokeScrollAction, autosmoke_scroll_config, autosmoke
 use shell::clipboard::{FileClipboardExportRequest, ShellClipboard};
 #[cfg(test)]
 use shell::context_menu::paint::context_menu_named_icon_request;
+use shell::context_menu::safe_triangle::ShellContextMenuSafeTriangleRuntime;
 use shell::context_menu::{
     ShellContextMenu, ShellContextMenuAction, ShellContextMenuCommand, ShellContextTarget,
     ShellDevicePlace, context_menu_items, context_submenu_actions,
@@ -233,10 +234,10 @@ use shell::location::{
     normalized_text_cursor,
 };
 #[cfg(test)]
-use shell::menu_geometry::{context_menu_rect, drop_menu_rect};
+use shell::menu_geometry::{context_menu_rect, context_menu_submenu_rect, drop_menu_rect};
 use shell::menu_geometry::{
-    context_menu_row_at_screen_point, context_menu_submenu_rect,
-    context_submenu_row_at_screen_point, drop_menu_row_at_screen_point,
+    context_menu_row_at_screen_point, context_submenu_row_at_screen_point,
+    drop_menu_row_at_screen_point,
 };
 use shell::metadata_roles::{
     MetadataRolePrewarmStats, ShellMetadataRoleRuntime, entry_with_metadata_role, shell_entry_path,
@@ -2660,6 +2661,7 @@ struct ShellScene {
     histories: ShellPaneHistories,
     context_target: Option<ShellContextTarget>,
     context_menu: Option<ShellContextMenu>,
+    context_menu_safe_triangle: ShellContextMenuSafeTriangleRuntime,
     drop_menu: Option<ShellDropMenu>,
     properties_overlay: Option<ShellPropertiesOverlay>,
     create_dialog: Option<ShellCreateDialog>,
@@ -2680,6 +2682,8 @@ struct ShellScene {
     pending_drop_request: Option<ShellDropOperationRequest>,
     task_statuses: ShellTaskStatusStore,
     rubber_band: Option<RubberBand>,
+    item_reflow: shell::item_reflow::ShellItemReflowRuntime,
+    path_transition: shell::path_transition::ShellPathTransitionRuntime,
     animations: ShellAnimationRuntime,
     text_hit_tests: RefCell<TextHitTestRuntime>,
     scale_factor: f32,
@@ -2776,6 +2780,7 @@ impl ShellScene {
             histories: ShellPaneHistories::default(),
             context_target: None,
             context_menu: None,
+            context_menu_safe_triangle: ShellContextMenuSafeTriangleRuntime::default(),
             drop_menu: None,
             properties_overlay: None,
             create_dialog: None,
@@ -2796,6 +2801,8 @@ impl ShellScene {
             pending_drop_request: None,
             task_statuses: ShellTaskStatusStore::new(),
             rubber_band: None,
+            item_reflow: shell::item_reflow::ShellItemReflowRuntime::default(),
+            path_transition: shell::path_transition::ShellPathTransitionRuntime::default(),
             animations: ShellAnimationRuntime::default(),
             text_hit_tests: RefCell::new(TextHitTestRuntime::new()),
             scale_factor: 1.0,
@@ -2972,41 +2979,14 @@ impl ShellScene {
         pane: ShellPaneId,
         size: PhysicalSize<u32>,
     ) -> HashMap<PathBuf, ViewRect> {
-        let Some(projection) = self.pane_projection(pane, size) else {
-            return HashMap::new();
-        };
-        let mut rects = HashMap::with_capacity(projection.visible_items.len());
-        for item in &projection.visible_items {
-            let Some(entry_index) = projection
-                .view
-                .filtered_indexes
-                .get(item.layout.model_index)
-                .copied()
-            else {
-                continue;
-            };
-            let Some(path) = self.entry_path_for_pane_view(projection.view, entry_index) else {
-                continue;
-            };
-            rects.insert(
-                path,
-                pane_content_rect_to_screen(item.layout.visual_rect, &projection),
-            );
-        }
-        rects
+        shell::item_reflow::visible_item_rects_by_path_for_pane(self, pane, size)
     }
 
     fn visible_item_rects_by_path_for_open_panes(
         &self,
         size: PhysicalSize<u32>,
     ) -> Vec<(ShellPaneId, HashMap<PathBuf, ViewRect>)> {
-        ShellPaneId::ALL
-            .into_iter()
-            .filter_map(|pane| {
-                let rects = self.visible_item_rects_by_path_for_pane(pane, size);
-                (!rects.is_empty()).then_some((pane, rects))
-            })
-            .collect()
+        shell::item_reflow::visible_item_rects_by_path_for_open_panes(self, size)
     }
 
     fn reflow_pane_items_after_window_resize(
@@ -3014,13 +2994,7 @@ impl ShellScene {
         previous_size: PhysicalSize<u32>,
         next_size: PhysicalSize<u32>,
     ) -> bool {
-        if previous_size == next_size {
-            self.clamp_scroll(next_size);
-            return false;
-        }
-        let previous_rects = self.visible_item_rects_by_path_for_open_panes(previous_size);
-        self.clamp_scroll(next_size);
-        self.start_item_reflow_transitions_for_panes(previous_rects, next_size)
+        shell::item_reflow::reflow_pane_items_after_window_resize(self, previous_size, next_size)
     }
 
     fn start_item_reflow_transitions(
@@ -3029,9 +3003,7 @@ impl ShellScene {
         previous_rects: HashMap<PathBuf, ViewRect>,
         size: PhysicalSize<u32>,
     ) -> bool {
-        let next_rects = self.visible_item_rects_by_path_for_pane(pane, size);
-        self.animations
-            .start_item_reflow(pane, previous_rects, next_rects)
+        shell::item_reflow::start_item_reflow_transitions(self, pane, previous_rects, size)
     }
 
     fn start_item_reflow_transitions_for_panes(
@@ -3039,31 +3011,48 @@ impl ShellScene {
         previous_rects_by_pane: Vec<(ShellPaneId, HashMap<PathBuf, ViewRect>)>,
         size: PhysicalSize<u32>,
     ) -> bool {
-        previous_rects_by_pane
-            .into_iter()
-            .fold(false, |started, (pane, previous_rects)| {
-                self.start_item_reflow_transitions(pane, previous_rects, size) || started
-            })
+        shell::item_reflow::start_item_reflow_transitions_for_panes(
+            self,
+            previous_rects_by_pane,
+            size,
+        )
     }
 
     fn item_reflow_offset_for_path(&self, pane: ShellPaneId, path: &Path) -> Option<(f32, f32)> {
-        self.animations.item_reflow_offset_for_path(pane, path)
+        shell::item_reflow::item_reflow_offset_for_path(self, pane, path)
     }
 
     fn animation_active(&self) -> bool {
-        self.animations.active()
+        self.animations.active() || shell::path_transition::path_transition_active(self)
     }
 
     fn next_animation_frame_deadline(&self) -> Option<Instant> {
-        self.animations.next_frame_deadline()
+        [
+            self.animations.next_frame_deadline(),
+            shell::item_reflow::next_item_reflow_deadline(self),
+            shell::path_transition::next_path_transition_frame_deadline(self),
+            self.context_menu_safe_triangle.next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     fn prune_finished_animations(&mut self) -> bool {
+        let item_reflow_started =
+            shell::item_reflow::start_due_item_reflow_transitions(self, Instant::now());
+        let path_transition_pruned = shell::path_transition::prune_finished_path_transitions(self);
+        let context_menu_hover_due = self.apply_due_context_menu_hover(Instant::now());
         self.animations.prune_finished()
+            || item_reflow_started
+            || path_transition_pruned
+            || context_menu_hover_due
     }
 
     fn animation_dirty_value_with_hover(&self, include_hover: bool) -> u64 {
         self.animations.dirty_value_with_hover(include_hover)
+            ^ shell::item_reflow::item_reflow_dirty_value(self).rotate_left(11)
+            ^ shell::path_transition::path_transition_dirty_value(self).rotate_left(23)
     }
 
     fn start_hover_animation(&mut self) {
@@ -3213,6 +3202,7 @@ impl ShellScene {
         self.clear_transient_after_pane_content_change(pane, true);
         self.path_changes += 1;
         self.clamp_scroll(size);
+        shell::path_transition::start_path_transition(self, pane);
     }
 
     fn clear_transient_after_pane_content_change(&mut self, pane: ShellPaneId, clear_open: bool) {
@@ -5821,6 +5811,7 @@ impl ShellScene {
         let changed = self.open_context_target(point, size);
         let old_menu = self.context_menu.clone();
         self.drop_menu = None;
+        self.context_menu_safe_triangle.reset();
         self.context_menu = self.context_target.clone().map(|target| {
             let (open_with_apps, service_actions) = self.context_menu_dynamic_data(&target, cache);
             ShellContextMenu::with_dynamic(target, point, open_with_apps, service_actions)
@@ -6010,6 +6001,7 @@ impl ShellScene {
         if self.context_menu.take().is_none() {
             return false;
         }
+        self.context_menu_safe_triangle.reset();
         fika_log!("[fika-wgpu] context-menu open=0");
         true
     }
@@ -6021,6 +6013,9 @@ impl ShellScene {
     ) -> Option<ShellContextMenuCommand> {
         let action = self.context_menu_command_at_screen_point(point, size);
         let menu_was_open = self.context_menu.take().is_some();
+        if menu_was_open {
+            self.context_menu_safe_triangle.reset();
+        }
         if let Some(action) = action {
             self.context_menu_actions += 1;
             fika_log!(
@@ -6090,37 +6085,39 @@ impl ShellScene {
             return false;
         };
         let scale = self.ui_scale();
-        let hovered_submenu_row = snapshot.active_submenu.and_then(|submenu| {
-            context_submenu_row_at_screen_point(&snapshot, submenu, point, size, scale)
-        });
-        let hovered_row = if hovered_submenu_row.is_some()
-            && context_menu_submenu_rect(&snapshot, size, scale)
-                .is_some_and(|rect| rect.contains(point))
-        {
-            snapshot.hovered_row
-        } else {
-            context_menu_row_at_screen_point(&snapshot, point, size, scale)
-        };
-        let root_items = context_menu_items(&snapshot);
-        let hovered_row = hovered_row.filter(|row| *row < root_items.len());
-        let active_submenu = hovered_row
-            .and_then(|row| root_items.get(row))
-            .and_then(|item| item.submenu)
-            .or_else(|| {
-                hovered_submenu_row
-                    .is_some()
-                    .then_some(snapshot.active_submenu)
-                    .flatten()
-            });
+        let hover = self
+            .context_menu_safe_triangle
+            .hover_state(&snapshot, point, size, scale);
         let Some(menu) = self.context_menu.as_mut() else {
             return false;
         };
-        let changed = menu.hovered_row != hovered_row
-            || menu.hovered_submenu_row != hovered_submenu_row
-            || menu.active_submenu != active_submenu;
-        menu.hovered_row = hovered_row;
-        menu.hovered_submenu_row = hovered_submenu_row;
-        menu.active_submenu = active_submenu;
+        let changed = menu.hovered_row != hover.hovered_row
+            || menu.hovered_submenu_row != hover.hovered_submenu_row
+            || menu.active_submenu != hover.active_submenu
+            || menu.active_submenu_row != hover.active_submenu_row;
+        menu.hovered_row = hover.hovered_row;
+        menu.hovered_submenu_row = hover.hovered_submenu_row;
+        menu.active_submenu = hover.active_submenu;
+        menu.active_submenu_row = hover.active_submenu_row;
+        changed
+    }
+
+    fn apply_due_context_menu_hover(&mut self, now: Instant) -> bool {
+        let Some(hover) = self.context_menu_safe_triangle.take_due_hover_state(now) else {
+            return false;
+        };
+        let Some(menu) = self.context_menu.as_mut() else {
+            self.context_menu_safe_triangle.reset();
+            return false;
+        };
+        let changed = menu.hovered_row != hover.hovered_row
+            || menu.hovered_submenu_row != hover.hovered_submenu_row
+            || menu.active_submenu != hover.active_submenu
+            || menu.active_submenu_row != hover.active_submenu_row;
+        menu.hovered_row = hover.hovered_row;
+        menu.hovered_submenu_row = hover.hovered_submenu_row;
+        menu.active_submenu = hover.active_submenu;
+        menu.active_submenu_row = hover.active_submenu_row;
         changed
     }
 
@@ -9160,7 +9157,7 @@ impl ShellScene {
             self.queue_thumbnail_read_ahead_for_projection(projection, icons);
         }
         if let Some(overlay_text) = overlay_text {
-            self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, theme, size);
+            self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
             self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, theme, size);
             self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
             self.push_properties_overlay(&mut overlay_vertices, overlay_text, paint.popup, size);
@@ -9966,6 +9963,9 @@ impl ShellScene {
                 theme,
             );
         }
+        shell::path_transition::push_path_transition_overlay(
+            self, vertices, projection, theme, size,
+        );
         if self.rubber_band.is_some() && pane_id == self.active_pane() {
             self.push_rubber_band_for_projection(vertices, projection, theme, size);
         }
@@ -10032,6 +10032,30 @@ impl ShellScene {
             pane_content_rect_to_screen(layout.text_rect, projection),
             reflow_dx,
             reflow_dy,
+        );
+        let item_rect = shell::path_transition::transform_rect_for_pane(
+            self,
+            projection.geometry.kind,
+            item_rect,
+            content_clip,
+        );
+        let visual_rect = shell::path_transition::transform_rect_for_pane(
+            self,
+            projection.geometry.kind,
+            visual_rect,
+            content_clip,
+        );
+        let icon_rect = shell::path_transition::transform_rect_for_pane(
+            self,
+            projection.geometry.kind,
+            icon_rect,
+            content_clip,
+        );
+        let text_rect = shell::path_transition::transform_rect_for_pane(
+            self,
+            projection.geometry.kind,
+            text_rect,
+            content_clip,
         );
         let content_rect = visual_rect;
         let pixmap_layout = ItemPixmapLayout {
@@ -10144,7 +10168,16 @@ impl ShellScene {
             push_fallback_file_icon(vertices, entry, icon_rect, content_clip, theme, size);
         }
 
-        let text_color = pane_item_text_color(projection.view.view_mode, entry, selected, theme);
+        let text_color = shell::path_transition::text_color_for_pane(
+            self,
+            projection.geometry.kind,
+            pane_item_text_color(projection.view.view_mode, entry, selected, theme),
+        );
+        let muted_text = shell::path_transition::text_color_for_pane(
+            self,
+            projection.geometry.kind,
+            theme.muted_text(),
+        );
         match projection.view.view_mode {
             ShellViewMode::Compact => {
                 text.push_label_aligned_no_wrap(
@@ -10188,7 +10221,7 @@ impl ShellScene {
                     height: text_height,
                 },
                 content_clip,
-                theme.muted_text(),
+                muted_text,
                 LabelAlignment::Start,
             );
             text.push_label_aligned_no_wrap(
@@ -10205,7 +10238,7 @@ impl ShellScene {
                     height: text_height,
                 },
                 content_clip,
-                theme.muted_text(),
+                muted_text,
                 LabelAlignment::Start,
             );
         }
@@ -11326,139 +11359,11 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
+        icons: &mut IconFrameBuilder<'_>,
         theme: ShellTheme,
         size: PhysicalSize<u32>,
     ) {
-        let Some(drag) = self.internal_drag.as_ref().filter(|drag| drag.active) else {
-            return;
-        };
-        let screen = ViewRect {
-            x: 0.0,
-            y: 0.0,
-            width: size.width.max(1) as f32,
-            height: size.height.max(1) as f32,
-        };
-        let scale = self.ui_scale();
-        let width = self
-            .scale_metric(188.0)
-            .min((screen.width - self.scale_metric(16.0)).max(1.0));
-        let height = self.scale_metric(42.0);
-        let offset = self.scale_metric(14.0);
-        let mut rect = ViewRect {
-            x: drag.current.x + offset,
-            y: drag.current.y + offset,
-            width,
-            height,
-        };
-        rect.x = rect
-            .x
-            .min((screen.right() - rect.width - self.scale_metric(8.0)).max(0.0));
-        rect.y = rect
-            .y
-            .min((screen.bottom() - rect.height - self.scale_metric(8.0)).max(0.0));
-
-        let preview_colors = theme.drag_preview();
-        shell::context_menu::paint::push_context_menu_shadow(vertices, rect, screen, scale, size);
-        push_clipped_rounded_rect(
-            vertices,
-            rect,
-            screen,
-            self.scale_metric(7.0),
-            preview_colors.surface,
-            size,
-        );
-        push_clipped_rect_outline(vertices, rect, screen, 1.0, preview_colors.border, size);
-
-        let icon_size = self.scale_metric(26.0);
-        let icon = ViewRect {
-            x: rect.x + self.scale_metric(8.0),
-            y: rect.y + (rect.height - icon_size) / 2.0,
-            width: icon_size,
-            height: icon_size,
-        };
-        self.push_drag_preview_icon(vertices, icon, screen, drag, theme, size);
-
-        let text_x = icon.right() + self.scale_metric(8.0);
-        text.push_label_aligned(
-            &drag.label,
-            ViewRect {
-                x: text_x,
-                y: rect.y + (rect.height - self.text_line_height()) / 2.0,
-                width: (rect.right() - text_x - self.scale_metric(10.0)).max(1.0),
-                height: self.text_line_height(),
-            },
-            rect,
-            theme.primary_text(),
-            LabelAlignment::Start,
-        );
-
-        if drag.paths.len() > 1 {
-            let badge_size = self.scale_metric(18.0);
-            let badge = ViewRect {
-                x: icon.right() - badge_size * 0.45,
-                y: icon.y - badge_size * 0.25,
-                width: badge_size,
-                height: badge_size,
-            };
-            push_clipped_rounded_rect(
-                vertices,
-                badge,
-                screen,
-                badge_size / 2.0,
-                preview_colors.badge,
-                size,
-            );
-            text.push_label_aligned(
-                &drag.paths.len().min(99).to_string(),
-                badge,
-                screen,
-                TextColor::rgb(255, 255, 255),
-                LabelAlignment::Center,
-            );
-        }
-    }
-
-    fn push_drag_preview_icon(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        icon: ViewRect,
-        clip: ViewRect,
-        drag: &ShellInternalDrag,
-        theme: ShellTheme,
-        size: PhysicalSize<u32>,
-    ) {
-        match &drag.source {
-            ShellInternalDragSource::PaneItem { pane, index, .. } => {
-                if let Some(view) = self.pane_view(*pane)
-                    && let Some(entry) = view.entries.get(*index)
-                {
-                    push_fallback_file_icon(vertices, entry, icon, clip, theme, size);
-                    return;
-                }
-            }
-            ShellInternalDragSource::Place { index } => {
-                if let Some(place) = self.places.get(*index) {
-                    push_place_icon(
-                        vertices,
-                        icon,
-                        clip,
-                        place_icon_paint(place, false),
-                        theme,
-                        self.ui_scale(),
-                        size,
-                    );
-                    return;
-                }
-            }
-        }
-        push_clipped_rounded_rect(
-            vertices,
-            icon,
-            clip,
-            self.scale_metric(6.0),
-            theme.toolbar_button(true).fill,
-            size,
-        );
+        shell::drag_preview::push_drag_preview_overlay(self, vertices, text, icons, theme, size);
     }
 
     fn push_drop_menu_overlay(
@@ -12570,6 +12475,7 @@ impl ShellScene {
 
     fn clear_pointer(&mut self) -> bool {
         self.pointer = None;
+        self.context_menu_safe_triangle.reset();
         let changed = self.hovered_item.take().is_some()
             || self.hovered_place.take().is_some()
             || self.internal_drag.take().is_some()
@@ -13146,6 +13052,7 @@ impl WgpuState {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .map_err(|error| format!("request adapter: {error}"))?;
 
@@ -13220,6 +13127,7 @@ impl WgpuState {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width,
             height: size.height,
             present_mode,
@@ -13374,7 +13282,7 @@ impl WgpuState {
     ) -> u64 {
         self.queue.submit(Some(encoder.finish()));
         window.pre_present_notify();
-        frame.present();
+        self.queue.present(frame);
         self.frame_count += 1;
         self.frame_count
     }
@@ -15840,6 +15748,7 @@ impl<'a> IconFrameBuilder<'a> {
         entry: &Entry,
         rect: ViewRect,
         clip: ViewRect,
+        layer: IconDrawLayer,
     ) -> bool {
         if rect.width <= 0.0 || rect.height <= 0.0 {
             self.fallbacks += 1;
@@ -15874,7 +15783,7 @@ impl<'a> IconFrameBuilder<'a> {
                 && let Some(raster) = self.role_raster_cache.get(&role_key)
             {
                 self.cache_hits += 1;
-                self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
+                self.copy_raster_to_atlas(raster, rect, screen, layer);
                 return true;
             }
             self.fallbacks += 1;
@@ -15938,7 +15847,7 @@ impl<'a> IconFrameBuilder<'a> {
         };
 
         self.role_raster_cache.insert(role_key, raster.clone());
-        self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
+        self.copy_raster_to_atlas(raster, rect, screen, layer);
         true
     }
 
@@ -15950,6 +15859,25 @@ impl<'a> IconFrameBuilder<'a> {
         pixmap_layout: ItemPixmapLayout,
         clip: ViewRect,
     ) -> bool {
+        self.push_thumbnail_or_icon_on_layer(
+            directory,
+            entry,
+            folder_preview,
+            pixmap_layout,
+            clip,
+            IconDrawLayer::Content,
+        )
+    }
+
+    fn push_thumbnail_or_icon_on_layer(
+        &mut self,
+        directory: &Path,
+        entry: &Entry,
+        folder_preview: Option<&FolderPreviewReady>,
+        pixmap_layout: ItemPixmapLayout,
+        clip: ViewRect,
+        layer: IconDrawLayer,
+    ) -> bool {
         if entry.is_dir {
             return self.push_folder_preview_or_icon(
                 directory,
@@ -15957,12 +15885,13 @@ impl<'a> IconFrameBuilder<'a> {
                 folder_preview,
                 pixmap_layout,
                 clip,
+                layer,
             );
         }
-        if self.push_thumbnail(directory, entry, pixmap_layout.icon_rect, clip) {
+        if self.push_thumbnail(directory, entry, pixmap_layout.icon_rect, clip, layer) {
             return true;
         }
-        self.push_icon(directory, entry, pixmap_layout.icon_rect, clip)
+        self.push_icon(directory, entry, pixmap_layout.icon_rect, clip, layer)
     }
 
     fn push_folder_preview_or_icon(
@@ -15972,15 +15901,17 @@ impl<'a> IconFrameBuilder<'a> {
         folder_preview: Option<&FolderPreviewReady>,
         pixmap_layout: ItemPixmapLayout,
         clip: ViewRect,
+        layer: IconDrawLayer,
     ) -> bool {
         let path = entry_path_for_thumbnail(directory, entry);
         let Some(_modified_secs) = entry.modified_secs else {
-            return self.push_icon(directory, entry, pixmap_layout.icon_rect, clip);
+            return self.push_icon(directory, entry, pixmap_layout.icon_rect, clip, layer);
         };
         if !entry.metadata_complete || is_network_path(&path) {
-            return self.push_icon(directory, entry, pixmap_layout.icon_rect, clip);
+            return self.push_icon(directory, entry, pixmap_layout.icon_rect, clip, layer);
         }
-        let drew_folder_shell = self.push_icon(directory, entry, pixmap_layout.icon_rect, clip);
+        let drew_folder_shell =
+            self.push_icon(directory, entry, pixmap_layout.icon_rect, clip, layer);
         let Some(preview) = folder_preview else {
             self.folder_preview_deferred += 1;
             return drew_folder_shell;
@@ -15999,7 +15930,7 @@ impl<'a> IconFrameBuilder<'a> {
             self.folder_previews_loaded += 1;
             self.raster_cache.insert(key, preview.raster.clone())
         };
-        self.copy_raster_to_atlas(raster, preview_rect, screen, IconDrawLayer::Content);
+        self.copy_raster_to_atlas(raster, preview_rect, screen, layer);
         self.folder_preview_quads += 1;
         drew_folder_shell
     }
@@ -16010,6 +15941,7 @@ impl<'a> IconFrameBuilder<'a> {
         entry: &Entry,
         rect: ViewRect,
         clip: ViewRect,
+        layer: IconDrawLayer,
     ) -> bool {
         if rect.width.max(rect.height) < 32.0 {
             return false;
@@ -16060,7 +15992,7 @@ impl<'a> IconFrameBuilder<'a> {
                 ThumbnailResolveState::Failed => return false,
             }
         };
-        self.copy_raster_to_atlas(raster, rect, screen, IconDrawLayer::Content);
+        self.copy_raster_to_atlas(raster, rect, screen, layer);
         self.thumbnail_quads += 1;
         true
     }
@@ -16378,7 +16310,7 @@ impl IconRenderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[TextVertex::layout()],
+                buffers: &[Some(TextVertex::layout())],
             },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
@@ -17742,7 +17674,7 @@ impl TextRenderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[TextVertex::layout()],
+                buffers: &[Some(TextVertex::layout())],
             },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
@@ -19465,22 +19397,53 @@ mod tests {
         assert!(narrow_columns < wide_columns);
 
         assert!(scene.reflow_pane_items_after_window_resize(narrow, wide));
+        assert!(shell::item_reflow::has_pending_item_reflow(&scene));
+        assert!(scene.animations.item_reflow_transitions().is_empty());
         let target = PathBuf::from("/tmp/item-02.txt");
+        let previous_rect = scene
+            .visible_item_rects_by_path_for_pane(ShellPaneId::SLOT_0, narrow)
+            .remove(&target)
+            .expect("target should be visible before resize");
+        let next_rect = scene
+            .visible_item_rects_by_path_for_pane(ShellPaneId::SLOT_0, wide)
+            .remove(&target)
+            .expect("target should remain visible after resize");
+        assert_eq!(
+            scene.item_reflow_offset_for_path(ShellPaneId::SLOT_0, &target),
+            Some((previous_rect.x - next_rect.x, previous_rect.y - next_rect.y))
+        );
+
+        assert!(shell::item_reflow::start_due_item_reflow_transitions(
+            &mut scene,
+            Instant::now() + ITEM_REFLOW_ANIMATION_DELAY + Duration::from_millis(1)
+        ));
         let transition = scene
             .animations
             .item_reflow_transitions()
             .iter()
             .find(|transition| transition.path == target)
             .expect("item should reflow when resize changes icon columns");
-        let next_rect = scene
-            .visible_item_rects_by_path_for_pane(ShellPaneId::SLOT_0, wide)
-            .remove(&target)
-            .expect("target should remain visible after resize");
 
         assert_eq!(transition.pane, ShellPaneId::SLOT_0);
         assert_eq!(transition.to, next_rect);
         assert!(transition.moved());
         assert!(scene.animation_active());
+    }
+
+    #[test]
+    fn window_resize_height_only_does_not_animate_item_reflow() {
+        let mut scene = test_scene(
+            (0..8)
+                .map(|index| test_entry(&format!("item-{index:02}.txt"), false))
+                .collect(),
+            ShellViewMode::Icons,
+        );
+        let short = PhysicalSize::new(720, 320);
+        let tall = PhysicalSize::new(720, 460);
+
+        assert!(!scene.reflow_pane_items_after_window_resize(short, tall));
+        assert!(!shell::item_reflow::has_pending_item_reflow(&scene));
+        assert!(scene.animations.item_reflow_transitions().is_empty());
     }
 
     #[test]
@@ -19592,6 +19555,7 @@ mod tests {
             histories: ShellPaneHistories::default(),
             context_target: None,
             context_menu: None,
+            context_menu_safe_triangle: ShellContextMenuSafeTriangleRuntime::default(),
             drop_menu: None,
             properties_overlay: None,
             create_dialog: None,
@@ -19612,6 +19576,8 @@ mod tests {
             pending_drop_request: None,
             task_statuses: ShellTaskStatusStore::new(),
             rubber_band: None,
+            item_reflow: shell::item_reflow::ShellItemReflowRuntime::default(),
+            path_transition: shell::path_transition::ShellPathTransitionRuntime::default(),
             animations: ShellAnimationRuntime::default(),
             text_hit_tests: RefCell::new(TextHitTestRuntime::new()),
             scale_factor: 1.0,
@@ -21044,6 +21010,11 @@ mod tests {
         let mut label_cache = LabelRasterCache::new(1024 * 1024);
         let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
         let mut atlas_cache = TextAtlasFrameCache::default();
+        let mut icon_resolver = FileIconResolver::new();
+        let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut icon_rasters = IconRasterResolver::new();
+        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
         let mut text = TextFrameBuilder::new(
             &mut font_system,
             &mut swash_cache,
@@ -21055,8 +21026,24 @@ mod tests {
             scene.ui_scale(),
             Vec::new(),
         );
-        scene.push_drag_preview_overlay(&mut vertices, &mut text, scene.theme(), size);
+        let mut icons = IconFrameBuilder::new(
+            &mut icon_resolver,
+            &mut thumbnails,
+            &mut icon_rasters,
+            &mut raster_cache,
+            &mut role_raster_cache,
+            size,
+            0,
+            0,
+            0,
+        );
+        scene.push_drag_preview_overlay(&mut vertices, &mut text, &mut icons, scene.theme(), size);
         assert!(!vertices.is_empty());
+        assert!(
+            !vertices
+                .iter()
+                .any(|vertex| vertex.color == [1.000, 1.000, 1.000, 0.94])
+        );
 
         let valid_gap = scene.place_row_rects(size)[1].1;
         let valid_gap_point = ViewPoint {
@@ -21073,6 +21060,142 @@ mod tests {
             scene.dnd_hover_target,
             Some(ShellDropTarget::PlacesGap { index: 2 })
         );
+    }
+
+    #[test]
+    fn pane_drag_preview_uses_ready_thumbnail_on_overlay_layer() {
+        let mut scene = test_scene(
+            vec![test_entry_with_mime_and_modified(
+                "photo.png",
+                false,
+                "image/png",
+                Some(7),
+            )],
+            ShellViewMode::Icons,
+        );
+        let size = PhysicalSize::new(700, 360);
+        let start = ViewPoint { x: 220.0, y: 120.0 };
+        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::SLOT_0, 0, start));
+        assert!(scene.set_pointer(ViewPoint { x: 230.0, y: 132.0 }, size));
+
+        let mut vertices = Vec::new();
+        let mut font_system = FontSystem::new();
+        let mut swash_cache = SwashCache::new();
+        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
+        let mut atlas_cache = TextAtlasFrameCache::default();
+        let mut icon_resolver = FileIconResolver::new();
+        let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut icon_rasters = IconRasterResolver::new();
+        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
+        let thumbnail_size = icon_cache_size(scene.dolphin_zoom_icon_size_for_step(0));
+        thumbnails.insert_ready(
+            IconRasterCacheKey::thumbnail(PathBuf::from("/tmp/photo.png"), thumbnail_size, 7),
+            test_icon_raster(8, 3),
+        );
+        let mut text = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            &mut metrics_cache,
+            &mut atlas_cache,
+            size,
+            scene.ui_scale(),
+            Vec::new(),
+        );
+        let mut icons = IconFrameBuilder::new(
+            &mut icon_resolver,
+            &mut thumbnails,
+            &mut icon_rasters,
+            &mut raster_cache,
+            &mut role_raster_cache,
+            size,
+            0,
+            0,
+            0,
+        );
+        scene.push_drag_preview_overlay(&mut vertices, &mut text, &mut icons, scene.theme(), size);
+        let frame = icons.finish();
+
+        assert_eq!(frame.stats.thumbnail_quads, 1);
+        assert!(!frame.overlay_vertices.is_empty());
+        assert!(frame.vertices.is_empty());
+    }
+
+    #[test]
+    fn place_drag_preview_uses_place_theme_icon_on_overlay_layer() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![ShellPlace::new(
+            "",
+            "H",
+            "Home",
+            PathBuf::from("/tmp"),
+            false,
+        )];
+        let icon_name = scene.places[0].icon_name;
+        let icon_size = icon_cache_size(scene.scale_metric(128.0));
+        let icon_path = PathBuf::from("/tmp/fika-place-preview-icon.png");
+        let key = FileIconPathCacheKey {
+            role: FileIconRoleCacheKey {
+                kind: FileIconKind::Named {
+                    icon_name: icon_name.to_string(),
+                    fallback: NamedIconFallback::Service,
+                },
+            },
+            size_px: icon_size,
+        };
+        let size = PhysicalSize::new(700, 360);
+        let start = ViewPoint { x: 120.0, y: 120.0 };
+        assert!(scene.begin_internal_drag_for_place(0, start));
+        assert!(scene.set_pointer(ViewPoint { x: 136.0, y: 136.0 }, size));
+
+        let mut vertices = Vec::new();
+        let mut font_system = FontSystem::new();
+        let mut swash_cache = SwashCache::new();
+        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
+        let mut label_cache = LabelRasterCache::new(1024 * 1024);
+        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
+        let mut atlas_cache = TextAtlasFrameCache::default();
+        let mut icon_harness = FileIconResolverTestHarness::new();
+        icon_harness.complete(key, Some(icon_path.clone()));
+        let mut thumbnails = ThumbnailRasterResolver::new();
+        let mut icon_rasters = IconRasterResolver::new();
+        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        raster_cache.insert(
+            IconRasterCacheKey::icon(icon_path, icon_size),
+            test_icon_raster(8, 4),
+        );
+        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
+        let mut text = TextFrameBuilder::new(
+            &mut font_system,
+            &mut swash_cache,
+            &mut text_buffer,
+            &mut label_cache,
+            &mut metrics_cache,
+            &mut atlas_cache,
+            size,
+            scene.ui_scale(),
+            Vec::new(),
+        );
+        let mut icons = IconFrameBuilder::new(
+            &mut icon_harness.resolver,
+            &mut thumbnails,
+            &mut icon_rasters,
+            &mut raster_cache,
+            &mut role_raster_cache,
+            size,
+            0,
+            0,
+            0,
+        );
+        scene.push_drag_preview_overlay(&mut vertices, &mut text, &mut icons, scene.theme(), size);
+        let frame = icons.finish();
+
+        assert!(!frame.overlay_vertices.is_empty());
+        assert!(frame.vertices.is_empty());
     }
 
     #[test]
@@ -22864,6 +22987,7 @@ mod tests {
             .expect("blank context menu should expose create-new submenu");
         menu.hovered_row = Some(create_new_row);
         menu.active_submenu = Some(ShellContextSubmenu::CreateNew);
+        menu.active_submenu_row = Some(create_new_row);
         let raw_submenu_rect = context_menu_submenu_rect(menu, size, scale).unwrap();
         let projections = ShellPaneId::ALL
             .into_iter()
@@ -30406,6 +30530,9 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.path_changes, 1);
+        assert!(shell::path_transition::has_active_path_transition(&scene));
+        assert!(scene.animation_active());
+        assert!(scene.next_animation_frame_deadline().is_some());
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -30533,6 +30660,7 @@ text/plain=writer.desktop;\n",
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, root);
         assert_eq!(scene.path_changes, 0);
         assert_eq!(scene.directory_reloads, 1);
+        assert!(!shell::path_transition::has_active_path_transition(&scene));
 
         fs::remove_dir_all(scene.panes[ShellPaneId::SLOT_0].path.clone()).unwrap();
     }

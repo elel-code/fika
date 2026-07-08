@@ -700,6 +700,7 @@ fn push_context_menu(values: &mut Vec<u64>, menu: Option<&ShellContextMenu>, inc
                 push_option_usize(values, menu.hovered_row);
                 push_option_usize(values, menu.hovered_submenu_row);
                 push_hash(values, format!("{:?}", menu.active_submenu));
+                push_option_usize(values, menu.active_submenu_row);
             }
         }
         None => push_bool(values, false),

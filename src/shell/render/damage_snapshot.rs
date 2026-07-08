@@ -48,6 +48,7 @@ pub(crate) struct ContextMenuDamageState {
     pub(super) hovered_row: Option<usize>,
     pub(super) hovered_submenu_row: Option<usize>,
     pub(super) active_submenu: Option<ShellContextSubmenu>,
+    pub(super) active_submenu_row: Option<usize>,
     pub(super) root_rect: ViewRect,
     pub(crate) overlay_rect: ViewRect,
     pub(super) root_row_rects: Vec<(usize, ViewRect)>,
@@ -238,6 +239,7 @@ fn context_menu_damage_state(
         hovered_row: menu.hovered_row,
         hovered_submenu_row: menu.hovered_submenu_row,
         active_submenu: menu.active_submenu,
+        active_submenu_row: menu.active_submenu_row,
         root_rect,
         overlay_rect,
         root_row_rects,
@@ -315,30 +317,7 @@ fn drop_menu_damage_state(
 }
 
 fn drag_preview_damage_rect(scene: &ShellScene, size: PhysicalSize<u32>) -> Option<ViewRect> {
-    let drag = scene.internal_drag.as_ref().filter(|drag| drag.active)?;
-    let screen = surface_rect(size);
-    let width = scene
-        .scale_metric(188.0)
-        .min((screen.width - scene.scale_metric(16.0)).max(1.0));
-    let height = scene.scale_metric(42.0);
-    let offset = scene.scale_metric(14.0);
-    let mut rect = ViewRect {
-        x: drag.current.x + offset,
-        y: drag.current.y + offset,
-        width,
-        height,
-    };
-    rect.x = rect
-        .x
-        .min((screen.right() - rect.width - scene.scale_metric(8.0)).max(0.0));
-    rect.y = rect
-        .y
-        .min((screen.bottom() - rect.height - scene.scale_metric(8.0)).max(0.0));
-    Some(context_menu_shadow_damage_rect(
-        rect,
-        size,
-        scene.ui_scale(),
-    ))
+    crate::shell::drag_preview::drag_preview_damage_rect(scene, size)
 }
 
 fn rubber_band_damage_rect(

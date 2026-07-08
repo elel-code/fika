@@ -266,7 +266,9 @@ fn push_context_menu_damage_rects(
         push_context_menu_root_row_damage(rects, previous, previous.hovered_row);
         push_context_menu_root_row_damage(rects, current, current.hovered_row);
     }
-    if previous.active_submenu != current.active_submenu {
+    if previous.active_submenu != current.active_submenu
+        || previous.active_submenu_row != current.active_submenu_row
+    {
         if let Some(rect) = previous.submenu_rect {
             rects.push(rect);
         }

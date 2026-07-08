@@ -57,7 +57,7 @@ impl QuadRenderer {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[QuadVertex::layout()],
+                buffers: &[Some(QuadVertex::layout())],
             },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,

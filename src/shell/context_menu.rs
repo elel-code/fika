@@ -11,6 +11,8 @@ use crate::shell::pane::ShellPaneId;
 
 #[path = "context_menu/paint.rs"]
 pub(crate) mod paint;
+#[path = "context_menu/safe_triangle.rs"]
+pub(crate) mod safe_triangle;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ShellDevicePlace {
@@ -283,6 +285,7 @@ pub(crate) struct ShellContextMenu {
     pub(crate) service_actions: Vec<ServiceMenuAction>,
     pub(crate) hovered_row: Option<usize>,
     pub(crate) active_submenu: Option<ShellContextSubmenu>,
+    pub(crate) active_submenu_row: Option<usize>,
     pub(crate) hovered_submenu_row: Option<usize>,
 }
 
@@ -296,6 +299,7 @@ impl ShellContextMenu {
             service_actions: Vec::new(),
             hovered_row: None,
             active_submenu: None,
+            active_submenu_row: None,
             hovered_submenu_row: None,
         }
     }
@@ -313,6 +317,7 @@ impl ShellContextMenu {
             service_actions,
             hovered_row: None,
             active_submenu: None,
+            active_submenu_row: None,
             hovered_submenu_row: None,
         }
     }

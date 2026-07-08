@@ -114,7 +114,7 @@ pub(crate) fn context_menu_submenu_rect(
     scale_factor: f32,
 ) -> Option<ViewRect> {
     let submenu = menu.active_submenu?;
-    let parent_row = menu.hovered_row?;
+    let parent_row = menu.active_submenu_row.or(menu.hovered_row)?;
     let submenu_len = context_submenu_actions(submenu, menu).len();
     if submenu_len == 0 {
         return None;
