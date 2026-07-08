@@ -3,16 +3,13 @@ use std::time::Duration;
 
 use crate::shell::metrics::{
     DOLPHIN_MAX_BLOCK_TIMEOUT, ICON_RASTER_VISIBLE_SYNC_BUDGET, ICON_ROLE_READ_AHEAD_LIMIT,
-    ICON_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME, TEXT_LABEL_PREWARM_RASTER_MISS_BUDGET,
-    TEXT_RASTER_MISS_BUDGET_PER_FRAME, VISIBLE_ICON_ROLE_PREWARM_BUDGET,
-    VISIBLE_TEXT_LABEL_PREWARM_BUDGET,
+    ICON_ROLE_READ_AHEAD_QUEUE_BUDGET_PER_FRAME, TEXT_RASTER_MISS_BUDGET_PER_FRAME,
+    VISIBLE_ICON_ROLE_PREWARM_BUDGET, VISIBLE_TEXT_LABEL_PREWARM_BUDGET,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TextLabelPrewarmMode {
     VisibleOnly,
-    DolphinReadAhead,
-    ResolveAllSmallDirectory,
 }
 
 #[derive(Default)]
@@ -105,39 +102,21 @@ pub(crate) fn icon_role_read_ahead_queue_budget_for_frame(
     }
 }
 
-pub(crate) fn text_label_prewarm_mode_for_scene_prewarm(reason: &str) -> TextLabelPrewarmMode {
-    if visible_exact_icon_roles_enabled_for_frame(reason) {
-        TextLabelPrewarmMode::ResolveAllSmallDirectory
-    } else {
-        text_label_prewarm_mode_for_frame(reason)
-    }
+pub(crate) fn text_label_prewarm_mode_for_scene_prewarm(_reason: &str) -> TextLabelPrewarmMode {
+    TextLabelPrewarmMode::VisibleOnly
 }
 
-pub(crate) fn text_label_prewarm_mode_for_frame(reason: &str) -> TextLabelPrewarmMode {
-    if matches!(
-        reason,
-        "autosmoke-scroll" | "wheel-scroll" | "zoom" | "wheel-zoom" | "autosmoke-zoom"
-    ) {
-        TextLabelPrewarmMode::VisibleOnly
-    } else {
-        TextLabelPrewarmMode::DolphinReadAhead
-    }
+pub(crate) fn text_label_prewarm_mode_for_frame(_reason: &str) -> TextLabelPrewarmMode {
+    // Dolphin caches text on visible/recycled item widgets, not as invisible read-ahead rasters.
+    TextLabelPrewarmMode::VisibleOnly
 }
 
-pub(crate) fn text_label_prewarm_budget_for_mode(mode: TextLabelPrewarmMode) -> Duration {
-    if mode == TextLabelPrewarmMode::ResolveAllSmallDirectory {
-        DOLPHIN_MAX_BLOCK_TIMEOUT
-    } else {
-        VISIBLE_TEXT_LABEL_PREWARM_BUDGET
-    }
+pub(crate) fn text_label_prewarm_budget_for_mode(_mode: TextLabelPrewarmMode) -> Duration {
+    VISIBLE_TEXT_LABEL_PREWARM_BUDGET
 }
 
-pub(crate) fn text_label_raster_miss_budget_for_mode(mode: TextLabelPrewarmMode) -> usize {
-    if mode == TextLabelPrewarmMode::VisibleOnly {
-        TEXT_RASTER_MISS_BUDGET_PER_FRAME
-    } else {
-        TEXT_LABEL_PREWARM_RASTER_MISS_BUDGET
-    }
+pub(crate) fn text_label_raster_miss_budget_for_mode(_mode: TextLabelPrewarmMode) -> usize {
+    TEXT_RASTER_MISS_BUDGET_PER_FRAME
 }
 
 pub(crate) fn default_text_raster_miss_budget() -> usize {
@@ -167,13 +146,13 @@ mod tests {
     }
 
     #[test]
-    fn scene_prewarm_resolves_small_directories_for_navigation_reasons() {
+    fn scene_prewarm_keeps_text_labels_visible_only_for_navigation_reasons() {
         assert!(visible_exact_icon_roles_enabled_for_frame(
             "activate-directory"
         ));
         assert_eq!(
             text_label_prewarm_mode_for_scene_prewarm("activate-directory"),
-            TextLabelPrewarmMode::ResolveAllSmallDirectory
+            TextLabelPrewarmMode::VisibleOnly
         );
     }
 }

@@ -25,12 +25,11 @@ pub(crate) const TEXT_FONT_SIZE: f32 = 14.0;
 pub(crate) const TEXT_LINE_HEIGHT: f32 = 18.0;
 pub(crate) const TEXT_ATLAS_MAX_HEIGHT: u32 = 8192;
 pub(crate) const TEXT_PADDING: u32 = 2;
-pub(crate) const TEXT_LABEL_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const TEXT_LABEL_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
+// Dolphin caps recycled KItemListWidget instances at 100; keep text rasters in the same shape.
+pub(crate) const TEXT_LABEL_RECYCLE_CACHE_ENTRIES: usize = 100;
 pub(crate) const TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES: usize = 4096;
 pub(crate) const TEXT_RASTER_MISS_BUDGET_PER_FRAME: usize = 256;
-pub(crate) const TEXT_LABEL_READ_AHEAD_LIMIT: usize = 512;
-pub(crate) const TEXT_LABEL_PREWARM_RASTER_MISS_BUDGET: usize =
-    TEXT_RASTER_MISS_BUDGET_PER_FRAME + TEXT_LABEL_READ_AHEAD_LIMIT;
 pub(crate) const VISIBLE_TEXT_LABEL_PREWARM_BUDGET: Duration = Duration::from_millis(8);
 pub(crate) const TEXT_SWASH_IMAGE_CACHE_MAX_ENTRIES: usize = 1024;
 pub(crate) const TEXT_SWASH_OUTLINE_CACHE_MAX_ENTRIES: usize = 256;

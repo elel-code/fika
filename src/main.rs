@@ -203,8 +203,8 @@ use shell::dolphin::text::{
     dolphin_text_available_width, dolphin_wrapped_filename_line_count, estimated_text_cursor_x,
 };
 use shell::dolphin::{
-    dolphin_icon_size_for_zoom_level, shell_dolphin_deferred_all_indexes,
-    shell_dolphin_read_ahead_indexes, visible_layout_range_for_projection,
+    dolphin_icon_size_for_zoom_level, shell_dolphin_read_ahead_indexes,
+    visible_layout_range_for_projection,
 };
 use shell::drop_menu::{
     ShellDropMenu, ShellDropMenuCommand, ShellDropOperationRequest, ShellDropTarget,
@@ -9767,57 +9767,6 @@ impl ShellScene {
             }
         }
 
-        if mode == TextLabelPrewarmMode::VisibleOnly {
-            stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
-            return stats;
-        }
-
-        for projection in projections {
-            let layout = self.pane_layout_for_pane(
-                projection.geometry.kind,
-                projection.view,
-                projection.geometry.content.width,
-                projection.geometry.content.height,
-            );
-            let item_count = projection.view.filtered_entry_count();
-            let read_ahead_indexes = if mode == TextLabelPrewarmMode::ResolveAllSmallDirectory
-                && item_count <= DOLPHIN_RESOLVE_ALL_ITEMS_LIMIT
-            {
-                shell_dolphin_deferred_all_indexes(
-                    visible_layout_range_for_projection(projection),
-                    item_count,
-                )
-            } else {
-                let Some(visible_range) = visible_layout_range_for_projection(projection) else {
-                    continue;
-                };
-                shell_dolphin_read_ahead_indexes(
-                    visible_range,
-                    item_count,
-                    projection.visible_items.len(),
-                )
-            };
-            for layout_index in read_ahead_indexes {
-                if stats.read_ahead >= TEXT_LABEL_READ_AHEAD_LIMIT {
-                    stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
-                    return stats;
-                }
-                if Instant::now() >= deadline {
-                    stats.over_budget = true;
-                    stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
-                    return stats;
-                }
-                let Some(layout) = layout.item(layout_index) else {
-                    continue;
-                };
-                let outcome = self.prewarm_projection_text_label(projection, layout, text, theme);
-                if outcome != LabelCacheOutcome::Skipped {
-                    stats.read_ahead += 1;
-                }
-                stats.record(outcome);
-            }
-        }
-
         stats.raster_us = text.raster_us.saturating_sub(raster_us_start);
         stats
     }
@@ -16789,6 +16738,13 @@ impl TextAtlasFrameCache {
         }
         self.height = needed_height.next_power_of_two();
     }
+
+    fn retain_label_cache_entries(&mut self, label_cache: &LabelRasterCache) {
+        self.entries.retain(|key, _| label_cache.contains_key(key));
+        if self.entries.capacity() > self.entries.len().saturating_mul(2).max(64) {
+            self.entries.shrink_to_fit();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -16891,6 +16847,33 @@ impl LabelRasterCache {
 
     fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    fn contains_key(&self, key: &LabelCacheKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    fn evict_to_recent_entry_limit(&mut self, max_entries: usize) -> bool {
+        let max_entries = max_entries.max(1);
+        let mut evicted = false;
+        while self.entries.len() > max_entries {
+            let Some(victim) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used_frame)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&victim) {
+                self.bytes = self.bytes.saturating_sub(entry.bytes);
+                evicted = true;
+            }
+        }
+        if evicted && self.entries.capacity() > self.entries.len().saturating_mul(2).max(64) {
+            self.entries.shrink_to_fit();
+        }
+        evicted
     }
 
     fn evict_if_needed(&mut self, protected: &LabelCacheKey) {
@@ -17444,9 +17427,11 @@ impl<'a> TextFrameBuilder<'a> {
     }
 
     fn finish(mut self) -> TextFrame {
-        let cache_entries = self.label_cache.len();
-        let cache_bytes = self.label_cache.bytes();
         let pending = std::mem::take(&mut self.pending_draws);
+        let label_cache_entry_limit = pending
+            .len()
+            .saturating_add(TEXT_LABEL_RECYCLE_CACHE_ENTRIES)
+            .max(1);
 
         let mut atlas_reused: usize;
         let mut drawable = Vec::with_capacity(pending.len());
@@ -17494,6 +17479,15 @@ impl<'a> TextFrameBuilder<'a> {
         pixels.clear();
         let vertices =
             text_vertices_for_pending(&drawable, &atlases, self.width, height, self.surface_size);
+        if self
+            .label_cache
+            .evict_to_recent_entry_limit(label_cache_entry_limit)
+        {
+            self.atlas_cache
+                .retain_label_cache_entries(self.label_cache);
+        }
+        let cache_entries = self.label_cache.len();
+        let cache_bytes = self.label_cache.bytes();
         let atlas_bytes = (self.width * height) as usize;
         let atlas_uploads = uploads.len();
         TextFrame {
@@ -31490,6 +31484,41 @@ text/plain=writer.desktop;\n",
 
         assert_eq!(second_frame.stats.atlas_reused, 1);
         assert_eq!(second_frame.uploads.len(), 1);
+    }
+
+    #[test]
+    fn text_label_cache_keeps_recent_recycled_entries_only() {
+        let mut cache = LabelRasterCache::new(1024 * 1024);
+        for index in 0..150 {
+            cache.begin_frame();
+            cache.insert(
+                LabelCacheKey {
+                    text: format!("label-{index}"),
+                    width: 8,
+                    height: 8,
+                    alignment: LabelAlignment::Start,
+                    wrap: LabelWrap::None,
+                },
+                vec![index as u8; 64],
+            );
+        }
+
+        assert!(cache.evict_to_recent_entry_limit(TEXT_LABEL_RECYCLE_CACHE_ENTRIES));
+        assert_eq!(cache.len(), TEXT_LABEL_RECYCLE_CACHE_ENTRIES);
+        assert!(!cache.contains_key(&LabelCacheKey {
+            text: "label-0".to_string(),
+            width: 8,
+            height: 8,
+            alignment: LabelAlignment::Start,
+            wrap: LabelWrap::None,
+        }));
+        assert!(cache.contains_key(&LabelCacheKey {
+            text: "label-149".to_string(),
+            width: 8,
+            height: 8,
+            alignment: LabelAlignment::Start,
+            wrap: LabelWrap::None,
+        }));
     }
 
     #[test]
