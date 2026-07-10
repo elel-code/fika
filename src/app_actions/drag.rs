@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 #[cfg(test)]
 use std::fs;
 #[cfg(all(test, unix))]
@@ -6,7 +5,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use winit::data_transfer::{DataTransferId, DataTransferSendBuilder, TypeHint, TypedData};
+use winit::data_transfer::{
+    DataTransferId, DataTransferSendBuilder, SendData, TypeHint, TypedData,
+};
 use winit::dpi::PhysicalPosition;
 use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial, DndAction, DragIcon};
 use winit::icon::RgbaIcon;
@@ -36,7 +37,7 @@ const DEEPIN_DND_ICON_OPACITY: f32 = 0.1;
 
 #[derive(Clone, Debug)]
 struct OutgoingDndPayload {
-    uris: Vec<OsString>,
+    uris: Vec<String>,
     text: String,
 }
 
@@ -80,7 +81,9 @@ impl FikaWgpuApp {
         let drag_icon =
             outgoing_dnd_drag_icon(&paths, preview_icon_size, scale, preview_raster.as_ref());
         let send_data = DataTransferSendBuilder::new(payload)
-            .with_type(TypeHint::UriList, |payload, _| Some(payload.uris.clone()))
+            .with_type(TypeHint::UriList, |payload, _| {
+                Some(SendData::Uris(payload.uris.clone()))
+            })
             .with_type(TypeHint::Plaintext, |payload, _| Some(payload.text.clone()))
             .build();
         match event_loop.start_drag(window_id, send_data, &ACCEPTED_DND_ACTIONS, drag_icon) {
@@ -491,13 +494,9 @@ impl FikaWgpuApp {
 fn outgoing_dnd_payload(paths: &[PathBuf]) -> OutgoingDndPayload {
     let uris = paths
         .iter()
-        .map(|path| OsString::from(path_uri_from_path(path)))
+        .map(|path| path_uri_from_path(path))
         .collect::<Vec<_>>();
-    let text = uris
-        .iter()
-        .map(|uri| uri.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = uris.join("\n");
     OutgoingDndPayload { uris, text }
 }
 
@@ -1247,12 +1246,8 @@ fn external_drag_paths_from_typed_data(value: &dyn TypedData) -> Result<Vec<Path
     Ok(external_drag_paths_from_uris(uris))
 }
 
-fn external_drag_paths_from_uris(uris: Vec<OsString>) -> Vec<PathBuf> {
-    let text = uris
-        .iter()
-        .map(|uri| uri.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("\n");
+fn external_drag_paths_from_uris(uris: Vec<String>) -> Vec<PathBuf> {
+    let text = uris.join("\n");
     decode_file_clipboard_text(&text)
         .map(|payload| payload.paths)
         .unwrap_or_default()
@@ -1297,7 +1292,7 @@ mod tests {
     #[test]
     fn uri_list_data_decodes_file_paths() {
         assert_eq!(
-            external_drag_paths_from_uris(vec![OsString::from("file:///tmp/a%20file.txt")]),
+            external_drag_paths_from_uris(vec!["file:///tmp/a%20file.txt".to_string()]),
             vec![PathBuf::from("/tmp/a file.txt")]
         );
     }
@@ -1306,10 +1301,7 @@ mod tests {
     fn outgoing_payload_advertises_uri_list() {
         let payload = outgoing_dnd_payload(&[PathBuf::from("/tmp/a file.txt")]);
 
-        assert_eq!(
-            payload.uris,
-            vec![OsString::from("file:///tmp/a%20file.txt")]
-        );
+        assert_eq!(payload.uris, vec!["file:///tmp/a%20file.txt".to_string()]);
         assert_eq!(payload.text, "file:///tmp/a%20file.txt");
     }
 
