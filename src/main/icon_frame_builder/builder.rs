@@ -24,7 +24,6 @@ impl<'a> IconFrameBuilder<'a> {
             uploads: Vec::with_capacity(64),
             draws: Vec::with_capacity(64),
             overlay_draws: Vec::with_capacity(16),
-            content_alpha: 1.0,
             width: ICON_ATLAS_WIDTH,
             height: 1,
             cursor_x: ICON_PADDING,
@@ -50,12 +49,6 @@ impl<'a> IconFrameBuilder<'a> {
             resolve_us: 0,
             raster_us: 0,
         }
-    }
-
-    fn replace_content_alpha(&mut self, alpha: f32) -> f32 {
-        let previous = self.content_alpha;
-        self.content_alpha = alpha.clamp(0.0, 1.0);
-        previous
     }
 
     fn push_icon(
@@ -500,10 +493,7 @@ impl<'a> IconFrameBuilder<'a> {
             screen,
             atlas,
             source,
-            alpha: match layer {
-                IconDrawLayer::Content => self.content_alpha,
-                IconDrawLayer::Overlay => 1.0,
-            },
+            alpha: 1.0,
         };
         match layer {
             IconDrawLayer::Content => self.draws.push(draw),

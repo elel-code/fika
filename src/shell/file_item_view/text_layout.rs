@@ -253,7 +253,7 @@ fn dolphin_prefix_to_width_shaped(
     label[..boundaries[low]].to_string()
 }
 
-fn dolphin_text_width_no_wrap(
+pub(crate) fn dolphin_text_width_no_wrap(
     font_system: &mut FontSystem,
     buffer: &mut Buffer,
     label: &str,
@@ -280,17 +280,6 @@ fn dolphin_text_width_no_wrap(
         .next()
         .map(|run| run.line_w)
         .unwrap_or(0.0)
-}
-
-#[cfg(test)]
-pub(crate) fn dolphin_shaped_text_width_for_test(
-    font_system: &mut FontSystem,
-    buffer: &mut Buffer,
-    label: &str,
-    font_size: f32,
-    line_height: f32,
-) -> f32 {
-    dolphin_text_width_no_wrap(font_system, buffer, label, font_size, line_height)
 }
 
 fn configure_text_buffer(

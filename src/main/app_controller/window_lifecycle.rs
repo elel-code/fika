@@ -18,6 +18,7 @@ impl FikaWgpuApp {
             directory_watchers,
             async_task_tx,
             async_task_rx,
+            navigation_generations: [0; 2],
             active_task_controllers: HashMap::new(),
             active_task_base_details: HashMap::new(),
             next_task_id: 1,

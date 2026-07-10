@@ -434,9 +434,9 @@ impl ShellScene {
                     width: icon_size,
                     height: icon_size,
                 };
-                if active || hovered {
+                if hovered && !active {
                     let icon_slot_size = (icon_size + self.scale_metric(8.0)).min(row.height);
-                    let slot_colors = theme.toolbar_button(active);
+                    let slot_colors = theme.toolbar_button(false);
                     push_clipped_rounded_rect(
                         vertices,
                         ViewRect {
@@ -468,7 +468,7 @@ impl ShellScene {
                         vertices,
                         icon,
                         panel,
-                        place_icon_paint(place, active),
+                        place_icon_paint(place),
                         theme,
                         self.ui_scale(),
                         size,

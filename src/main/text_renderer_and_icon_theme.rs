@@ -293,26 +293,6 @@ fn text_color_to_vertex_color(color: TextColor) -> [f32; 4] {
         a as f32 / 255.0,
     ]
 }
-fn text_color_with_alpha_factor(color: TextColor, alpha: f32) -> TextColor {
-    let [r, g, b, a] = color.as_rgba();
-    TextColor::rgba(
-        r,
-        g,
-        b,
-        ((a as f32) * alpha.clamp(0.0, 1.0))
-            .round()
-            .clamp(0.0, 255.0) as u8,
-    )
-}
-fn fade_quad_vertices_alpha(vertices: &mut [QuadVertex], alpha: f32) {
-    let alpha = alpha.clamp(0.0, 1.0);
-    if alpha >= 1.0 {
-        return;
-    }
-    for vertex in vertices {
-        vertex.color[3] *= alpha;
-    }
-}
 fn fill_text_alpha_pixels(
     pixels: &mut [u8],
     width: u32,

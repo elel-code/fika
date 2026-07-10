@@ -6,6 +6,7 @@ struct FikaWgpuApp {
     directory_watchers: ShellDirectoryWatcherRuntime,
     async_task_tx: Sender<ShellAsyncTaskResult>,
     async_task_rx: Receiver<ShellAsyncTaskResult>,
+    navigation_generations: [u64; 2],
     active_task_controllers: HashMap<ShellTaskId, OperationController>,
     active_task_base_details: HashMap<ShellTaskId, String>,
     next_task_id: ShellTaskId,

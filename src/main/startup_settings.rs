@@ -52,15 +52,11 @@ use shell::file_item_view::style::{
     place_row_background_color_for_palette_with_hover_progress,
 };
 #[cfg(test)]
-use shell::file_item_view::text::estimated_text_cursor_x;
-use shell::file_item_view::text::{
-    compact_entry_text_width, estimated_label_raster_width, required_compact_item_width,
-};
-#[cfg(test)]
-use shell::file_item_view::text_layout::dolphin_shaped_text_width_for_test;
+use shell::file_item_view::text::{compact_entry_text_width, estimated_text_cursor_x};
+use shell::file_item_view::text::required_compact_item_width;
 use shell::file_item_view::text_layout::{
     dolphin_elide_filename_to_width_shaped, dolphin_icons_filename_line_count,
-    dolphin_layout_icons_filename,
+    dolphin_layout_icons_filename, dolphin_text_width_no_wrap,
 };
 use shell::file_item_view::{
     dolphin_icon_size_for_zoom_level, dolphin_icons_item_width, shell_dolphin_read_ahead_indexes,

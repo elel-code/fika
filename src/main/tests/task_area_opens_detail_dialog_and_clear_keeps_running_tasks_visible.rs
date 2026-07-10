@@ -213,6 +213,32 @@
     }
 
     #[test]
+    fn compact_layout_keeps_the_full_shaped_filename_inside_its_text_rect() {
+        let name = "README.zh-CN.md";
+        let scene = test_scene(vec![test_entry(name, false)], ShellViewMode::Compact);
+        let size = PhysicalSize::new(700, 250);
+        let options = scene.compact_options(size);
+        let shaped_width = scene.text_hit_tests.borrow_mut().no_wrap_width(
+            name,
+            TEXT_FONT_SIZE * scene.text_line_height() / TEXT_LINE_HEIGHT,
+            scene.text_line_height(),
+        );
+        let item = match scene.layout(size) {
+            ShellLayout::Compact(layout) => layout.item(0).expect("compact item"),
+            _ => unreachable!(),
+        };
+
+        assert!(
+            item.text_rect.width.ceil()
+                >= shaped_width.ceil() + options.padding.mul_add(2.0, 0.0),
+            "text rect {} did not contain shaped width {} plus padding {}",
+            item.text_rect.width,
+            shaped_width,
+            options.padding * 2.0,
+        );
+    }
+
+    #[test]
     fn details_navigation_and_header_hit_test_are_row_based() {
         let scene = test_scene(
             vec![

@@ -82,7 +82,6 @@ impl ShellScene {
             task_statuses: ShellTaskStatusStore::new(),
             rubber_band: None,
             item_reflow: shell::item_reflow::ShellItemReflowRuntime::default(),
-            path_transition: shell::path_transition::ShellPathTransitionRuntime::default(),
             animations: ShellAnimationRuntime::default(),
             text_hit_tests: RefCell::new(TextHitTestRuntime::new()),
             scale_factor: 1.0,
@@ -155,10 +154,10 @@ impl ShellScene {
         push_history: bool,
     ) -> Result<bool, String> {
         let pane = self.normalized_pane_id(pane);
-        let Some(current) = self.pane_state(pane) else {
+        let Some(current_path) = self.pane_state(pane).map(|state| state.path.clone()) else {
             return Err(format!("pane {} is not open", pane.as_str()));
         };
-        if path == current.path {
+        if path == current_path {
             return Ok(false);
         }
         let load_start = Instant::now();
@@ -173,9 +172,8 @@ impl ShellScene {
             .join(", ");
 
         if push_history {
-            let previous_path = current.path.clone();
             let history = self.pane_history_mut(pane);
-            history.push_back(previous_path);
+            history.push_back(current_path);
             history.clear_forward();
         }
         self.apply_loaded_path_to_pane(pane, path, entries, size);
@@ -184,6 +182,7 @@ impl ShellScene {
         Ok(true)
     }
 
+    #[cfg(test)]
     fn load_path_for_pane(
         &mut self,
         pane: ShellPaneId,
@@ -303,14 +302,13 @@ impl ShellScene {
     }
 
     fn animation_active(&self) -> bool {
-        self.animations.active() || shell::path_transition::path_transition_active(self)
+        self.animations.active()
     }
 
     fn next_animation_frame_deadline(&self) -> Option<Instant> {
         [
             self.animations.next_frame_deadline(),
             shell::item_reflow::next_item_reflow_deadline(self),
-            shell::path_transition::next_path_transition_frame_deadline(self),
             self.context_menu_safe_triangle.next_deadline(),
         ]
         .into_iter()
@@ -321,18 +319,15 @@ impl ShellScene {
     fn prune_finished_animations(&mut self) -> bool {
         let item_reflow_started =
             shell::item_reflow::start_due_item_reflow_transitions(self, Instant::now());
-        let path_transition_pruned = shell::path_transition::prune_finished_path_transitions(self);
         let context_menu_hover_due = self.apply_due_context_menu_hover(Instant::now());
         self.animations.prune_finished()
             || item_reflow_started
-            || path_transition_pruned
             || context_menu_hover_due
     }
 
     fn animation_dirty_value_with_hover(&self, include_hover: bool) -> u64 {
         self.animations.dirty_value_with_hover(include_hover)
             ^ shell::item_reflow::item_reflow_dirty_value(self).rotate_left(11)
-            ^ shell::path_transition::path_transition_dirty_value(self).rotate_left(23)
     }
 
     fn start_hover_animation(&mut self) {
@@ -409,14 +404,7 @@ impl ShellScene {
         Ok(changed)
     }
 
-    fn go_parent_directory(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
-        let pane = self.active_pane();
-        let Some(path) = self.parent_directory_path_for_pane(pane) else {
-            return Ok(false);
-        };
-        self.load_path_for_pane(pane, path, size)
-    }
-
+    #[cfg(test)]
     fn go_history_back(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
         let pane = self.active_pane();
         let Some(path) = self.pane_history(pane).back.last().cloned() else {
@@ -434,6 +422,7 @@ impl ShellScene {
         self.load_path_in_pane(pane, path, size, false)
     }
 
+    #[cfg(test)]
     fn go_history_forward(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
         let pane = self.active_pane();
         let Some(path) = self.pane_history(pane).forward.last().cloned() else {

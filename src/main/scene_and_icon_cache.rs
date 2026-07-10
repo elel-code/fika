@@ -43,7 +43,6 @@ struct ShellScene {
     task_statuses: ShellTaskStatusStore,
     rubber_band: Option<RubberBand>,
     item_reflow: shell::item_reflow::ShellItemReflowRuntime,
-    path_transition: shell::path_transition::ShellPathTransitionRuntime,
     animations: ShellAnimationRuntime,
     text_hit_tests: RefCell<TextHitTestRuntime>,
     scale_factor: f32,

@@ -44,21 +44,6 @@ impl ShellScene {
         SceneFrameProjections::new(projections, layouts.layout_us)
     }
 
-    fn path_transition_snapshot_for_pane(
-        &self,
-        pane: ShellPaneId,
-        size: PhysicalSize<u32>,
-    ) -> Option<shell::path_transition::ShellPathTransitionSnapshot> {
-        let state = self.pane_state(pane)?.clone();
-        let projection = self.pane_projection(pane, size)?;
-        Some(shell::path_transition::ShellPathTransitionSnapshot::new(
-            state,
-            projection.geometry,
-            projection.visible_items.clone(),
-            projection.scroll_metrics,
-        ))
-    }
-
     fn update_visible_slot_pools_for_projection_layouts(
         &mut self,
         layouts: &mut ShellPreparedFrameProjectionLayouts,
@@ -175,6 +160,9 @@ impl ShellScene {
         let column_count = item_count.div_ceil(rows_per_column);
         let mut text_widths = Vec::with_capacity(item_count);
         let mut column_widths = vec![options.item_width; column_count];
+        let font_size = (TEXT_FONT_SIZE * self.text_line_height() / TEXT_LINE_HEIGHT).max(1.0);
+        let line_height = self.text_line_height();
+        let mut text_runtime = self.text_hit_tests.borrow_mut();
         for layout_index in 0..item_count {
             let Some(entry_index) = pane.filtered_indexes.get(layout_index).copied() else {
                 text_widths.push(0.0);
@@ -184,7 +172,8 @@ impl ShellScene {
                 text_widths.push(0.0);
                 continue;
             };
-            let text_width = compact_entry_text_width(entry, self.ui_scale());
+            let text_width =
+                text_runtime.no_wrap_width(entry.name.as_ref(), font_size, line_height);
             text_widths.push(text_width);
             let column = layout_index / rows_per_column;
             if let Some(width) = column_widths.get_mut(column) {

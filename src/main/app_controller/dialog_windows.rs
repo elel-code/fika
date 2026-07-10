@@ -124,6 +124,12 @@ impl FikaWgpuApp {
         let mut changed = false;
         while let Ok(result) = self.async_task_rx.try_recv() {
             match result {
+                ShellAsyncTaskResult::Navigation(completion) => {
+                    let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
+                        continue;
+                    };
+                    changed |= self.apply_async_navigation_completion(completion, size);
+                }
                 ShellAsyncTaskResult::Transfer(completion) => {
                     self.active_task_controllers.remove(&completion.task_id);
                     self.active_task_base_details.remove(&completion.task_id);

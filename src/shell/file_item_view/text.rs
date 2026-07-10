@@ -1,13 +1,10 @@
-use fika_core::{CompactLayoutOptions, Entry};
+use fika_core::CompactLayoutOptions;
+#[cfg(test)]
+use fika_core::Entry;
 
-use crate::shell::metrics::{TEXT_FONT_SIZE, TEXT_PADDING, normalized_scale_factor};
-
-pub(crate) fn estimated_label_raster_width(label: &str, font_size: f32) -> f32 {
-    let scale = font_size / TEXT_FONT_SIZE.max(1.0);
-    let width = label.chars().map(estimated_name_char_width).sum::<f32>() * scale
-        + TEXT_PADDING as f32 * 2.0;
-    width.ceil().max(1.0)
-}
+use crate::shell::metrics::TEXT_FONT_SIZE;
+#[cfg(test)]
+use crate::shell::metrics::normalized_scale_factor;
 
 pub(crate) fn estimated_text_cursor_for_offset(
     label: &str,
@@ -46,15 +43,18 @@ pub(crate) fn estimated_text_cursor_x(label: &str, cursor: usize, font_size: f32
         * scale
 }
 
+#[cfg(test)]
 fn estimated_text_width_without_padding(label: &str, font_size: f32) -> f32 {
     let scale = font_size / TEXT_FONT_SIZE.max(1.0);
     label.chars().map(estimated_name_char_width).sum::<f32>() * scale
 }
 
 pub(crate) fn required_compact_item_width(options: CompactLayoutOptions, text_width: f32) -> f32 {
-    (options.padding * 2.0 + options.icon_size + options.text_gap + text_width).round()
+    // CompactLayout adds horizontal padding to both the item and the text raster.
+    (options.padding * 4.0 + options.icon_size + options.text_gap + text_width).ceil()
 }
 
+#[cfg(test)]
 pub(crate) fn compact_entry_text_width(entry: &Entry, scale_factor: f32) -> f32 {
     estimated_text_width_without_padding(
         entry.name.as_ref(),

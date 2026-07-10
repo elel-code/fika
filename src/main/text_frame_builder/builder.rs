@@ -304,9 +304,15 @@ impl<'a> TextFrameBuilder<'a> {
             return width.min(max_label_width).max(1);
         }
 
-        let width = estimated_label_raster_width(label, self.max_font_size)
-            .ceil()
-            .max(1.0) as u32;
+        let shaped_width = dolphin_text_width_no_wrap(
+            self.font_system,
+            self.text_buffer,
+            label,
+            self.max_font_size,
+            self.max_line_height,
+        );
+        let width = (shaped_width.ceil().max(1.0) as u32)
+            .saturating_add(TEXT_PADDING.saturating_mul(2));
         self.metrics_cache.insert(key, width);
         width.min(max_label_width).max(1)
     }

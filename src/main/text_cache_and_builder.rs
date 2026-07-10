@@ -363,6 +363,16 @@ impl TextHitTestRuntime {
         )
     }
 
+    fn no_wrap_width(&mut self, label: &str, font_size: f32, line_height: f32) -> f32 {
+        dolphin_text_width_no_wrap(
+            &mut self.font_system,
+            &mut self.text_buffer,
+            label,
+            font_size,
+            line_height,
+        )
+    }
+
     #[cfg(test)]
     fn cursor_x(
         &mut self,

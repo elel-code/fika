@@ -318,7 +318,6 @@ struct IconFrameBuilder<'a> {
     uploads: Vec<IconAtlasUpload>,
     draws: Vec<IconDraw>,
     overlay_draws: Vec<IconDraw>,
-    content_alpha: f32,
     width: u32,
     height: u32,
     cursor_x: u32,

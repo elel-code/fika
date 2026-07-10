@@ -196,9 +196,8 @@ impl ShellPlace {
         self
     }
 }
-fn place_icon_paint(place: &ShellPlace, active: bool) -> PlaceIconPaint {
+fn place_icon_paint(place: &ShellPlace) -> PlaceIconPaint {
     PlaceIconPaint::from_flags(
-        active,
         place.trash,
         place.network,
         place.root,
@@ -369,30 +368,6 @@ impl ShellExternalDrag {
     fn new(sources: Vec<PathBuf>) -> Option<Self> {
         let sources = normalized_external_drop_sources(sources);
         (!sources.is_empty()).then_some(Self { sources })
-    }
-}
-#[derive(Clone, Copy, Debug)]
-enum ShellPaneItemTransitionPaint {
-    Enter { process: f32 },
-    Exit { process: f32 },
-}
-impl ShellPaneItemTransitionPaint {
-    fn process(self) -> f32 {
-        match self {
-            Self::Enter { process } | Self::Exit { process } => process.clamp(0.0, 1.0),
-        }
-    }
-
-    fn alpha(self) -> f32 {
-        shell::path_transition::opacity_for_process(self.process())
-    }
-
-    fn entering(self) -> bool {
-        matches!(self, Self::Enter { .. })
-    }
-
-    fn transform_rect(self, rect: ViewRect, content: ViewRect) -> ViewRect {
-        shell::path_transition::transform_rect_for_process(rect, content, self.process())
     }
 }
 struct ShellPreparedPaneVisibleItem {

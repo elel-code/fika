@@ -1,36 +1,50 @@
 use std::path::PathBuf;
+use std::thread;
 
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 
 use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
+use crate::read_shell_entries_sync;
 use crate::shell::location::LocationDraftPurpose;
 use crate::shell::pane::ShellPaneId;
 use crate::shell::shortcuts::PathNavigationAction;
 use crate::shell::tasks::ShellTaskStatus;
+use crate::shell::transfer::{
+    ShellAsyncNavigationCompletion, ShellAsyncTaskResult, ShellNavigationHistoryUpdate,
+};
 use fika_core::default_user_places_path;
 
 impl FikaWgpuApp {
     pub(crate) fn perform_path_navigation(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        _event_loop: &dyn ActiveEventLoop,
         action: PathNavigationAction,
     ) {
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
+        let pane = self.scene.active_pane();
+        let target = match action {
+            PathNavigationAction::Back => self
+                .scene
+                .pane_history(pane)
+                .back
+                .last()
+                .cloned()
+                .map(|path| (path, ShellNavigationHistoryUpdate::Back)),
+            PathNavigationAction::Forward => self
+                .scene
+                .pane_history(pane)
+                .forward
+                .last()
+                .cloned()
+                .map(|path| (path, ShellNavigationHistoryUpdate::Forward)),
+            PathNavigationAction::Parent => self
+                .scene
+                .parent_directory_path_for_pane(pane)
+                .map(|path| (path, ShellNavigationHistoryUpdate::Push)),
         };
-        let result = match action {
-            PathNavigationAction::Back => self.scene.go_history_back(size),
-            PathNavigationAction::Forward => self.scene.go_history_forward(size),
-            PathNavigationAction::Parent => self.scene.go_parent_directory(size),
-        };
-        match result {
-            Ok(changed) => self.apply_action_outcome(
-                event_loop,
-                ShellActionOutcome::present_if(changed, action.reason()),
-            ),
-            Err(error) => fika_log!("[fika-wgpu] navigation-error {error}"),
+        if let Some((path, history)) = target {
+            self.queue_path_navigation(pane, path, history, action.reason());
         }
     }
 
@@ -84,24 +98,20 @@ impl FikaWgpuApp {
             return;
         };
         let closed = self.scene.close_location_draft(size);
-        match self.scene.load_path_for_pane(pane, path, size) {
-            Ok(true) => {
-                self.apply_action_outcome(
-                    event_loop,
-                    ShellActionOutcome::Present("location-commit"),
-                );
-            }
-            Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
-            Err(error) => {
-                fika_log!("[fika-wgpu] location-error input={input:?} error={error}");
-                self.apply_window_action_outcome(ShellActionOutcome::redraw_if(closed));
-            }
+        if !self.queue_path_navigation(
+            pane,
+            path,
+            ShellNavigationHistoryUpdate::Push,
+            "location-commit",
+        ) {
+            fika_log!("[fika-wgpu] location-unchanged input={input:?}");
+            self.apply_window_action_outcome(ShellActionOutcome::redraw_if(closed));
         }
     }
 
     fn commit_add_network_folder_draft(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        _event_loop: &dyn ActiveEventLoop,
         size: PhysicalSize<u32>,
     ) {
         let input = self.scene.location_draft_value().unwrap_or("").to_string();
@@ -126,25 +136,14 @@ impl FikaWgpuApp {
             request.label,
             size,
         ) {
-            Ok(_) => match self
-                .scene
-                .load_path_for_pane(request.pane, request.path, size)
-            {
-                Ok(true) => self.apply_action_outcome(
-                    event_loop,
-                    ShellActionOutcome::Present("add-network-folder"),
-                ),
-                Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
-                Err(error) => {
-                    fika_log!("[fika-wgpu] add-network-folder-load-error {error}");
-                    self.scene.record_task_status(ShellTaskStatus::failed(
-                        "Open Network Folder failed",
-                        error,
-                        false,
-                    ));
-                    self.apply_window_action_outcome(ShellActionOutcome::Redraw);
-                }
-            },
+            Ok(_) => {
+                self.queue_path_navigation(
+                    request.pane,
+                    request.path,
+                    ShellNavigationHistoryUpdate::Push,
+                    "add-network-folder",
+                );
+            }
             Err(error) => {
                 fika_log!("[fika-wgpu] add-network-folder-error input={input:?} error={error}");
                 self.scene.record_task_status(ShellTaskStatus::failed(
@@ -159,18 +158,113 @@ impl FikaWgpuApp {
 
     pub(crate) fn load_path_into_pane(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        _event_loop: &dyn ActiveEventLoop,
         pane: ShellPaneId,
         path: PathBuf,
         reason: &'static str,
     ) {
-        let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
-            return;
-        };
-        match self.scene.load_path_for_pane(pane, path, size) {
-            Ok(true) => self.apply_action_outcome(event_loop, ShellActionOutcome::Present(reason)),
-            Ok(false) => self.apply_window_action_outcome(ShellActionOutcome::Redraw),
-            Err(error) => fika_log!("[fika-wgpu] navigation-error {error}"),
+        self.queue_path_navigation(pane, path, ShellNavigationHistoryUpdate::Push, reason);
+    }
+
+    fn queue_path_navigation(
+        &mut self,
+        pane: ShellPaneId,
+        target_path: PathBuf,
+        history: ShellNavigationHistoryUpdate,
+        reason: &'static str,
+    ) -> bool {
+        if self.renderer.is_none() {
+            return false;
         }
+        let pane = self.scene.normalized_pane_id(pane);
+        let Some(source_path) = self.scene.pane_state(pane).map(|state| state.path.clone()) else {
+            return false;
+        };
+        if source_path == target_path {
+            return false;
+        }
+
+        let generation = self.navigation_generations[pane.index()].wrapping_add(1);
+        self.navigation_generations[pane.index()] = generation;
+        let tx = self.async_task_tx.clone();
+        let proxy = self.event_loop_proxy.clone();
+        thread::spawn(move || {
+            let result = read_shell_entries_sync(&target_path);
+            let completion = ShellAsyncNavigationCompletion {
+                generation,
+                pane,
+                source_path,
+                target_path,
+                history,
+                reason,
+                result,
+            };
+            if tx
+                .send(ShellAsyncTaskResult::Navigation(completion))
+                .is_ok()
+            {
+                proxy.wake_up();
+            }
+        });
+
+        true
+    }
+
+    pub(crate) fn apply_async_navigation_completion(
+        &mut self,
+        completion: ShellAsyncNavigationCompletion,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        let pane = completion.pane;
+        if self.navigation_generations[pane.index()] != completion.generation {
+            return false;
+        }
+        if !self
+            .scene
+            .pane_state(pane)
+            .is_some_and(|state| state.path == completion.source_path)
+        {
+            return false;
+        }
+
+        let entries = match completion.result {
+            Ok(entries) => entries,
+            Err(error) => {
+                fika_log!(
+                    "[fika-wgpu] async-navigation-error reason={} path={} error={error}",
+                    completion.reason,
+                    completion.target_path.display()
+                );
+                self.scene.record_task_status(ShellTaskStatus::failed(
+                    "Open folder failed",
+                    error,
+                    false,
+                ));
+                return true;
+            }
+        };
+
+        let history = self.scene.pane_history_mut(pane);
+        match completion.history {
+            ShellNavigationHistoryUpdate::Push => {
+                history.push_back(completion.source_path);
+                history.clear_forward();
+            }
+            ShellNavigationHistoryUpdate::Back => {
+                if history.back.last() == Some(&completion.target_path) {
+                    history.back.pop();
+                }
+                history.push_forward(completion.source_path);
+            }
+            ShellNavigationHistoryUpdate::Forward => {
+                if history.forward.last() == Some(&completion.target_path) {
+                    history.forward.pop();
+                }
+                history.push_back(completion.source_path);
+            }
+        }
+        self.scene
+            .apply_loaded_path_to_pane(pane, completion.target_path, entries, size);
+        true
     }
 }

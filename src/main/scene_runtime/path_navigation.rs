@@ -8,7 +8,6 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) {
         let pane = self.normalized_pane_id(pane);
-        let path_transition_snapshot = self.path_transition_snapshot_for_pane(pane, size);
         let view_mode = self
             .pane_state(pane)
             .map(|state| state.view_mode)
@@ -44,7 +43,6 @@ impl ShellScene {
         self.clear_transient_after_pane_content_change(pane, true);
         self.path_changes += 1;
         self.clamp_scroll(size);
-        shell::path_transition::start_path_transition(self, pane, path_transition_snapshot);
     }
 
     fn clear_transient_after_pane_content_change(&mut self, pane: ShellPaneId, clear_open: bool) {

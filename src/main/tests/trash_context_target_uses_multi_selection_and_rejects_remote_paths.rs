@@ -487,16 +487,7 @@
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].selection.len(), 0);
         assert!(scene.rubber_band.is_none());
         assert_eq!(scene.path_changes, 1);
-        assert!(shell::path_transition::has_active_path_transition(&scene));
-        assert_eq!(
-            shell::path_transition::path_transition_exit_snapshot_entry_count(
-                &scene,
-                ShellPaneId::SLOT_0
-            ),
-            Some(1)
-        );
-        assert!(scene.animation_active());
-        assert!(scene.next_animation_frame_deadline().is_some());
+        assert!(!scene.animation_active());
 
         fs::remove_dir_all(root).unwrap();
     }

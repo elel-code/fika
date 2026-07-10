@@ -89,12 +89,10 @@ pub(crate) enum PlaceIconColorRole {
 pub(crate) struct PlaceIconPaint {
     pub(crate) shape: PlaceIconShape,
     pub(crate) color_role: PlaceIconColorRole,
-    pub(crate) active: bool,
 }
 
 impl PlaceIconPaint {
     pub(crate) fn from_flags(
-        active: bool,
         trash: bool,
         network: bool,
         root: bool,
@@ -119,11 +117,7 @@ impl PlaceIconPaint {
         } else {
             PlaceIconColorRole::Folder
         };
-        Self {
-            shape,
-            color_role,
-            active,
-        }
+        Self { shape, color_role }
     }
 }
 
@@ -159,10 +153,6 @@ pub(crate) fn push_place_icon(
 }
 
 fn place_icon_colors(paint: PlaceIconPaint, theme: ShellTheme) -> (UiColor, UiColor) {
-    if paint.active {
-        let colors = theme.toolbar_button(true);
-        return (colors.icon, colors.fill);
-    }
     if theme.is_dark() {
         return match paint.color_role {
             PlaceIconColorRole::Trash => ([0.973, 0.444, 0.444, 1.0], [0.286, 0.102, 0.102, 1.0]),
@@ -536,7 +526,7 @@ mod tests {
 
     #[test]
     fn place_icon_paint_uses_semantic_shape_and_theme_colors() {
-        let paint = PlaceIconPaint::from_flags(false, false, true, false, false, false);
+        let paint = PlaceIconPaint::from_flags(false, true, false, false, false);
         assert_eq!(paint.shape, PlaceIconShape::Drive);
         assert_eq!(paint.color_role, PlaceIconColorRole::Network);
 
@@ -546,13 +536,10 @@ mod tests {
             (dark.accent(), dark.toolbar_button(true).fill)
         );
 
-        let active = PlaceIconPaint::from_flags(true, false, false, false, false, false);
+        let folder = PlaceIconPaint::from_flags(false, false, false, false, false);
         assert_eq!(
-            place_icon_colors(active, dark),
-            (
-                dark.toolbar_button(true).icon,
-                dark.toolbar_button(true).fill
-            )
+            place_icon_colors(folder, dark),
+            ([0.953, 0.612, 0.071, 1.0], [0.286, 0.196, 0.102, 1.0])
         );
     }
 }

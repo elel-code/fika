@@ -371,7 +371,6 @@
             task_statuses: ShellTaskStatusStore::new(),
             rubber_band: None,
             item_reflow: shell::item_reflow::ShellItemReflowRuntime::default(),
-            path_transition: shell::path_transition::ShellPathTransitionRuntime::default(),
             animations: ShellAnimationRuntime::default(),
             text_hit_tests: RefCell::new(TextHitTestRuntime::new()),
             scale_factor: 1.0,

@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use fika_core::{
-    FileTransferMode, OperationController, PrivilegedCommand, TransferTaskResult, TransferUndoItem,
-    TrashViewOperationResult, file_ops, push_unique_path,
+    Entry, FileTransferMode, OperationController, PrivilegedCommand, TransferTaskResult,
+    TransferUndoItem, TrashViewOperationResult, file_ops, push_unique_path,
 };
 
 use crate::CopyLocationRequest;
@@ -73,6 +73,24 @@ pub(crate) struct ShellAsyncTrashViewCompletion {
     pub(crate) result: TrashViewOperationResult,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ShellNavigationHistoryUpdate {
+    Push,
+    Back,
+    Forward,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ShellAsyncNavigationCompletion {
+    pub(crate) generation: u64,
+    pub(crate) pane: ShellPaneId,
+    pub(crate) source_path: PathBuf,
+    pub(crate) target_path: PathBuf,
+    pub(crate) history: ShellNavigationHistoryUpdate,
+    pub(crate) reason: &'static str,
+    pub(crate) result: Result<Vec<Entry>, String>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ShellAsyncClipboardCompletion {
     StoreFile {
@@ -96,6 +114,7 @@ pub(crate) enum ShellAsyncClipboardCompletion {
 
 #[derive(Clone, Debug)]
 pub(crate) enum ShellAsyncTaskResult {
+    Navigation(ShellAsyncNavigationCompletion),
     Transfer(ShellAsyncTransferCompletion),
     TrashView(ShellAsyncTrashViewCompletion),
     Clipboard(ShellAsyncClipboardCompletion),

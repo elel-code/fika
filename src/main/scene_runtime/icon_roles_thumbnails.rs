@@ -211,10 +211,8 @@ impl ShellScene {
         }
 
         let item_palette = paint.dolphin_item;
-        self.push_path_transition_exit_projection(vertices, text, icons, projection, size, paint);
-        let enter_process = shell::path_transition::enter_process_for_pane(self, pane_id);
         for item in projection.visible_items.iter().copied() {
-            self.push_pane_item_with_transition(
+            self.push_pane_item(
                 vertices,
                 text,
                 icons,
@@ -223,9 +221,6 @@ impl ShellScene {
                 item_palette,
                 size,
                 theme,
-                ShellPaneItemTransitionPaint::Enter {
-                    process: enter_process,
-                },
             );
         }
         if self.rubber_band.is_some() && pane_id == self.active_pane() {
@@ -245,66 +240,7 @@ impl ShellScene {
         content_scrollbar_visible
     }
 
-    fn push_path_transition_exit_projection(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        icons: &mut IconFrameBuilder<'_>,
-        projection: &ShellPaneProjection<'_>,
-        size: PhysicalSize<u32>,
-        paint: ShellPaintPalettes,
-    ) {
-        let pane = projection.geometry.kind;
-        let Some(exit_process) = shell::path_transition::exit_process_for_pane(self, pane) else {
-            return;
-        };
-        let alpha = shell::path_transition::opacity_for_process(exit_process);
-        if alpha <= 0.01 {
-            return;
-        }
-        let Some(snapshot) = shell::path_transition::exit_snapshot_for_pane(self, pane) else {
-            return;
-        };
-        let old_view = ShellPaneView::from_state(&snapshot.state);
-        let old_projection = ShellPaneProjection {
-            view: old_view,
-            geometry: snapshot.geometry,
-            visible_items: snapshot.visible_items.clone(),
-            scroll_metrics: snapshot.scroll_metrics,
-        };
-        let theme = paint.shell;
-        let item_palette = paint.dolphin_item;
-        let mut background = theme.view_mode_content(old_projection.view.view_mode);
-        background[3] *= alpha;
-        push_clipped_rect(
-            vertices,
-            shell::path_transition::transform_rect_for_process(
-                old_projection.geometry.content,
-                old_projection.geometry.content,
-                exit_process,
-            ),
-            old_projection.geometry.content,
-            background,
-            size,
-        );
-        for item in old_projection.visible_items.iter().copied() {
-            self.push_pane_item_with_transition(
-                vertices,
-                text,
-                icons,
-                &old_projection,
-                item,
-                item_palette,
-                size,
-                theme,
-                ShellPaneItemTransitionPaint::Exit {
-                    process: exit_process,
-                },
-            );
-        }
-    }
-
-    fn push_pane_item_with_transition(
+    fn push_pane_item(
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
@@ -314,7 +250,6 @@ impl ShellScene {
         item_palette: DolphinItemPalette,
         size: PhysicalSize<u32>,
         theme: ShellTheme,
-        transition: ShellPaneItemTransitionPaint,
     ) {
         let layout = item.layout;
         let _slot_id = item.slot_id;
@@ -330,17 +265,10 @@ impl ShellScene {
             return;
         };
         let entry_path = self.entry_path_for_pane_view(projection.view, entry_index);
-        let (reflow_dx, reflow_dy) = if transition.entering() {
-            entry_path
-                .as_deref()
-                .and_then(|path| self.item_reflow_offset_for_path(projection.geometry.kind, path))
-                .unwrap_or((0.0, 0.0))
-        } else {
-            (0.0, 0.0)
-        };
-        let alpha = transition.alpha();
-        let vertex_start = vertices.len();
-        let previous_icon_alpha = icons.replace_content_alpha(alpha);
+        let (reflow_dx, reflow_dy) = entry_path
+            .as_deref()
+            .and_then(|path| self.item_reflow_offset_for_path(projection.geometry.kind, path))
+            .unwrap_or((0.0, 0.0));
         let content_clip = projection.geometry.content;
         let item_rect = translated_rect(
             pane_content_rect_to_screen(layout.item_rect, projection),
@@ -364,10 +292,6 @@ impl ShellScene {
         );
         let untransformed_item_rect = item_rect;
         let untransformed_text_rect = text_rect;
-        let item_rect = transition.transform_rect(item_rect, content_clip);
-        let visual_rect = transition.transform_rect(visual_rect, content_clip);
-        let icon_rect = transition.transform_rect(icon_rect, content_clip);
-        let text_rect = transition.transform_rect(text_rect, content_clip);
         let content_rect = visual_rect;
         let pixmap_layout = ItemPixmapLayout {
             view_mode: projection.view.view_mode,
@@ -376,14 +300,12 @@ impl ShellScene {
             text_midline_shift: text.dolphin_midline_shift(),
         };
         let selected = projection.view.selection.contains(entry_index);
-        let hovered = transition.entering()
-            && self.hovered_item
-                == Some(ShellPaneItemTarget {
-                    pane: projection.geometry.kind,
-                    index: entry_index,
-                });
-        let dnd_hovered = transition.entering()
-            && matches!(
+        let hovered = self.hovered_item
+            == Some(ShellPaneItemTarget {
+                pane: projection.geometry.kind,
+                index: entry_index,
+            });
+        let dnd_hovered = matches!(
                 self.dnd_hover_target,
                 Some(ShellDropTarget::PaneItem {
                     pane,
@@ -392,8 +314,7 @@ impl ShellScene {
                     ..
                 }) if pane == projection.geometry.kind && index == entry_index
             );
-        let current = transition.entering()
-            && projection.geometry.kind == self.active_pane()
+        let current = projection.geometry.kind == self.active_pane()
             && projection.view.selection.focus == Some(entry_index);
         let hover_progress = if hovered {
             self.hover_animation_factor()
@@ -484,8 +405,8 @@ impl ShellScene {
 
         let base_text_color =
             pane_item_text_color(projection.view.view_mode, entry, selected, theme);
-        let text_color = text_color_with_alpha_factor(base_text_color, alpha);
-        let muted_text = text_color_with_alpha_factor(theme.muted_text(), alpha);
+        let text_color = base_text_color;
+        let muted_text = theme.muted_text();
         match projection.view.view_mode {
             ShellViewMode::Compact => {
                 text.push_label_aligned_wrapped_with_layout(
@@ -523,17 +444,14 @@ impl ShellScene {
             let text_height = self.text_line_height();
             let metadata_y = untransformed_item_rect.y
                 + (untransformed_item_rect.height - text_height).max(0.0) / 2.0;
-            let size_rect = transition.transform_rect(
-                ViewRect {
-                    x: content_clip.x + self.details_name_width() + self.scale_metric(8.0)
-                        - projection.view.scroll_x
-                        + reflow_dx,
-                    y: metadata_y,
-                    width: self.details_size_width() - self.scale_metric(16.0),
-                    height: text_height,
-                },
-                content_clip,
-            );
+            let size_rect = ViewRect {
+                x: content_clip.x + self.details_name_width() + self.scale_metric(8.0)
+                    - projection.view.scroll_x
+                    + reflow_dx,
+                y: metadata_y,
+                width: self.details_size_width() - self.scale_metric(16.0),
+                height: text_height,
+            };
             text.push_label_aligned_no_wrap(
                 &details_size_label(entry),
                 size_rect,
@@ -541,20 +459,17 @@ impl ShellScene {
                 muted_text,
                 LabelAlignment::Start,
             );
-            let modified_rect = transition.transform_rect(
-                ViewRect {
-                    x: content_clip.x
-                        + self.details_name_width()
-                        + self.details_size_width()
-                        + self.scale_metric(8.0)
-                        - projection.view.scroll_x
-                        + reflow_dx,
-                    y: metadata_y,
-                    width: self.details_modified_width() - self.scale_metric(16.0),
-                    height: text_height,
-                },
-                content_clip,
-            );
+            let modified_rect = ViewRect {
+                x: content_clip.x
+                    + self.details_name_width()
+                    + self.details_size_width()
+                    + self.scale_metric(8.0)
+                    - projection.view.scroll_x
+                    + reflow_dx,
+                y: metadata_y,
+                width: self.details_modified_width() - self.scale_metric(16.0),
+                height: text_height,
+            };
             text.push_label_aligned_no_wrap(
                 &format_modified_secs(entry.modified_secs),
                 modified_rect,
@@ -563,7 +478,5 @@ impl ShellScene {
                 LabelAlignment::Start,
             );
         }
-        icons.replace_content_alpha(previous_icon_alpha);
-        fade_quad_vertices_alpha(&mut vertices[vertex_start..], alpha);
     }
 }

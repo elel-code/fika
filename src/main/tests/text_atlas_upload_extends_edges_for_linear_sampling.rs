@@ -151,7 +151,7 @@
     }
 
     #[test]
-    fn start_no_wrap_labels_rasterize_to_estimated_text_width() {
+    fn start_no_wrap_labels_rasterize_to_shaped_text_width() {
         let mut font_system = FontSystem::new();
         let mut swash_cache = SwashCache::new();
         let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));

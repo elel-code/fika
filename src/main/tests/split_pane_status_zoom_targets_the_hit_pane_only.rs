@@ -115,7 +115,7 @@
         assert!(!display.contains("..."));
         assert!(display.ends_with(".gz"));
         assert!(
-            dolphin_shaped_text_width_for_test(
+            dolphin_text_width_no_wrap(
                 &mut font_system,
                 &mut buffer,
                 &display,

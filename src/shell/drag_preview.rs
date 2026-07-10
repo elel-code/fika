@@ -315,7 +315,7 @@ fn push_drag_preview_icon(
                     vertices,
                     icon,
                     clip,
-                    place_icon_paint(place, false),
+                    place_icon_paint(place),
                     theme,
                     scene.ui_scale(),
                     size,

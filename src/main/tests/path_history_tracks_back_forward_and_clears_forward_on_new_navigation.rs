@@ -67,6 +67,19 @@
     }
 
     #[test]
+    fn failed_path_load_keeps_the_current_directory() {
+        let root = test_dir("path-load-failure");
+        fs::create_dir_all(&root).unwrap();
+        let size = PhysicalSize::new(360, 240);
+        let mut scene = ShellScene::load(root.clone(), ShellViewMode::Compact).unwrap();
+
+        assert!(scene.load_path(root.join("missing"), size).is_err());
+        assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, root);
+
+        fs::remove_dir_all(scene.panes[ShellPaneId::SLOT_0].path.clone()).unwrap();
+    }
+
+    #[test]
     fn reload_current_path_preserves_history_and_selection_by_name() {
         let unique = format!(
             "fika-wgpu-reload-{}-{}",
@@ -122,7 +135,6 @@
         assert_eq!(scene.panes[ShellPaneId::SLOT_0].path, root);
         assert_eq!(scene.path_changes, 0);
         assert_eq!(scene.directory_reloads, 1);
-        assert!(!shell::path_transition::has_active_path_transition(&scene));
 
         fs::remove_dir_all(scene.panes[ShellPaneId::SLOT_0].path.clone()).unwrap();
     }
