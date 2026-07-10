@@ -215,6 +215,19 @@ impl FileIconResolver {
         self.resolve_key(key, IconResolvePriority::Deferred)
     }
 
+    pub(crate) fn resolve_named_exact_fast(
+        &mut self,
+        icon_name: &str,
+        icon_size: f32,
+    ) -> Option<PathBuf> {
+        self.drain_results();
+        let icon_name = icon_name.trim();
+        if icon_name.is_empty() {
+            return None;
+        }
+        self.fast_theme.find(icon_name, icon_cache_size(icon_size))
+    }
+
     pub(crate) fn resolve_path_cache_key(
         &mut self,
         key: FileIconPathCacheKey,

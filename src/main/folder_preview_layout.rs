@@ -154,6 +154,117 @@ impl ItemPixmapLayout {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IconEmblemKind {
+    Link,
+    Unreadable,
+}
+
+impl IconEmblemKind {
+    fn theme_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Link => &["emblem-symbolic-link"],
+            Self::Unreadable => &["emblem-locked", "emblem-unreadable"],
+        }
+    }
+}
+
+fn icon_emblem_kinds_for_path(path: &Path) -> Vec<IconEmblemKind> {
+    if is_network_path(path)
+        || path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("desktop"))
+    {
+        return Vec::new();
+    }
+    let mut emblems = Vec::new();
+    let symlink_metadata = fs::symlink_metadata(path).ok();
+    if symlink_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.file_type().is_symlink())
+    {
+        emblems.push(IconEmblemKind::Link);
+    }
+    let metadata = fs::metadata(path).ok();
+    if let Some(metadata) = metadata.as_ref() {
+        if !path_is_readable(path, metadata) {
+            emblems.push(IconEmblemKind::Unreadable);
+        }
+    }
+    emblems
+}
+
+#[cfg(unix)]
+fn path_is_readable(path: &Path, _metadata: &fs::Metadata) -> bool {
+    path_accessible(path, libc::R_OK)
+}
+
+#[cfg(not(unix))]
+fn path_is_readable(_path: &Path, _metadata: &fs::Metadata) -> bool {
+    true
+}
+
+#[cfg(unix)]
+fn path_accessible(path: &Path, mode: libc::c_int) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    unsafe { libc::access(path.as_ptr(), mode) == 0 }
+}
+
+fn icon_emblem_rects(paint_area: ViewRect, scale: f32) -> [ViewRect; 4] {
+    let scale = scale.clamp(1.0, 2.0);
+    let logical_icon_size = paint_area.width.min(paint_area.height) / scale;
+    let logical_emblem_size = if logical_icon_size < 32.0 {
+        8.0
+    } else if logical_icon_size <= 48.0 {
+        16.0
+    } else if logical_icon_size <= 96.0 {
+        22.0
+    } else if logical_icon_size < 256.0 {
+        32.0
+    } else {
+        64.0
+    };
+    let emblem_width = (logical_emblem_size * scale).min(paint_area.width);
+    let emblem_height = (logical_emblem_size * scale).min(paint_area.height);
+    let left = paint_area.x;
+    let top = paint_area.y;
+    let right = paint_area.right() - emblem_width;
+    let bottom = paint_area.bottom() - emblem_height;
+    [
+        ViewRect {
+            x: right,
+            y: bottom,
+            width: emblem_width,
+            height: emblem_height,
+        },
+        ViewRect {
+            x: left,
+            y: top,
+            width: emblem_width,
+            height: emblem_height,
+        },
+        ViewRect {
+            x: right,
+            y: top,
+            width: emblem_width,
+            height: emblem_height,
+        },
+        ViewRect {
+            x: left,
+            y: bottom,
+            width: emblem_width,
+            height: emblem_height,
+        },
+    ]
+}
+
 fn folder_preview_role_draw_rect(layout: ItemPixmapLayout, raster: &IconRaster) -> ViewRect {
     let area = folder_preview_role_slot(layout);
     let (width, height) = fit_size_to_rect(
@@ -202,6 +313,7 @@ struct IconFrameBuilder<'a> {
     raster_cache: &'a mut IconRasterCache,
     role_raster_cache: &'a mut IconRoleRasterCache,
     surface_size: PhysicalSize<u32>,
+    ui_scale: f32,
     atlas_rasters: HashMap<IconAtlasRasterKey, AtlasRect>,
     uploads: Vec<IconAtlasUpload>,
     draws: Vec<IconDraw>,

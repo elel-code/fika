@@ -2,8 +2,6 @@ use cosmic_text::Color as TextColor;
 use fika_core::ViewRect;
 use winit::dpi::PhysicalSize;
 
-use crate::shell::metrics::ICONS_ICON_SIZE;
-use crate::shell::options::ShellViewMode;
 use crate::shell::render::quad::{QuadVertex, push_clipped_rounded_rect};
 use crate::shell::theme::{ShellTheme, UiColor};
 use crate::shell::ui_chrome::{push_fallback_file_icon, push_place_icon};
@@ -61,9 +59,9 @@ pub(crate) fn drag_preview_damage_rect(
 fn drag_preview_rect(
     scene: &ShellScene,
     drag: &ShellInternalDrag,
-    _size: PhysicalSize<u32>,
+    size: PhysicalSize<u32>,
 ) -> ViewRect {
-    let icon_size = drag_preview_icon_size(scene, drag);
+    let icon_size = drag_preview_icon_size(scene, drag, size);
     let outline = drag_preview_icon_outline(scene);
     let pixmap_size = icon_size + outline * 2.0;
     let text_extra = if drag.paths.len() == 1 {
@@ -87,7 +85,7 @@ fn drag_preview_top_icon_rect(
     size: PhysicalSize<u32>,
 ) -> ViewRect {
     let rect = drag_preview_rect(scene, drag, size);
-    let icon_size = drag_preview_icon_size(scene, drag);
+    let icon_size = drag_preview_icon_size(scene, drag, size);
     let outline = drag_preview_icon_outline(scene);
     ViewRect {
         x: rect.x + outline,
@@ -97,17 +95,29 @@ fn drag_preview_top_icon_rect(
     }
 }
 
-fn drag_preview_icon_size(scene: &ShellScene, drag: &ShellInternalDrag) -> f32 {
+fn drag_preview_icon_size(
+    scene: &ShellScene,
+    drag: &ShellInternalDrag,
+    size: PhysicalSize<u32>,
+) -> f32 {
     match &drag.source {
-        ShellInternalDragSource::PaneItem { pane, .. } => scene
-            .pane_view(*pane)
-            .map(|view| match view.view_mode {
-                ShellViewMode::Icons => {
-                    scene.zoom_icon_metric_for_step(view.zoom_step, ICONS_ICON_SIZE, 16.0, 256.0)
-                }
-                ShellViewMode::Compact | ShellViewMode::Details => scene.scale_metric(128.0),
-            })
-            .unwrap_or_else(|| scene.scale_metric(128.0)),
+        ShellInternalDragSource::PaneItem { pane, index, .. } => {
+            let view = scene.pane_view(*pane);
+            let item_layout = scene.pane_projection(*pane, size).and_then(|projection| {
+                let layout_index = projection
+                    .view
+                    .filtered_indexes
+                    .iter()
+                    .position(|entry_index| entry_index == index)?;
+                projection
+                    .visible_items
+                    .iter()
+                    .find(|item| item.layout.model_index == layout_index)
+                    .map(|item| item.layout)
+            });
+            view.map(|view| scene.drag_preview_icon_size_for_pane_item(view, item_layout))
+                .unwrap_or_else(|| scene.scale_metric(128.0))
+        }
         ShellInternalDragSource::Place { .. } => scene.scale_metric(128.0),
     }
 }

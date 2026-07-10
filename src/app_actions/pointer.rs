@@ -20,13 +20,18 @@ use crate::{
 };
 
 impl FikaWgpuApp {
-    pub(crate) fn handle_main_pointer_moved(&mut self, position: PhysicalPosition<f64>) {
+    pub(crate) fn handle_main_pointer_moved(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        position: PhysicalPosition<f64>,
+    ) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
         let point = view_point_from_physical_position(position);
         let intent = main_pointer_move_intent(self.main_pointer_move_snapshot());
         let outcome = self.dispatch_main_pointer_move_intent(intent, point, size);
+        self.start_outgoing_drag_if_needed(event_loop);
         self.apply_window_action_outcome(outcome);
     }
 
@@ -303,6 +308,7 @@ impl FikaWgpuApp {
                 ShellActionOutcome::present_if(changed, "mode-click").into()
             }
             MainLeftPointerButtonIntent::BeginPlacePointer => {
+                self.reset_outgoing_drag_tracking();
                 let changed = self.scene.begin_place_pointer(point, size).unwrap_or(false);
                 ShellActionOutcome::redraw_if(changed)
                     .with_redraw_if(location_blur_changed)
@@ -336,6 +342,7 @@ impl FikaWgpuApp {
     ) -> ShellActionOutcome {
         let changed = match state {
             ElementState::Pressed => {
+                self.reset_outgoing_drag_tracking();
                 let selection = SelectionClick {
                     point,
                     extend: self.modifiers.state().shift_key(),

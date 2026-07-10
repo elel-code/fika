@@ -348,6 +348,19 @@ impl ShellInternalDrag {
         }
     }
 }
+#[derive(Clone, Debug)]
+enum ShellInternalDragPreviewSource {
+    PaneItem {
+        directory: PathBuf,
+        entry: Entry,
+        icon_size: f32,
+        folder_preview: Option<FolderPreviewReady>,
+    },
+    Place {
+        icon_name: String,
+        icon_size: f32,
+    },
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ShellExternalDrag {
     sources: Vec<PathBuf>,

@@ -61,6 +61,7 @@
             &mut raster_cache,
             &mut role_raster_cache,
             size,
+                1.0,
             0,
             0,
             0,

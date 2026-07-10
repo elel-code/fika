@@ -12,7 +12,8 @@ have been removed from the source tree.
 ## Current Runtime
 
 - `fika` is the default run target and the only in-tree file-manager UI.
-- `winit` comes from official upstream `rust-windowing/winit` `master`.
+- `winit` currently uses `slint-ui/winit` `drag-n-drop` for the in-flight
+  cross-platform DnD API.
 - `wgpu` comes from the official crates.io release.
 - `fika-core` stays UI-neutral and owns filesystem/domain behavior.
 - Clipboard integration uses Wayland `wl_data_device` directly; paste does not

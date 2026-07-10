@@ -140,7 +140,7 @@ fn main_window_event_blocked_by_modal_dialog(event: &WindowEvent) -> bool {
     matches!(
         event,
         WindowEvent::DragEntered { .. }
-            | WindowEvent::DragMoved { .. }
+            | WindowEvent::DragPosition { .. }
             | WindowEvent::DragDropped { .. }
             | WindowEvent::DragLeft { .. }
             | WindowEvent::KeyboardInput { .. }
@@ -243,8 +243,10 @@ mod tests {
     #[test]
     fn modal_event_policy_blocks_passive_input_without_attention() {
         assert_eq!(
-            modal_window_event_disposition(&WindowEvent::DragMoved {
+            modal_window_event_disposition(&WindowEvent::DragPosition {
+                id: winit::data_transfer::DataTransferId::from_raw(1),
                 position: (10.0, 20.0).into(),
+                proposed_action: None,
             }),
             ShellModalWindowEventDisposition::Block
         );
@@ -254,8 +256,8 @@ mod tests {
     fn modal_event_policy_requests_attention_for_commit_like_input() {
         assert_eq!(
             modal_window_event_disposition(&WindowEvent::DragDropped {
-                paths: vec!["/tmp/file.txt".into()],
-                position: (10.0, 20.0).into(),
+                id: winit::data_transfer::DataTransferId::from_raw(2),
+                proposed_action: None,
             }),
             ShellModalWindowEventDisposition::BlockAndRequestAttention
         );

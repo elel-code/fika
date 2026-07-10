@@ -133,6 +133,112 @@ impl ShellScene {
             .filter(|sources| !sources.is_empty())
     }
 
+    fn active_internal_drag_paths(&self) -> Option<Vec<PathBuf>> {
+        self.internal_drag
+            .as_ref()
+            .filter(|drag| drag.active)
+            .map(|drag| drag.paths.clone())
+            .filter(|paths| !paths.is_empty())
+    }
+
+    fn active_internal_drag_preview_source(
+        &self,
+        size: PhysicalSize<u32>,
+    ) -> Option<ShellInternalDragPreviewSource> {
+        let drag = self.internal_drag.as_ref().filter(|drag| drag.active)?;
+        match &drag.source {
+            ShellInternalDragSource::PaneItem { pane, index, .. } => {
+                let pane_id = *pane;
+                let pane = self.pane_view(pane_id)?;
+                let entry = pane.entries.get(*index)?.clone();
+                let item_layout = self
+                    .pane_projection(pane_id, size)
+                    .and_then(|projection| {
+                        let layout_index = projection
+                            .view
+                            .filtered_indexes
+                            .iter()
+                            .position(|entry_index| entry_index == index)?;
+                        projection
+                            .visible_items
+                            .iter()
+                            .find(|item| item.layout.model_index == layout_index)
+                            .map(|item| item.layout)
+                    });
+                let icon_size = self.drag_preview_icon_size_for_pane_item(pane, item_layout);
+                let pixmap_layout = ItemPixmapLayout {
+                    view_mode: ShellViewMode::Icons,
+                    icon_rect: ViewRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: icon_size,
+                        height: icon_size,
+                    },
+                    text_rect: ViewRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: icon_size,
+                        height: icon_size,
+                    },
+                    text_midline_shift: 0.0,
+                };
+                let folder_preview = self.folder_preview_role_for_pane_entry(
+                    pane,
+                    *index,
+                    pixmap_layout,
+                );
+                Some(ShellInternalDragPreviewSource::PaneItem {
+                    directory: pane.path.to_path_buf(),
+                    entry,
+                    icon_size,
+                    folder_preview,
+                })
+            }
+            ShellInternalDragSource::Place { index } => {
+                let place = self.places.get(*index)?;
+                let icon_name = if self.trash_place_has_items(place) {
+                    "user-trash-full"
+                } else {
+                    place.icon_name
+                };
+                Some(ShellInternalDragPreviewSource::Place {
+                    icon_name: icon_name.to_string(),
+                    icon_size: self.scale_metric(128.0),
+                })
+            }
+        }
+    }
+
+    fn drag_preview_icon_size_for_pane_item(
+        &self,
+        pane: ShellPaneView<'_>,
+        item_layout: Option<ItemLayout>,
+    ) -> f32 {
+        item_layout
+            .map(|layout| layout.icon_rect.width.max(layout.icon_rect.height))
+            .unwrap_or_else(|| match pane.view_mode {
+                ShellViewMode::Icons => {
+                    self.zoom_icon_metric_for_step(pane.zoom_step, ICONS_ICON_SIZE, 16.0, 256.0)
+                }
+                ShellViewMode::Compact => {
+                    self.zoom_icon_metric_for_step(pane.zoom_step, COMPACT_ICON_SIZE, 16.0, 144.0)
+                }
+                ShellViewMode::Details => self.details_icon_size_for_step(pane.zoom_step),
+            })
+    }
+
+    fn internal_drag_active(&self) -> bool {
+        self.internal_drag.as_ref().is_some_and(|drag| drag.active)
+    }
+
+    fn clear_internal_drag(&mut self) -> bool {
+        let changed = self.internal_drag.take().is_some() || self.clear_dnd_hover_target();
+        if changed {
+            fika_log!("[fika-wgpu] internal-dnd clear=1");
+        }
+        changed
+    }
+
     fn clear_external_drag(&mut self) -> bool {
         let changed = self.external_drag.take().is_some() || self.clear_dnd_hover_target();
         if changed {

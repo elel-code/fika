@@ -10,6 +10,9 @@ struct FikaWgpuApp {
     active_task_base_details: HashMap<ShellTaskId, String>,
     next_task_id: ShellTaskId,
     modifiers: Modifiers,
+    incoming_dnd_transfer: Option<IncomingDndTransfer>,
+    outgoing_dnd_transfer: Option<OutgoingDndTransfer>,
+    outgoing_dnd_start_failed: bool,
     // Drop order matters: renderer owns a surface tied to the window handle.
     renderer: Option<WgpuState>,
     dialog_windows: ShellDialogWindows,
@@ -32,6 +35,30 @@ struct FikaWgpuApp {
     autosmoke_scroll_interval: Duration,
     autosmoke_scroll_allow_pending_redraw: bool,
     dialog_lifecycle_smoke: Option<DialogLifecycleSmoke>,
+}
+#[derive(Clone, Debug)]
+struct IncomingDndTransfer {
+    id: DataTransferId,
+    fetch_serial: Option<AsyncRequestSerial>,
+    paths: Option<Vec<PathBuf>>,
+    last_position: Option<PhysicalPosition<f64>>,
+    drop_pending: bool,
+}
+impl IncomingDndTransfer {
+    fn new(id: DataTransferId, position: Option<PhysicalPosition<f64>>) -> Self {
+        Self {
+            id,
+            fetch_serial: None,
+            paths: None,
+            last_position: position,
+            drop_pending: false,
+        }
+    }
+}
+#[derive(Clone, Debug)]
+struct OutgoingDndTransfer {
+    id: DataTransferId,
+    paths: Vec<PathBuf>,
 }
 include!("app_controller/window_lifecycle.rs");
 include!("app_controller/dialog_windows.rs");
@@ -318,25 +345,37 @@ impl ApplicationHandler for FikaWgpuApp {
                 self.handle_main_keyboard_input(event_loop, &event);
             }
             WindowEvent::PointerMoved { position, .. } => {
-                self.handle_main_pointer_moved(position);
+                self.handle_main_pointer_moved(event_loop, position);
             }
             WindowEvent::PointerLeft { .. } => {
                 self.handle_main_pointer_left();
             }
-            WindowEvent::DragEntered { paths, position } => {
-                let outcome = self.external_drag_entered(paths, position);
+            WindowEvent::DragEntered { id, position } => {
+                let outcome = self.external_drag_entered(event_loop, id, position);
                 self.apply_window_action_outcome(outcome);
             }
-            WindowEvent::DragMoved { position } => {
-                let outcome = self.external_drag_moved(position);
+            WindowEvent::DragPosition { id, position, .. } => {
+                let outcome = self.external_drag_position(event_loop, id, position);
                 self.apply_window_action_outcome(outcome);
             }
-            WindowEvent::DragDropped { paths, position } => {
-                let outcome = self.external_drag_dropped(paths, position);
+            WindowEvent::DragDropped { id, .. } => {
+                let outcome = self.external_drag_dropped(id);
                 self.apply_window_action_outcome(outcome);
             }
-            WindowEvent::DragLeft { .. } => {
-                let outcome = self.external_drag_left();
+            WindowEvent::DragLeft { id } => {
+                let outcome = self.external_drag_left(id);
+                self.apply_window_action_outcome(outcome);
+            }
+            WindowEvent::DataTransferReceived { id, serial, value } => {
+                let outcome = self.external_drag_data_received(event_loop, id, serial, value);
+                self.apply_window_action_outcome(outcome);
+            }
+            WindowEvent::OutgoingDragDropped { id, action } => {
+                let outcome = self.outgoing_drag_dropped(id, action);
+                self.apply_window_action_outcome(outcome);
+            }
+            WindowEvent::OutgoingDragCanceled { id } => {
+                let outcome = self.outgoing_drag_canceled(id);
                 self.apply_window_action_outcome(outcome);
             }
             WindowEvent::PointerButton {

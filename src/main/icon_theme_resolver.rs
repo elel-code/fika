@@ -102,6 +102,7 @@ impl IconThemeResolver {
             "apps",
             "actions",
             "devices",
+            "emblems",
             "status",
         ];
         if !self.dir_exists(theme_root) {

@@ -6,6 +6,7 @@ impl<'a> IconFrameBuilder<'a> {
         raster_cache: &'a mut IconRasterCache,
         role_raster_cache: &'a mut IconRoleRasterCache,
         surface_size: PhysicalSize<u32>,
+        ui_scale: f32,
         raster_miss_budget: usize,
         folder_preview_ready_entries: usize,
         folder_preview_ready_bytes: usize,
@@ -18,6 +19,7 @@ impl<'a> IconFrameBuilder<'a> {
             raster_cache,
             role_raster_cache,
             surface_size,
+            ui_scale: ui_scale.clamp(1.0, 2.0),
             atlas_rasters: HashMap::new(),
             uploads: Vec::with_capacity(64),
             draws: Vec::with_capacity(64),
@@ -192,20 +194,24 @@ impl<'a> IconFrameBuilder<'a> {
         clip: ViewRect,
         layer: IconDrawLayer,
     ) -> bool {
-        if entry.is_dir {
-            return self.push_folder_preview_or_icon(
+        let drew = if entry.is_dir {
+            self.push_folder_preview_or_icon(
                 directory,
                 entry,
                 folder_preview,
                 pixmap_layout,
                 clip,
                 layer,
-            );
+            )
+        } else if self.push_thumbnail(directory, entry, pixmap_layout.icon_rect, clip, layer) {
+            true
+        } else {
+            self.push_icon(directory, entry, pixmap_layout.icon_rect, clip, layer)
+        };
+        if drew {
+            self.push_entry_icon_emblems(directory, entry, pixmap_layout.icon_rect, clip, layer);
         }
-        if self.push_thumbnail(directory, entry, pixmap_layout.icon_rect, clip, layer) {
-            return true;
-        }
-        self.push_icon(directory, entry, pixmap_layout.icon_rect, clip, layer)
+        drew
     }
 
     fn push_folder_preview_or_icon(
@@ -382,6 +388,66 @@ impl<'a> IconFrameBuilder<'a> {
 
         self.copy_raster_to_atlas(raster, rect, screen, layer);
         true
+    }
+
+    fn push_named_theme_icon_exact(
+        &mut self,
+        icon_name: &str,
+        rect: ViewRect,
+        clip: ViewRect,
+        layer: IconDrawLayer,
+    ) -> bool {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return false;
+        }
+        let Some(screen) = intersect_rect(rect, clip) else {
+            return true;
+        };
+        let icon_name = icon_name.trim();
+        if icon_name.is_empty() {
+            return false;
+        }
+        let icon_size = rect.width.max(rect.height).clamp(16.0, 256.0 * self.ui_scale);
+        let size_px = icon_cache_size(icon_size);
+        let Some(path) = self.resolver.resolve_named_exact_fast(icon_name, icon_size) else {
+            return false;
+        };
+        let key = IconRasterCacheKey::icon(path, size_px);
+        let raster = if let Some(raster) = self.raster_cache.get(&key) {
+            self.cache_hits += 1;
+            raster
+        } else {
+            self.cache_misses += 1;
+            let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
+                return false;
+            };
+            self.raster_cache.insert(key, raster)
+        };
+        self.copy_raster_to_atlas(raster, rect, screen, layer);
+        true
+    }
+
+    fn push_entry_icon_emblems(
+        &mut self,
+        directory: &Path,
+        entry: &Entry,
+        icon_rect: ViewRect,
+        clip: ViewRect,
+        layer: IconDrawLayer,
+    ) {
+        let path = directory.join(entry.name.as_ref());
+        let emblems = icon_emblem_kinds_for_path(&path);
+        if emblems.is_empty() {
+            return;
+        }
+        let rects = icon_emblem_rects(icon_rect, self.ui_scale);
+        for (index, emblem) in emblems.into_iter().take(rects.len()).enumerate() {
+            for icon_name in emblem.theme_names() {
+                if self.push_named_theme_icon_exact(icon_name, rects[index], clip, layer) {
+                    break;
+                }
+            }
+        }
     }
 
     fn queue_thumbnail_read_ahead(&mut self, candidate: ShellThumbnailCandidate, size_px: u16) {
