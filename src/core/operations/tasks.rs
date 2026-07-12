@@ -560,8 +560,7 @@ pub async fn trash_view_operation_result_async(
 pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
     let result = match &record.payload {
         UndoPayload::Create { items } => {
-            let mut removed_count = 0;
-            for item in items {
+            for (removed_count, item) in items.iter().enumerate() {
                 let result = match item.kind {
                     CreatedItemKind::File => file_ops::undo_create_file(&item.path),
                     CreatedItemKind::Folder => file_ops::undo_create_folder(&item.path),
@@ -574,7 +573,6 @@ pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
                         )),
                     };
                 }
-                removed_count += 1;
             }
             Ok(format!("removed {} item(s)", items.len()))
         }
@@ -586,8 +584,7 @@ pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
             file_ops::undo_trash(&restore_pairs)
         }
         UndoPayload::Rename { items } => {
-            let mut restored_count = 0;
-            for item in items {
+            for (restored_count, item) in items.iter().enumerate() {
                 if let Err(err) = file_ops::undo_rename(&item.original_path, &item.renamed_path) {
                     return UndoTaskResult {
                         record,
@@ -596,13 +593,11 @@ pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
                         )),
                     };
                 }
-                restored_count += 1;
             }
             Ok(format!("restored {} item(s)", items.len()))
         }
         UndoPayload::Transfer { items } => {
-            let mut restored_count = 0;
-            for item in items {
+            for (restored_count, item) in items.iter().enumerate() {
                 if let Err(err) = file_ops::undo_transfer_with_backup(
                     &item.operation,
                     &item.original_source,
@@ -616,7 +611,6 @@ pub fn undo_record_result(record: UndoRecord) -> UndoTaskResult {
                         )),
                     };
                 }
-                restored_count += 1;
             }
             Ok(format!("restored {} item(s)", items.len()))
         }

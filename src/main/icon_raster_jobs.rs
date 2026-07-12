@@ -29,12 +29,16 @@ impl IconRasterCache {
             .any(|key| key.stamp.is_none() && key.path == path)
     }
 
-    fn get_closest_icon_variant(&mut self, path: &Path, size_px: u16) -> Option<IconRaster> {
+    fn get_closest_icon_variant(&mut self, requested: &IconRasterCacheKey) -> Option<IconRaster> {
         let key = self
             .entries
             .keys()
-            .filter(|key| key.stamp.is_none() && key.path == path)
-            .min_by_key(|key| key.size_px.abs_diff(size_px))
+            .filter(|key| {
+                key.stamp.is_none()
+                    && key.path == requested.path
+                    && key.style == requested.style
+            })
+            .min_by_key(|key| key.size_px.abs_diff(requested.size_px))
             .cloned()?;
         self.get(&key)
     }
@@ -186,7 +190,7 @@ fn icon_raster_worker(
 ) {
     let mut queue = PriorityWorkerQueue::default();
     while let Some(request) = queue.next_request(&request_rx) {
-        let raster = rasterize_icon(&request.key.path, request.key.size_px as u32);
+        let raster = rasterize_icon_for_cache_key(&request.key);
         if result_tx
             .send(IconRasterResult {
                 key: request.key,

@@ -1765,7 +1765,7 @@ where
 {
     compio::runtime::spawn_blocking(task)
         .await
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?
+        .map_err(|err| io::Error::other(err.to_string()))?
 }
 
 fn create_dir_all_async<'a>(

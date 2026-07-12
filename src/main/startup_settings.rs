@@ -45,6 +45,7 @@ use shell::dialog_window::{
 };
 use shell::directory_watch::ShellDirectoryWatcherRuntime;
 use shell::file_item_view::item_paint::{
+    DolphinItemGeometry, DolphinItemInteraction,
     dolphin_item_paint_with_palette_and_hover_progress, dolphin_selection_core_rect,
 };
 use shell::file_item_view::style::{
@@ -82,7 +83,8 @@ use shell::icon_role_read_ahead::ShellIconRoleReadAheadQueue;
 #[cfg(test)]
 use shell::icon_roles::file_icon_profile;
 use shell::icon_roles::{
-    FileIconKind, FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
+    FILE_ICON_CORNER_RADIUS_RATIO, FOLDER_ICON_CORNER_RADIUS_RATIO, FileIconKind,
+    FileIconPathCacheKey, FileIconProfile, FileIconRoleCacheKey, NamedIconFallback,
     file_icon_path_cache_key, icon_cache_size,
 };
 use shell::location::{
@@ -167,7 +169,8 @@ use shell::render::damage_bounds::{damage_scissor_rect, full_surface_rect, rect_
 use shell::render::damage_snapshot::ShellRenderDamageSnapshot;
 use shell::render::dirty_key::ShellRenderDirtyKey;
 use shell::render::frame::{
-    SceneFrame, SceneFrameProjections, prepare_dialog_frame, prepare_scene_frame,
+    DialogFrameRenderers, DialogFrameRequest, FrameGpuContext, SceneFrame, SceneFrameProjections,
+    SceneFrameRenderers, SceneFrameRequest, prepare_dialog_frame, prepare_scene_frame,
 };
 #[cfg(test)]
 use shell::render::gpu::upload_vertex_hash_for_test;
@@ -177,8 +180,8 @@ use shell::render::gpu::{
     upload_vertex_buffer_if_dirty, vertex_pair_hash,
 };
 use shell::render::quad::{
-    QuadRenderer, QuadVertex, push_clipped_rect, push_clipped_rect_outline,
-    push_clipped_rounded_highlight, push_clipped_rounded_rect, push_rect,
+    QuadRenderer, QuadVertex, RoundedHighlightStyle, push_clipped_rect,
+    push_clipped_rect_outline, push_clipped_rounded_highlight, push_clipped_rounded_rect, push_rect,
 };
 use shell::render::retained::RetainedSceneRenderer;
 #[cfg(test)]

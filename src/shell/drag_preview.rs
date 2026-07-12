@@ -11,6 +11,13 @@ use crate::{
     place_icon_paint, translated_rect,
 };
 
+struct DragPreviewPaintContext<'a> {
+    scene: &'a ShellScene,
+    clip: ViewRect,
+    theme: ShellTheme,
+    size: PhysicalSize<u32>,
+}
+
 pub(crate) fn push_drag_preview_overlay(
     scene: &ShellScene,
     vertices: &mut Vec<QuadVertex>,
@@ -25,24 +32,26 @@ pub(crate) fn push_drag_preview_overlay(
     let screen = surface_rect(size);
     let rect = drag_preview_rect(scene, drag, size);
     let top_icon = drag_preview_top_icon_rect(scene, drag, size);
+    let paint = DragPreviewPaintContext {
+        scene,
+        clip: screen,
+        theme,
+        size,
+    };
 
-    push_deepin_drag_icon_stack(scene, vertices, icons, top_icon, screen, drag, theme, size);
+    push_deepin_drag_icon_stack(&paint, vertices, icons, top_icon, drag);
 
     if drag.paths.len() > 1 {
         push_deepin_drag_count_badge(
-            scene,
+            &paint,
             vertices,
             text,
             top_icon,
-            screen,
             drag.paths.len(),
             theme.drag_preview().badge,
-            size,
         );
     } else {
-        push_deepin_drag_label(
-            scene, vertices, text, rect, top_icon, screen, drag, theme, size,
-        );
+        push_deepin_drag_label(&paint, vertices, text, rect, top_icon, drag);
     }
 }
 
@@ -127,83 +136,97 @@ fn drag_preview_icon_outline(scene: &ShellScene) -> f32 {
 }
 
 fn push_deepin_drag_icon_stack(
-    scene: &ShellScene,
+    paint: &DragPreviewPaintContext<'_>,
     vertices: &mut Vec<QuadVertex>,
     icons: &mut IconFrameBuilder<'_>,
     top_icon: ViewRect,
-    clip: ViewRect,
     drag: &ShellInternalDrag,
-    theme: ShellTheme,
-    size: PhysicalSize<u32>,
 ) {
     let ghost_offsets = [
-        (scene.scale_metric(-4.0), scene.scale_metric(6.0), 0.50),
-        (scene.scale_metric(7.0), scene.scale_metric(-5.0), 0.40),
-        (scene.scale_metric(-9.0), scene.scale_metric(-4.0), 0.30),
+        (
+            paint.scene.scale_metric(-4.0),
+            paint.scene.scale_metric(6.0),
+            0.50,
+        ),
+        (
+            paint.scene.scale_metric(7.0),
+            paint.scene.scale_metric(-5.0),
+            0.40,
+        ),
+        (
+            paint.scene.scale_metric(-9.0),
+            paint.scene.scale_metric(-4.0),
+            0.30,
+        ),
     ];
     let ghost_count = drag.paths.len().saturating_sub(1).min(ghost_offsets.len());
     let radius = (top_icon.width.min(top_icon.height) * 0.08).max(1.0);
     for &(dx, dy, opacity) in ghost_offsets.iter().take(ghost_count).rev() {
         let icon = translated_rect(top_icon, dx, dy);
-        push_drag_preview_icon_shadow(scene, vertices, icon, clip, radius, size);
-        push_drag_preview_icon(scene, vertices, icons, icon, clip, drag, theme, size);
+        push_drag_preview_icon_shadow(paint, vertices, icon, radius);
+        push_drag_preview_icon(paint, vertices, icons, icon, drag);
         push_clipped_rounded_rect(
             vertices,
             icon,
-            clip,
+            paint.clip,
             radius,
             [0.0, 0.0, 0.0, (1.0 - opacity) * 0.42],
-            size,
+            paint.size,
         );
     }
-    push_drag_preview_icon_shadow(scene, vertices, top_icon, clip, radius, size);
-    push_drag_preview_icon(scene, vertices, icons, top_icon, clip, drag, theme, size);
+    push_drag_preview_icon_shadow(paint, vertices, top_icon, radius);
+    push_drag_preview_icon(paint, vertices, icons, top_icon, drag);
     push_clipped_rounded_rect(
         vertices,
         top_icon,
-        clip,
+        paint.clip,
         radius,
         [0.0, 0.0, 0.0, 0.06],
-        size,
+        paint.size,
     );
 }
 
 fn push_drag_preview_icon_shadow(
-    scene: &ShellScene,
+    paint: &DragPreviewPaintContext<'_>,
     vertices: &mut Vec<QuadVertex>,
     icon: ViewRect,
-    clip: ViewRect,
     radius: f32,
-    size: PhysicalSize<u32>,
 ) {
     push_clipped_rounded_rect(
         vertices,
-        translated_rect(icon, 0.0, scene.scale_metric(2.0)),
-        clip,
-        radius + scene.scale_metric(1.0),
+        translated_rect(icon, 0.0, paint.scene.scale_metric(2.0)),
+        paint.clip,
+        radius + paint.scene.scale_metric(1.0),
         [0.0, 0.0, 0.0, 0.18],
-        size,
+        paint.size,
     );
 }
 
 fn push_deepin_drag_count_badge(
-    scene: &ShellScene,
+    paint: &DragPreviewPaintContext<'_>,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     icon: ViewRect,
-    clip: ViewRect,
     count: usize,
     badge_color: UiColor,
-    size: PhysicalSize<u32>,
 ) {
-    let badge_size = scene.scale_metric(if count > 99 { 28.0 } else { 24.0 });
+    let badge_size = paint
+        .scene
+        .scale_metric(if count > 99 { 28.0 } else { 24.0 });
     let badge = ViewRect {
-        x: icon.right() - badge_size / 2.0 - scene.scale_metric(10.0),
-        y: icon.bottom() - badge_size / 2.0 - scene.scale_metric(10.0),
+        x: icon.right() - badge_size / 2.0 - paint.scene.scale_metric(10.0),
+        y: icon.bottom() - badge_size / 2.0 - paint.scene.scale_metric(10.0),
         width: badge_size,
         height: badge_size,
     };
-    push_clipped_rounded_rect(vertices, badge, clip, badge_size / 2.0, badge_color, size);
+    push_clipped_rounded_rect(
+        vertices,
+        badge,
+        paint.clip,
+        badge_size / 2.0,
+        badge_color,
+        paint.size,
+    );
     let label = if count > 99 {
         "99+".to_string()
     } else {
@@ -212,42 +235,39 @@ fn push_deepin_drag_count_badge(
     text.push_label_aligned(
         &label,
         badge,
-        clip,
+        paint.clip,
         TextColor::rgb(255, 255, 255),
         LabelAlignment::Center,
     );
 }
 
 fn push_deepin_drag_label(
-    scene: &ShellScene,
+    paint: &DragPreviewPaintContext<'_>,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     rect: ViewRect,
     icon: ViewRect,
-    clip: ViewRect,
     drag: &ShellInternalDrag,
-    theme: ShellTheme,
-    size: PhysicalSize<u32>,
 ) {
     if drag.label.is_empty() {
         return;
     }
-    let text_width = (rect.width - drag_preview_icon_outline(scene) * 0.5).max(1.0);
+    let text_width = (rect.width - drag_preview_icon_outline(paint.scene) * 0.5).max(1.0);
     let label_rect = ViewRect {
         x: rect.x + (rect.width - text_width) / 2.0,
         y: icon.bottom(),
         width: text_width,
-        height: scene.text_line_height() * 2.0,
+        height: paint.scene.text_line_height() * 2.0,
     };
-    let mut background = theme.accent();
+    let mut background = paint.theme.accent();
     background[3] = 0.90;
     push_clipped_rounded_rect(
         vertices,
         label_rect,
-        clip,
-        scene.scale_metric(4.0),
+        paint.clip,
+        paint.scene.scale_metric(4.0),
         background,
-        size,
+        paint.size,
     );
     text.push_label_aligned(
         &drag.label,
@@ -259,18 +279,15 @@ fn push_deepin_drag_label(
 }
 
 fn push_drag_preview_icon(
-    scene: &ShellScene,
+    paint: &DragPreviewPaintContext<'_>,
     vertices: &mut Vec<QuadVertex>,
     icons: &mut IconFrameBuilder<'_>,
     icon: ViewRect,
-    clip: ViewRect,
     drag: &ShellInternalDrag,
-    theme: ShellTheme,
-    size: PhysicalSize<u32>,
 ) {
     match &drag.source {
         ShellInternalDragSource::PaneItem { pane, index, .. } => {
-            if let Some(view) = scene.pane_view(*pane)
+            if let Some(view) = paint.scene.pane_view(*pane)
                 && let Some(entry) = view.entries.get(*index)
             {
                 let pixmap_layout = ItemPixmapLayout {
@@ -280,24 +297,26 @@ fn push_drag_preview_icon(
                     text_midline_shift: 0.0,
                 };
                 let folder_preview =
-                    scene.folder_preview_role_for_pane_entry(view, *index, pixmap_layout);
+                    paint
+                        .scene
+                        .folder_preview_role_for_pane_entry(view, *index, pixmap_layout);
                 if icons.push_thumbnail_or_icon_on_layer(
                     view.path,
                     entry,
                     folder_preview.as_ref(),
                     pixmap_layout,
-                    clip,
+                    paint.clip,
                     IconDrawLayer::Overlay,
                 ) {
                     return;
                 }
-                push_fallback_file_icon(vertices, entry, icon, clip, theme, size);
+                push_fallback_file_icon(vertices, entry, icon, paint.clip, paint.theme, paint.size);
                 return;
             }
         }
         ShellInternalDragSource::Place { index } => {
-            if let Some(place) = scene.places.get(*index) {
-                let icon_name = if scene.trash_place_has_items(place) {
+            if let Some(place) = paint.scene.places.get(*index) {
+                let icon_name = if paint.scene.trash_place_has_items(place) {
                     "user-trash-full"
                 } else {
                     place.icon_name
@@ -306,7 +325,7 @@ fn push_drag_preview_icon(
                     icon_name,
                     NamedIconFallback::Service,
                     icon,
-                    clip,
+                    paint.clip,
                     IconDrawLayer::Overlay,
                 ) {
                     return;
@@ -314,11 +333,11 @@ fn push_drag_preview_icon(
                 push_place_icon(
                     vertices,
                     icon,
-                    clip,
+                    paint.clip,
                     place_icon_paint(place),
-                    theme,
-                    scene.ui_scale(),
-                    size,
+                    paint.theme,
+                    paint.scene.ui_scale(),
+                    paint.size,
                 );
                 return;
             }
@@ -327,10 +346,10 @@ fn push_drag_preview_icon(
     push_clipped_rounded_rect(
         vertices,
         icon,
-        clip,
-        scene.scale_metric(6.0),
-        theme.toolbar_button(true).fill,
-        size,
+        paint.clip,
+        paint.scene.scale_metric(6.0),
+        paint.theme.toolbar_button(true).fill,
+        paint.size,
     );
 }
 

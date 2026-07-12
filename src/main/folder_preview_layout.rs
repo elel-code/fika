@@ -188,10 +188,10 @@ fn icon_emblem_kinds_for_path(path: &Path) -> Vec<IconEmblemKind> {
         emblems.push(IconEmblemKind::Link);
     }
     let metadata = fs::metadata(path).ok();
-    if let Some(metadata) = metadata.as_ref() {
-        if !path_is_readable(path, metadata) {
-            emblems.push(IconEmblemKind::Unreadable);
-        }
+    if let Some(metadata) = metadata.as_ref()
+        && !path_is_readable(path, metadata)
+    {
+        emblems.push(IconEmblemKind::Unreadable);
     }
     emblems
 }

@@ -849,11 +849,11 @@ fn service_menu_group_items(
         .unwrap_or_default()
 }
 
-fn service_menu_partition_grouped_actions<'a>(
-    actions: Vec<&'a ServiceMenuAction>,
+fn service_menu_partition_grouped_actions(
+    actions: Vec<&ServiceMenuAction>,
 ) -> (
-    Vec<&'a ServiceMenuAction>,
-    Vec<(String, Vec<&'a ServiceMenuAction>)>,
+    Vec<&ServiceMenuAction>,
+    Vec<(String, Vec<&ServiceMenuAction>)>,
 ) {
     let mut grouped: Vec<(String, Vec<&ServiceMenuAction>)> = Vec::new();
     let ungrouped = actions

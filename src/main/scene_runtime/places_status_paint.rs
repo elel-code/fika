@@ -237,13 +237,15 @@ impl ShellScene {
         if let Some(menu) = self.context_menu.as_ref() {
             shell::context_menu::paint::push_context_menu_overlay(
                 menu,
-                self.show_hidden,
-                theme,
-                self.ui_scale(),
                 vertices,
                 text,
                 icons,
-                size,
+                shell::context_menu::paint::ContextMenuOverlayConfig {
+                    show_hidden: self.show_hidden,
+                    theme,
+                    scale: self.ui_scale(),
+                    size,
+                },
             );
         }
     }

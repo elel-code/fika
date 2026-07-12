@@ -176,6 +176,10 @@ impl DirectoryCache {
         self.entries_by_path.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries_by_path.is_empty()
+    }
+
     pub fn cached_entry_count(&self) -> usize {
         self.cached_entries
     }

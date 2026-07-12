@@ -387,8 +387,10 @@ impl MimeApplicationCache {
     ) -> Self {
         apps.sort_by(desktop_application_cmp);
         service_menus.sort_by(desktop_service_menu_cmp);
-        let mut cache = Self::default();
-        cache.service_menus = service_menus;
+        let mut cache = Self {
+            service_menus,
+            ..Self::default()
+        };
         for app in apps {
             cache.insert_application(app);
         }

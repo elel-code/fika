@@ -120,15 +120,15 @@ pub enum BusError {
         message: String,
     },
     Proxy {
-        target: BusCallTarget,
+        target: Box<BusCallTarget>,
         message: String,
     },
     Call {
-        target: BusCallTarget,
+        target: Box<BusCallTarget>,
         message: String,
     },
     Timeout {
-        target: BusCallTarget,
+        target: Box<BusCallTarget>,
         timeout: Duration,
     },
 }
@@ -260,7 +260,7 @@ impl BusController {
             )
             .await
             .map_err(|err| BusError::Proxy {
-                target: target.clone(),
+                target: Box::new(target.clone()),
                 message: err.to_string(),
             })
         })
@@ -285,13 +285,13 @@ impl BusController {
                     Ok(Ok(value)) => return Ok(value),
                     Ok(Err(error)) => {
                         last_error = Some(BusError::Call {
-                            target: target.clone(),
+                            target: Box::new(target.clone()),
                             message: error.to_string(),
                         });
                     }
                     Err(_) => {
                         last_error = Some(BusError::Timeout {
-                            target: target.clone(),
+                            target: Box::new(target.clone()),
                             timeout: self.config.call_timeout,
                         });
                     }
@@ -301,7 +301,7 @@ impl BusController {
                 }
             }
             Err(last_error.unwrap_or_else(|| BusError::Call {
-                target: target.clone(),
+                target: Box::new(target.clone()),
                 message: "D-Bus call was not attempted".to_string(),
             }))
         })
@@ -523,7 +523,7 @@ mod tests {
         .unwrap();
 
         let error = BusError::Timeout {
-            target,
+            target: Box::new(target),
             timeout: Duration::from_secs(2),
         };
 

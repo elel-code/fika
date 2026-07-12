@@ -19,7 +19,7 @@ use crate::shell::metrics::{
     CONTEXT_MENU_ICON_SIZE, CONTEXT_MENU_ROW_HEIGHT, CONTEXT_MENU_TEXT_LINE_HEIGHT,
     CONTEXT_MENU_VERTICAL_PADDING,
 };
-use crate::shell::theme::{ShellTheme, UiColor};
+use crate::shell::theme::{NEUTRAL_ICON_COLOR, PROPERTIES_ICON_COLOR, ShellTheme, UiColor};
 use crate::{
     IconDrawLayer, IconFrameBuilder, LabelAlignment, QuadVertex, TextFrameBuilder,
     push_clipped_rect, push_clipped_rect_outline, push_clipped_rounded_rect, push_rect,
@@ -45,6 +45,12 @@ enum ContextMenuGlyph {
     Refresh,
     Properties,
     Remove,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ContextMenuIconColors {
+    foreground: [f32; 4],
+    background: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -82,6 +88,48 @@ impl ContextMenuPaintTheme {
             }
         }
     }
+}
+
+struct ContextMenuOverlayPainter<'frame, 'text, 'icons> {
+    theme: ContextMenuPaintTheme,
+    scale: f32,
+    vertices: &'frame mut Vec<QuadVertex>,
+    text: &'frame mut TextFrameBuilder<'text>,
+    icons: &'frame mut IconFrameBuilder<'icons>,
+    size: PhysicalSize<u32>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ContextMenuOverlayConfig {
+    pub(crate) show_hidden: bool,
+    pub(crate) theme: ShellTheme,
+    pub(crate) scale: f32,
+    pub(crate) size: PhysicalSize<u32>,
+}
+
+pub(crate) fn push_context_menu_overlay(
+    menu: &ShellContextMenu,
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    icons: &mut IconFrameBuilder<'_>,
+    config: ContextMenuOverlayConfig,
+) {
+    let ContextMenuOverlayConfig {
+        show_hidden,
+        theme,
+        scale,
+        size,
+    } = config;
+    let mut painter = ContextMenuOverlayPainter {
+        theme: ContextMenuPaintTheme::from_shell_theme(theme),
+        scale,
+        vertices,
+        text,
+        icons,
+        size,
+    };
+    paint_context_menu_root(menu, show_hidden, &mut painter);
+    paint_context_submenu_overlay(menu, show_hidden, &mut painter);
 }
 
 pub(crate) fn push_drop_menu_overlay(
@@ -141,8 +189,19 @@ pub(crate) fn push_drop_menu_overlay(
             width: icon_size,
             height: icon_size,
         };
-        let (glyph, fg, bg) = drop_menu_item_icon_style(item.icon);
-        push_context_menu_icon(vertices, icon, rect, glyph, fg, bg, scale, size);
+        let (glyph, foreground, background) = drop_menu_item_icon_style(item.icon);
+        push_context_menu_icon(
+            vertices,
+            icon,
+            rect,
+            glyph,
+            ContextMenuIconColors {
+                foreground,
+                background,
+            },
+            scale,
+            size,
+        );
         let text_x = icon.right() + gap;
         text.push_label_aligned(
             item.label,
@@ -160,17 +219,22 @@ pub(crate) fn push_drop_menu_overlay(
     push_clipped_rect_outline(vertices, rect, clip, 1.0, theme.border, size);
 }
 
-pub(crate) fn push_context_menu_overlay(
+fn paint_context_menu_root(
     menu: &ShellContextMenu,
     show_hidden: bool,
-    shell_theme: ShellTheme,
-    scale: f32,
-    vertices: &mut Vec<QuadVertex>,
-    text: &mut TextFrameBuilder<'_>,
-    icons: &mut IconFrameBuilder<'_>,
-    size: PhysicalSize<u32>,
+    painter: &mut ContextMenuOverlayPainter<'_, '_, '_>,
 ) {
-    let theme = ContextMenuPaintTheme::from_shell_theme(shell_theme);
+    let ContextMenuOverlayPainter {
+        theme,
+        scale,
+        vertices,
+        text,
+        icons,
+        size,
+    } = painter;
+    let theme = *theme;
+    let scale = *scale;
+    let size = *size;
     let rect = context_menu_rect_scaled(menu, size, scale);
     let padding_y = scaled_context_menu_metric(CONTEXT_MENU_VERTICAL_PADDING, scale);
     let row_height = scaled_context_menu_metric(CONTEXT_MENU_ROW_HEIGHT, scale);
@@ -254,7 +318,6 @@ pub(crate) fn push_context_menu_overlay(
         }
     }
     push_clipped_rect_outline(vertices, rect, clip, 1.0, theme.border, size);
-    push_context_submenu_overlay(menu, show_hidden, theme, scale, vertices, text, icons, size);
 }
 
 pub(crate) fn context_menu_named_icon_request(
@@ -277,16 +340,22 @@ pub(crate) fn context_menu_named_icon_request(
     }
 }
 
-fn push_context_submenu_overlay(
+fn paint_context_submenu_overlay(
     menu: &ShellContextMenu,
     show_hidden: bool,
-    theme: ContextMenuPaintTheme,
-    scale: f32,
-    vertices: &mut Vec<QuadVertex>,
-    text: &mut TextFrameBuilder<'_>,
-    icons: &mut IconFrameBuilder<'_>,
-    size: PhysicalSize<u32>,
+    painter: &mut ContextMenuOverlayPainter<'_, '_, '_>,
 ) {
+    let ContextMenuOverlayPainter {
+        theme,
+        scale,
+        vertices,
+        text,
+        icons,
+        size,
+    } = painter;
+    let theme = *theme;
+    let scale = *scale;
+    let size = *size;
     let Some(submenu) = menu.active_submenu else {
         return;
     };
@@ -372,8 +441,19 @@ fn push_context_menu_item_icon(
     {
         return;
     }
-    let (glyph, icon_fg, icon_bg) = context_menu_item_icon_style(item);
-    push_context_menu_icon(vertices, icon, clip, glyph, icon_fg, icon_bg, scale, size);
+    let (glyph, foreground, background) = context_menu_item_icon_style(item);
+    push_context_menu_icon(
+        vertices,
+        icon,
+        clip,
+        glyph,
+        ContextMenuIconColors {
+            foreground,
+            background,
+        },
+        scale,
+        size,
+    );
 }
 
 fn context_menu_icon_style(
@@ -477,7 +557,7 @@ fn context_menu_icon_style(
         ),
         ShellContextMenuAction::ToggleHiddenFiles => (
             ContextMenuGlyph::Hidden,
-            [0.294, 0.318, 0.357, 1.0],
+            NEUTRAL_ICON_COLOR,
             [0.933, 0.945, 0.961, 1.0],
         ),
         ShellContextMenuAction::Refresh => (
@@ -487,7 +567,7 @@ fn context_menu_icon_style(
         ),
         ShellContextMenuAction::Properties => (
             ContextMenuGlyph::Properties,
-            [0.216, 0.255, 0.318, 1.0],
+            PROPERTIES_ICON_COLOR,
             [0.933, 0.945, 0.961, 1.0],
         ),
         ShellContextMenuAction::RemovePlace => (
@@ -526,7 +606,7 @@ fn context_menu_item_icon_style(
         ShellContextMenuIcon::Builtin(action) => context_menu_icon_style(*action),
         ShellContextMenuIcon::Service(_) => (
             ContextMenuGlyph::Properties,
-            [0.216, 0.255, 0.318, 1.0],
+            PROPERTIES_ICON_COLOR,
             [0.933, 0.945, 0.961, 1.0],
         ),
         ShellContextMenuIcon::Application(_) => (
@@ -572,16 +652,69 @@ pub(crate) fn push_context_menu_shadow(
     }
 }
 
+struct ContextMenuGlyphPainter<'a> {
+    vertices: &'a mut Vec<QuadVertex>,
+    bounds: ViewRect,
+    clip: ViewRect,
+    size: PhysicalSize<u32>,
+    unit: f32,
+}
+
+impl<'a> ContextMenuGlyphPainter<'a> {
+    fn new(
+        vertices: &'a mut Vec<QuadVertex>,
+        bounds: ViewRect,
+        clip: ViewRect,
+        size: PhysicalSize<u32>,
+    ) -> Self {
+        Self {
+            vertices,
+            bounds,
+            clip,
+            size,
+            unit: bounds.width.min(bounds.height) / CONTEXT_MENU_ICON_SIZE,
+        }
+    }
+
+    fn push_piece(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        color: [f32; 4],
+    ) {
+        let piece = ViewRect {
+            x: self.bounds.x + (x * self.unit).round(),
+            y: self.bounds.y + (y * self.unit).round(),
+            width: (width * self.unit).round().max(1.0),
+            height: (height * self.unit).round().max(1.0),
+        };
+        push_clipped_rounded_rect(
+            self.vertices,
+            piece,
+            self.clip,
+            (radius * self.unit).round(),
+            color,
+            self.size,
+        );
+    }
+}
+
 fn push_context_menu_icon(
     vertices: &mut Vec<QuadVertex>,
     rect: ViewRect,
     clip: ViewRect,
     glyph: ContextMenuGlyph,
-    fg: [f32; 4],
-    bg: [f32; 4],
+    colors: ContextMenuIconColors,
     scale_factor: f32,
     size: PhysicalSize<u32>,
 ) {
+    let ContextMenuIconColors {
+        foreground: fg,
+        background: bg,
+    } = colors;
     push_clipped_rounded_rect(
         vertices,
         rect,
@@ -590,124 +723,103 @@ fn push_context_menu_icon(
         bg,
         size,
     );
+    let mut painter = ContextMenuGlyphPainter::new(vertices, rect, clip, size);
     match glyph {
         ContextMenuGlyph::Open => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 6.0, 3.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 4.0, 7.0, 10.0, 7.0, 2.0, fg, size);
+            painter.push_piece(5.0, 5.0, 6.0, 3.0, 1.0, fg);
+            painter.push_piece(4.0, 7.0, 10.0, 7.0, 2.0, fg);
         }
         ContextMenuGlyph::OpenWith => {
             for (x, y) in [(5.0, 5.0), (10.0, 5.0), (5.0, 10.0), (10.0, 10.0)] {
-                push_context_icon_piece(vertices, rect, clip, x, y, 3.0, 3.0, 1.0, fg, size);
+                painter.push_piece(x, y, 3.0, 3.0, 1.0, fg);
             }
         }
         ContextMenuGlyph::Pane => {
-            push_context_icon_piece(vertices, rect, clip, 4.0, 4.0, 10.0, 10.0, 2.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 8.0, 5.0, 1.0, 8.0, 0.0, bg, size);
-            push_context_icon_piece(vertices, rect, clip, 5.0, 8.0, 8.0, 1.0, 0.0, bg, size);
+            painter.push_piece(4.0, 4.0, 10.0, 10.0, 2.0, fg);
+            painter.push_piece(8.0, 5.0, 1.0, 8.0, 0.0, bg);
+            painter.push_piece(5.0, 8.0, 8.0, 1.0, 0.0, bg);
         }
         ContextMenuGlyph::Hidden => {
-            push_context_icon_piece(vertices, rect, clip, 4.0, 8.0, 10.0, 3.0, 2.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 7.0, 6.0, 4.0, 7.0, 2.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 8.0, 8.0, 2.0, 3.0, 1.0, bg, size);
+            painter.push_piece(4.0, 8.0, 10.0, 3.0, 2.0, fg);
+            painter.push_piece(7.0, 6.0, 4.0, 7.0, 2.0, fg);
+            painter.push_piece(8.0, 8.0, 2.0, 3.0, 1.0, bg);
         }
         ContextMenuGlyph::Copy => {
-            push_context_icon_piece(vertices, rect, clip, 6.0, 4.0, 7.0, 9.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 4.0, 6.0, 7.0, 9.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 5.0, 7.0, 5.0, 7.0, 0.0, bg, size);
+            painter.push_piece(6.0, 4.0, 7.0, 9.0, 1.0, fg);
+            painter.push_piece(4.0, 6.0, 7.0, 9.0, 1.0, fg);
+            painter.push_piece(5.0, 7.0, 5.0, 7.0, 0.0, bg);
         }
         ContextMenuGlyph::Cut => {
-            push_context_icon_piece(vertices, rect, clip, 4.0, 5.0, 3.0, 3.0, 2.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 4.0, 11.0, 3.0, 3.0, 2.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 8.0, 6.0, 6.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 8.0, 11.0, 6.0, 2.0, 1.0, fg, size);
+            painter.push_piece(4.0, 5.0, 3.0, 3.0, 2.0, fg);
+            painter.push_piece(4.0, 11.0, 3.0, 3.0, 2.0, fg);
+            painter.push_piece(8.0, 6.0, 6.0, 2.0, 1.0, fg);
+            painter.push_piece(8.0, 11.0, 6.0, 2.0, 1.0, fg);
         }
         ContextMenuGlyph::Location => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 4.0, 8.0, 8.0, 4.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 8.0, 7.0, 2.0, 2.0, 1.0, bg, size);
-            push_context_icon_piece(vertices, rect, clip, 8.0, 11.0, 2.0, 4.0, 1.0, fg, size);
+            painter.push_piece(5.0, 4.0, 8.0, 8.0, 4.0, fg);
+            painter.push_piece(8.0, 7.0, 2.0, 2.0, 1.0, bg);
+            painter.push_piece(8.0, 11.0, 2.0, 4.0, 1.0, fg);
         }
         ContextMenuGlyph::Rename => {
-            push_context_icon_piece(vertices, rect, clip, 4.0, 10.0, 8.0, 3.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 11.0, 8.0, 3.0, 3.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 4.0, 14.0, 9.0, 1.0, 0.0, fg, size);
+            painter.push_piece(4.0, 10.0, 8.0, 3.0, 1.0, fg);
+            painter.push_piece(11.0, 8.0, 3.0, 3.0, 1.0, fg);
+            painter.push_piece(4.0, 14.0, 9.0, 1.0, 0.0, fg);
         }
         ContextMenuGlyph::Trash => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 8.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 6.0, 8.0, 6.0, 7.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 7.0, 9.0, 1.0, 5.0, 0.0, bg, size);
-            push_context_icon_piece(vertices, rect, clip, 10.0, 9.0, 1.0, 5.0, 0.0, bg, size);
+            painter.push_piece(5.0, 5.0, 8.0, 2.0, 1.0, fg);
+            painter.push_piece(6.0, 8.0, 6.0, 7.0, 1.0, fg);
+            painter.push_piece(7.0, 9.0, 1.0, 5.0, 0.0, bg);
+            painter.push_piece(10.0, 9.0, 1.0, 5.0, 0.0, bg);
         }
         ContextMenuGlyph::Restore => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 2.0, 8.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 6.0, 11.0, 7.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 11.0, 8.0, 2.0, 4.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 9.0, 7.0, 5.0, 2.0, 1.0, fg, size);
+            painter.push_piece(5.0, 5.0, 2.0, 8.0, 1.0, fg);
+            painter.push_piece(6.0, 11.0, 7.0, 2.0, 1.0, fg);
+            painter.push_piece(11.0, 8.0, 2.0, 4.0, 1.0, fg);
+            painter.push_piece(9.0, 7.0, 5.0, 2.0, 1.0, fg);
         }
         ContextMenuGlyph::Delete => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 2.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 8.0, 8.0, 2.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 11.0, 11.0, 2.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 11.0, 5.0, 2.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 5.0, 11.0, 2.0, 2.0, 1.0, fg, size);
+            painter.push_piece(5.0, 5.0, 2.0, 2.0, 1.0, fg);
+            painter.push_piece(8.0, 8.0, 2.0, 2.0, 1.0, fg);
+            painter.push_piece(11.0, 11.0, 2.0, 2.0, 1.0, fg);
+            painter.push_piece(11.0, 5.0, 2.0, 2.0, 1.0, fg);
+            painter.push_piece(5.0, 11.0, 2.0, 2.0, 1.0, fg);
         }
         ContextMenuGlyph::Place => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 4.0, 8.0, 11.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 7.0, 11.0, 4.0, 4.0, 0.0, bg, size);
+            painter.push_piece(5.0, 4.0, 8.0, 11.0, 1.0, fg);
+            painter.push_piece(7.0, 11.0, 4.0, 4.0, 0.0, bg);
         }
         ContextMenuGlyph::Create => {
-            push_context_icon_piece(vertices, rect, clip, 8.0, 4.0, 2.0, 10.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 4.0, 8.0, 10.0, 2.0, 1.0, fg, size);
+            painter.push_piece(8.0, 4.0, 2.0, 10.0, 1.0, fg);
+            painter.push_piece(4.0, 8.0, 10.0, 2.0, 1.0, fg);
         }
         ContextMenuGlyph::Paste => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 8.0, 10.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 7.0, 4.0, 4.0, 3.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 7.0, 9.0, 4.0, 1.0, 0.0, bg, size);
-            push_context_icon_piece(vertices, rect, clip, 7.0, 12.0, 4.0, 1.0, 0.0, bg, size);
+            painter.push_piece(5.0, 5.0, 8.0, 10.0, 1.0, fg);
+            painter.push_piece(7.0, 4.0, 4.0, 3.0, 1.0, fg);
+            painter.push_piece(7.0, 9.0, 4.0, 1.0, 0.0, bg);
+            painter.push_piece(7.0, 12.0, 4.0, 1.0, 0.0, bg);
         }
         ContextMenuGlyph::Select => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 8.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 5.0, 11.0, 8.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 2.0, 8.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 11.0, 5.0, 2.0, 8.0, 1.0, fg, size);
+            painter.push_piece(5.0, 5.0, 8.0, 2.0, 1.0, fg);
+            painter.push_piece(5.0, 11.0, 8.0, 2.0, 1.0, fg);
+            painter.push_piece(5.0, 5.0, 2.0, 8.0, 1.0, fg);
+            painter.push_piece(11.0, 5.0, 2.0, 8.0, 1.0, fg);
         }
         ContextMenuGlyph::Refresh => {
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 8.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 5.0, 5.0, 2.0, 8.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 5.0, 11.0, 8.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 11.0, 9.0, 2.0, 4.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 10.0, 4.0, 4.0, 4.0, 1.0, fg, size);
+            painter.push_piece(5.0, 5.0, 8.0, 2.0, 1.0, fg);
+            painter.push_piece(5.0, 5.0, 2.0, 8.0, 1.0, fg);
+            painter.push_piece(5.0, 11.0, 8.0, 2.0, 1.0, fg);
+            painter.push_piece(11.0, 9.0, 2.0, 4.0, 1.0, fg);
+            painter.push_piece(10.0, 4.0, 4.0, 4.0, 1.0, fg);
         }
         ContextMenuGlyph::Properties => {
-            push_context_icon_piece(vertices, rect, clip, 8.0, 4.0, 2.0, 2.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 8.0, 8.0, 2.0, 6.0, 1.0, fg, size);
-            push_context_icon_piece(vertices, rect, clip, 7.0, 14.0, 4.0, 1.0, 0.0, fg, size);
+            painter.push_piece(8.0, 4.0, 2.0, 2.0, 1.0, fg);
+            painter.push_piece(8.0, 8.0, 2.0, 6.0, 1.0, fg);
+            painter.push_piece(7.0, 14.0, 4.0, 1.0, 0.0, fg);
         }
         ContextMenuGlyph::Remove => {
-            push_context_icon_piece(vertices, rect, clip, 4.0, 8.0, 10.0, 2.0, 1.0, fg, size);
+            painter.push_piece(4.0, 8.0, 10.0, 2.0, 1.0, fg);
         }
     }
-}
-
-fn push_context_icon_piece(
-    vertices: &mut Vec<QuadVertex>,
-    bounds: ViewRect,
-    clip: ViewRect,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radius: f32,
-    color: [f32; 4],
-    size: PhysicalSize<u32>,
-) {
-    let unit = bounds.width.min(bounds.height) / CONTEXT_MENU_ICON_SIZE;
-    let piece = ViewRect {
-        x: bounds.x + (x * unit).round(),
-        y: bounds.y + (y * unit).round(),
-        width: (width * unit).round().max(1.0),
-        height: (height * unit).round().max(1.0),
-    };
-    push_clipped_rounded_rect(vertices, piece, clip, (radius * unit).round(), color, size);
 }
 
 fn screen_rect(size: PhysicalSize<u32>) -> ViewRect {

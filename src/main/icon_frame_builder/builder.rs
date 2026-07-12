@@ -1,16 +1,101 @@
-impl<'a> IconFrameBuilder<'a> {
+struct IconFrameResources<'a> {
+    resolver: &'a mut FileIconResolver,
+    thumbnails: &'a mut ThumbnailRasterResolver,
+    icon_rasters: &'a mut IconRasterResolver,
+    raster_cache: &'a mut IconRasterCache,
+    role_raster_cache: &'a mut IconRoleRasterCache,
+}
+
+impl<'a> IconFrameResources<'a> {
     fn new(
         resolver: &'a mut FileIconResolver,
         thumbnails: &'a mut ThumbnailRasterResolver,
         icon_rasters: &'a mut IconRasterResolver,
         raster_cache: &'a mut IconRasterCache,
         role_raster_cache: &'a mut IconRoleRasterCache,
-        surface_size: PhysicalSize<u32>,
-        ui_scale: f32,
-        raster_miss_budget: usize,
-        folder_preview_ready_entries: usize,
-        folder_preview_ready_bytes: usize,
     ) -> Self {
+        Self {
+            resolver,
+            thumbnails,
+            icon_rasters,
+            raster_cache,
+            role_raster_cache,
+        }
+    }
+
+    fn from_renderer(renderer: &'a mut IconRenderer) -> Self {
+        Self::new(
+            &mut renderer.resolver,
+            &mut renderer.thumbnails,
+            &mut renderer.icon_rasters,
+            &mut renderer.raster_cache,
+            &mut renderer.role_raster_cache,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FolderPreviewCacheStats {
+    ready_entries: usize,
+    ready_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct IconFrameConfig {
+    surface_size: PhysicalSize<u32>,
+    ui_scale: f32,
+    raster_miss_budget: usize,
+    folder_preview_cache: FolderPreviewCacheStats,
+}
+
+impl IconFrameConfig {
+    #[cfg(test)]
+    fn new(surface_size: PhysicalSize<u32>, ui_scale: f32, raster_miss_budget: usize) -> Self {
+        Self {
+            surface_size,
+            ui_scale,
+            raster_miss_budget,
+            folder_preview_cache: FolderPreviewCacheStats::default(),
+        }
+    }
+}
+
+impl<'a> IconFrameBuilder<'a> {
+    #[cfg(test)]
+    fn new_for_test(
+        resolver: &'a mut FileIconResolver,
+        thumbnails: &'a mut ThumbnailRasterResolver,
+        icon_rasters: &'a mut IconRasterResolver,
+        raster_cache: &'a mut IconRasterCache,
+        role_raster_cache: &'a mut IconRoleRasterCache,
+        surface_size: PhysicalSize<u32>,
+    ) -> Self {
+        Self::new(
+            IconFrameResources::new(
+                resolver,
+                thumbnails,
+                icon_rasters,
+                raster_cache,
+                role_raster_cache,
+            ),
+            IconFrameConfig::new(surface_size, 1.0, 0),
+        )
+    }
+
+    fn new(resources: IconFrameResources<'a>, config: IconFrameConfig) -> Self {
+        let IconFrameResources {
+            resolver,
+            thumbnails,
+            icon_rasters,
+            raster_cache,
+            role_raster_cache,
+        } = resources;
+        let IconFrameConfig {
+            surface_size,
+            ui_scale,
+            raster_miss_budget,
+            folder_preview_cache,
+        } = config;
         icon_rasters.drain_results(raster_cache);
         Self {
             resolver,
@@ -39,8 +124,8 @@ impl<'a> IconFrameBuilder<'a> {
             folder_preview_quads: 0,
             folder_preview_deferred: 0,
             folder_preview_read_ahead_queued: 0,
-            folder_preview_ready_entries,
-            folder_preview_ready_bytes,
+            folder_preview_ready_entries: folder_preview_cache.ready_entries,
+            folder_preview_ready_bytes: folder_preview_cache.ready_bytes,
             cache_hits: 0,
             cache_misses: 0,
             deferred: 0,
@@ -99,13 +184,11 @@ impl<'a> IconFrameBuilder<'a> {
             return false;
         };
         let size_px = icon_cache_size(icon_size);
-        let key = IconRasterCacheKey::icon(path, size_px);
+        let key = IconRasterCacheKey::file_icon(path, size_px, &role_key.kind);
         let raster = if let Some(raster) = self.raster_cache.get(&key) {
             self.cache_hits += 1;
             raster
-        } else if let Some(raster) = self
-            .raster_cache
-            .get_closest_icon_variant(&key.path, size_px)
+        } else if let Some(raster) = self.raster_cache.get_closest_icon_variant(&key)
         {
             self.cache_hits += 1;
             self.icon_rasters.queue_visible(key.clone());
@@ -136,7 +219,7 @@ impl<'a> IconFrameBuilder<'a> {
                 self.cache_misses += 1;
                 self.raster_miss_budget -= 1;
                 let raster_start = Instant::now();
-                let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
+                let Some(raster) = rasterize_icon_for_cache_key(&key) else {
                     self.raster_us += raster_start.elapsed().as_micros();
                     self.fallbacks += 1;
                     return false;
@@ -345,9 +428,7 @@ impl<'a> IconFrameBuilder<'a> {
         let raster = if let Some(raster) = self.raster_cache.get(&key) {
             self.cache_hits += 1;
             raster
-        } else if let Some(raster) = self
-            .raster_cache
-            .get_closest_icon_variant(&key.path, size_px)
+        } else if let Some(raster) = self.raster_cache.get_closest_icon_variant(&key)
         {
             self.cache_hits += 1;
             raster
@@ -361,7 +442,7 @@ impl<'a> IconFrameBuilder<'a> {
             }
             self.raster_miss_budget -= 1;
             let raster_start = Instant::now();
-            let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
+            let Some(raster) = rasterize_icon_for_cache_key(&key) else {
                 self.raster_us += raster_start.elapsed().as_micros();
                 self.fallbacks += 1;
                 return false;
@@ -411,7 +492,7 @@ impl<'a> IconFrameBuilder<'a> {
             raster
         } else {
             self.cache_misses += 1;
-            let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
+            let Some(raster) = rasterize_icon_for_cache_key(&key) else {
                 return false;
             };
             self.raster_cache.insert(key, raster)

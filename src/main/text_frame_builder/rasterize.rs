@@ -31,10 +31,12 @@ impl<'a> TextFrameBuilder<'a> {
                     &mut pixels,
                     label_width,
                     label_height,
-                    x,
-                    y,
-                    w,
-                    h,
+                    TextAlphaRect {
+                        x,
+                        y,
+                        width: w,
+                        height: h,
+                    },
                     glyph_color,
                 );
             },

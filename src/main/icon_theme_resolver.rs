@@ -406,6 +406,117 @@ fn rasterize_icon(path: &Path, target_size: u32) -> Option<IconRaster> {
         _ => rasterize_bitmap_icon(path, target_size),
     }
 }
+fn rasterize_icon_for_cache_key(key: &IconRasterCacheKey) -> Option<IconRaster> {
+    let raster = rasterize_icon(&key.path, key.size_px as u32)?;
+    Some(match key.style {
+        IconRasterStyle::Original => raster,
+        IconRasterStyle::RoundedFile => {
+            rounded_file_system_icon_raster(raster, FILE_ICON_CORNER_RADIUS_RATIO)
+        }
+        IconRasterStyle::RoundedFolder => {
+            rounded_file_system_icon_raster(raster, FOLDER_ICON_CORNER_RADIUS_RATIO)
+        }
+    })
+}
+fn rounded_file_system_icon_raster(mut raster: IconRaster, radius_ratio: f32) -> IconRaster {
+    let Some(expected_len) = (raster.width as usize)
+        .checked_mul(raster.height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+    else {
+        return raster;
+    };
+    if raster.pixels.len() != expected_len {
+        return raster;
+    }
+    let Some((left, top, right, bottom)) = icon_alpha_content_bounds(
+        raster.pixels.as_ref(),
+        raster.width,
+        raster.height,
+    ) else {
+        return raster;
+    };
+    let content_width = right - left;
+    let content_height = bottom - top;
+    let shortest_side = content_width.min(content_height);
+    if shortest_side < 4 {
+        return raster;
+    }
+
+    let radius = (shortest_side as f32 * radius_ratio.clamp(0.0, 0.5))
+        .clamp(1.25, shortest_side as f32 / 2.0);
+    let inner_left = left as f32 + radius;
+    let inner_right = right as f32 - radius;
+    let inner_top = top as f32 + radius;
+    let inner_bottom = bottom as f32 - radius;
+    let mut pixels = raster.pixels.as_ref().to_vec();
+
+    for y in top..bottom {
+        let py = y as f32 + 0.5;
+        let dy = if py < inner_top {
+            inner_top - py
+        } else if py > inner_bottom {
+            py - inner_bottom
+        } else {
+            0.0
+        };
+        if dy <= 0.0 {
+            continue;
+        }
+        for x in left..right {
+            let px = x as f32 + 0.5;
+            let dx = if px < inner_left {
+                inner_left - px
+            } else if px > inner_right {
+                px - inner_right
+            } else {
+                0.0
+            };
+            if dx <= 0.0 {
+                continue;
+            }
+
+            let distance = (dx * dx + dy * dy).sqrt();
+            let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
+            if coverage >= 1.0 {
+                continue;
+            }
+            let offset = ((y * raster.width + x) * 4) as usize;
+            let alpha = (pixels[offset + 3] as f32 * coverage).round() as u8;
+            pixels[offset + 3] = alpha;
+            if alpha == 0 {
+                pixels[offset] = 0;
+                pixels[offset + 1] = 0;
+                pixels[offset + 2] = 0;
+            }
+        }
+    }
+
+    raster.pixels = Arc::from(pixels);
+    raster
+}
+fn icon_alpha_content_bounds(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let mut left = width;
+    let mut top = height;
+    let mut right = 0;
+    let mut bottom = 0;
+    for y in 0..height {
+        for x in 0..width {
+            let offset = ((y * width + x) * 4) as usize;
+            if pixels.get(offset + 3).copied().unwrap_or_default() == 0 {
+                continue;
+            }
+            left = left.min(x);
+            top = top.min(y);
+            right = right.max(x + 1);
+            bottom = bottom.max(y + 1);
+        }
+    }
+    (right > left && bottom > top).then_some((left, top, right, bottom))
+}
 fn rasterize_bitmap_icon(path: &Path, target_size: u32) -> Option<IconRaster> {
     let image = image::open(path).ok()?.into_rgba8();
     let source_width = image.width();

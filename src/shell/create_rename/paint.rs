@@ -17,6 +17,18 @@ use crate::{
     push_clipped_rounded_rect, push_rect,
 };
 
+struct DialogPaintContext {
+    theme: PopupTheme,
+    clip: ViewRect,
+    scale: f32,
+    size: PhysicalSize<u32>,
+}
+
+struct DialogButtonState {
+    active: bool,
+    privileged: bool,
+}
+
 pub(crate) fn push_create_dialog(
     dialog: &ShellCreateDialog,
     theme: PopupTheme,
@@ -150,18 +162,23 @@ fn push_create_dialog_surface(
 
     let cancel = create_dialog_cancel_button_rect_scaled(rect, scale);
     let commit = create_dialog_commit_button_rect_scaled(rect, scale);
+    let paint = DialogPaintContext {
+        theme,
+        clip: rect,
+        scale,
+        size,
+    };
     for (label, button, active) in [("Cancel", cancel, false), ("Create", commit, true)] {
         push_dialog_button(
             vertices,
             text,
             label,
             button,
-            active,
-            dialog.privileged,
-            theme,
-            rect,
-            scale,
-            size,
+            DialogButtonState {
+                active,
+                privileged: dialog.privileged,
+            },
+            &paint,
         );
     }
 }
@@ -266,18 +283,23 @@ fn push_rename_dialog_surface(
 
     let cancel = rename_dialog_cancel_button_rect_scaled(rect, scale);
     let commit = rename_dialog_commit_button_rect_scaled(rect, scale);
+    let paint = DialogPaintContext {
+        theme,
+        clip: rect,
+        scale,
+        size,
+    };
     for (label, button, active) in [("Cancel", cancel, false), ("Rename", commit, true)] {
         push_dialog_button(
             vertices,
             text,
             label,
             button,
-            active,
-            dialog.privileged,
-            theme,
-            rect,
-            scale,
-            size,
+            DialogButtonState {
+                active,
+                privileged: dialog.privileged,
+            },
+            &paint,
         );
     }
 }
@@ -339,41 +361,44 @@ fn push_dialog_button(
     text: &mut TextFrameBuilder<'_>,
     label: &str,
     button: ViewRect,
-    active: bool,
-    privileged: bool,
-    theme: PopupTheme,
-    clip: ViewRect,
-    scale: f32,
-    size: PhysicalSize<u32>,
+    state: DialogButtonState,
+    paint: &DialogPaintContext,
 ) {
     push_clipped_rounded_rect(
         vertices,
         button,
-        clip,
-        scaled_dialog_metric(5.0, scale),
-        if active && privileged {
-            theme.button_warning
-        } else if active {
-            theme.button_primary
+        paint.clip,
+        scaled_dialog_metric(5.0, paint.scale),
+        if state.active && state.privileged {
+            paint.theme.button_warning
+        } else if state.active {
+            paint.theme.button_primary
         } else {
-            theme.button_secondary
+            paint.theme.button_secondary
         },
-        size,
+        paint.size,
     );
-    push_clipped_rect_outline(vertices, button, clip, 1.0, theme.border, size);
+    push_clipped_rect_outline(
+        vertices,
+        button,
+        paint.clip,
+        1.0,
+        paint.theme.border,
+        paint.size,
+    );
     text.push_label_aligned(
         label,
         ViewRect {
-            x: button.x + scaled_dialog_metric(10.0, scale),
-            y: button.y + scaled_dialog_metric(4.0, scale),
-            width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-            height: scaled_dialog_metric(18.0, scale),
+            x: button.x + scaled_dialog_metric(10.0, paint.scale),
+            y: button.y + scaled_dialog_metric(4.0, paint.scale),
+            width: (button.width - scaled_dialog_metric(20.0, paint.scale)).max(1.0),
+            height: scaled_dialog_metric(18.0, paint.scale),
         },
-        clip,
-        if active {
-            theme.inverse_text
+        paint.clip,
+        if state.active {
+            paint.theme.inverse_text
         } else {
-            theme.body_text
+            paint.theme.body_text
         },
         LabelAlignment::Center,
     );

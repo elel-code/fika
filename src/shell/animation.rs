@@ -220,11 +220,8 @@ impl ShellAnimationRuntime {
         let frame = self
             .item_reflow_transitions
             .iter()
-            .filter_map(|transition| {
-                transition
-                    .active(now)
-                    .then(|| now.duration_since(transition.started).as_millis() as u64 / frame_ms)
-            })
+            .filter(|transition| transition.active(now))
+            .map(|transition| now.duration_since(transition.started).as_millis() as u64 / frame_ms)
             .min()
             .unwrap_or(0);
         (self.generation << 32) ^ frame
@@ -428,7 +425,7 @@ impl ShellTextCaretBlinkRuntime {
     }
 
     fn visible_at(&self, now: Instant) -> bool {
-        self.phase_at(now) % 2 == 0
+        self.phase_at(now).is_multiple_of(2)
     }
 
     fn dirty_value(&self, active: bool) -> u64 {

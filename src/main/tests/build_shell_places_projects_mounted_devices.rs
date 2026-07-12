@@ -47,7 +47,7 @@
                 && place.marker == "D"
                 && place.icon_name == "drive-removable-media"
                 && place.label == "Unmounted"
-                && place.path == PathBuf::from("unmounted")
+                && place.path == Path::new("unmounted")
                 && place
                     .device
                     .as_ref()

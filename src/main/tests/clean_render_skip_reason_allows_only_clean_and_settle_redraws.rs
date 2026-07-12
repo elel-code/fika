@@ -285,7 +285,9 @@
         let expected_size = scene.folder_preview_role_size_px_for_item(pixmap_layout);
         assert_eq!(expected_size, 128);
 
-        let stats = scene.update_folder_preview_roles_for_projections(&[projection.clone()]);
+        let stats = scene.update_folder_preview_roles_for_projections(std::slice::from_ref(
+            &projection,
+        ));
         assert_eq!(stats.visible, 1);
         assert_eq!(stats.queued, 1);
 

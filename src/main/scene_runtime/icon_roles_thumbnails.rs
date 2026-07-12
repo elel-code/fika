@@ -1,3 +1,10 @@
+#[derive(Clone, Copy)]
+struct PaneItemPaintContext {
+    palette: DolphinItemPalette,
+    size: PhysicalSize<u32>,
+    theme: ShellTheme,
+}
+
 impl ShellScene {
 
     fn enqueue_dolphin_small_directory_icon_roles(
@@ -181,12 +188,16 @@ impl ShellScene {
             self.push_location_bar(
                 vertices,
                 text,
-                size,
-                path_rect,
-                top_bar,
-                &path_label,
-                location_active,
-                path_cursor,
+                LocationBarLayout {
+                    size,
+                    rect: path_rect,
+                    clip: top_bar,
+                },
+                LocationBarContent {
+                    label: &path_label,
+                    active: location_active,
+                    cursor: path_cursor,
+                },
                 theme,
             );
         }
@@ -218,9 +229,11 @@ impl ShellScene {
                 icons,
                 projection,
                 item,
-                item_palette,
-                size,
-                theme,
+                PaneItemPaintContext {
+                    palette: item_palette,
+                    size,
+                    theme,
+                },
             );
         }
         if self.rubber_band.is_some() && pane_id == self.active_pane() {
@@ -247,10 +260,13 @@ impl ShellScene {
         icons: &mut IconFrameBuilder<'_>,
         projection: &ShellPaneProjection<'_>,
         item: ShellPaneVisibleItem,
-        item_palette: DolphinItemPalette,
-        size: PhysicalSize<u32>,
-        theme: ShellTheme,
+        context: PaneItemPaintContext,
     ) {
+        let PaneItemPaintContext {
+            palette: item_palette,
+            size,
+            theme,
+        } = context;
         let layout = item.layout;
         let _slot_id = item.slot_id;
         let Some(entry_index) = projection
@@ -323,13 +339,17 @@ impl ShellScene {
         };
         let paint = dolphin_item_paint_with_palette_and_hover_progress(
             projection.view.view_mode,
-            item_rect,
-            visual_rect,
-            content_rect,
-            selected,
-            hovered,
-            current,
-            entry_index % 2 == 1,
+            DolphinItemGeometry {
+                item: item_rect,
+                visual: visual_rect,
+                content: content_rect,
+            },
+            DolphinItemInteraction {
+                selected,
+                hovered,
+                current,
+                alternate: entry_index % 2 == 1,
+            },
             self.ui_scale(),
             item_palette,
             hover_progress,
@@ -370,9 +390,11 @@ impl ShellScene {
                 focus.rect,
                 content_clip,
                 focus.radius,
-                [0.0, 0.0, 0.0, 0.0],
-                focus.color,
-                focus.stroke_width,
+                RoundedHighlightStyle {
+                    fill: [0.0, 0.0, 0.0, 0.0],
+                    border: focus.color,
+                    border_width: focus.stroke_width,
+                },
                 size,
             );
         }
@@ -384,9 +406,11 @@ impl ShellScene {
                 content_rect,
                 content_clip,
                 radius,
-                drop_target.fill,
-                drop_target.border,
-                self.scale_metric(1.0),
+                RoundedHighlightStyle {
+                    fill: drop_target.fill,
+                    border: drop_target.border,
+                    border_width: self.scale_metric(1.0),
+                },
                 size,
             );
         }
@@ -411,12 +435,16 @@ impl ShellScene {
             ShellViewMode::Compact => {
                 text.push_label_aligned_wrapped_with_layout(
                     entry.name.as_ref(),
-                    text_rect,
-                    untransformed_text_rect,
-                    content_clip,
-                    text_color,
-                    LabelAlignment::Start,
-                    LabelWrap::None,
+                    TextLabelLayout {
+                        draw: text_rect,
+                        layout: untransformed_text_rect,
+                        clip: content_clip,
+                    },
+                    TextLabelStyle {
+                        color: text_color,
+                        alignment: LabelAlignment::Start,
+                        wrap: LabelWrap::None,
+                    },
                 );
             }
             ShellViewMode::Details => {

@@ -246,9 +246,7 @@ impl ShellScene {
         task_id: ShellTaskId,
         source: ShellAsyncTransferSource,
         mode: FileTransferMode,
-        _target_dir: &Path,
         item_count: usize,
-        _clear_clipboard: bool,
         detail: String,
     ) {
         let label = async_transfer_task_label(source, mode, item_count);

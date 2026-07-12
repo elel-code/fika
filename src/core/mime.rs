@@ -177,8 +177,6 @@ pub fn detect_mime_from_magic(bytes: &[u8]) -> Option<&'static str> {
         || bytes.starts_with(b"PK\x07\x08")
     {
         Some("application/zip")
-    } else if bytes.len() >= 265 && &bytes[257..265] == b"ustar\0\x30\x30" {
-        Some("application/x-tar")
     } else if bytes.len() >= 262 && &bytes[257..262] == b"ustar" {
         Some("application/x-tar")
     } else if bytes.starts_with(&[0x1f, 0x8b]) {
@@ -380,10 +378,10 @@ fn parse_mime_xml_icon_children(
             break;
         };
         let tag = &contents[tag_start..=tag_end];
-        if let Some(kind) = mime_xml_icon_kind(tag) {
-            if let Some(icon_name) = xml_attribute(tag, "name").filter(|name| !name.is_empty()) {
-                icons.push((mime.to_string(), kind, icon_name));
-            }
+        if let Some(kind) = mime_xml_icon_kind(tag)
+            && let Some(icon_name) = xml_attribute(tag, "name").filter(|name| !name.is_empty())
+        {
+            icons.push((mime.to_string(), kind, icon_name));
         }
         cursor = tag_end + 1;
     }

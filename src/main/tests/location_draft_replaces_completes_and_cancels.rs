@@ -89,12 +89,14 @@
         let tmp_cursor = "/tmp".len();
         let tmp_x = scene.text_hit_tests.borrow_mut().cursor_x(
             &label,
-            text_rect,
             tmp_cursor,
-            LabelAlignment::Start,
-            LabelWrap::None,
-            scene.scale_metric(TEXT_FONT_SIZE),
-            scene.text_line_height(),
+            TextCursorLayout {
+                rect: text_rect,
+                alignment: LabelAlignment::Start,
+                wrap: LabelWrap::None,
+                max_font_size: scene.scale_metric(TEXT_FONT_SIZE),
+                max_line_height: scene.text_line_height(),
+            },
         );
 
         assert!(scene.activate_path_bar_at_screen_point(
@@ -114,12 +116,14 @@
         let edited = scene.location_draft_value().unwrap().to_string();
         let tail_x = scene.text_hit_tests.borrow_mut().cursor_x(
             &edited,
-            text_rect,
             edited.len(),
-            LabelAlignment::Start,
-            LabelWrap::None,
-            scene.scale_metric(TEXT_FONT_SIZE),
-            scene.text_line_height(),
+            TextCursorLayout {
+                rect: text_rect,
+                alignment: LabelAlignment::Start,
+                wrap: LabelWrap::None,
+                max_font_size: scene.scale_metric(TEXT_FONT_SIZE),
+                max_line_height: scene.text_line_height(),
+            },
         );
         assert!(scene.activate_path_bar_at_screen_point(
             ViewPoint {
@@ -224,21 +228,25 @@
         let label = "mmmmii";
         let first = runtime.cursor_x(
             label,
-            rect,
             1,
-            LabelAlignment::Start,
-            LabelWrap::None,
-            TEXT_FONT_SIZE,
-            TEXT_LINE_HEIGHT,
+            TextCursorLayout {
+                rect,
+                alignment: LabelAlignment::Start,
+                wrap: LabelWrap::None,
+                max_font_size: TEXT_FONT_SIZE,
+                max_line_height: TEXT_LINE_HEIGHT,
+            },
         );
         let second = runtime.cursor_x(
             label,
-            rect,
             2,
-            LabelAlignment::Start,
-            LabelWrap::None,
-            TEXT_FONT_SIZE,
-            TEXT_LINE_HEIGHT,
+            TextCursorLayout {
+                rect,
+                alignment: LabelAlignment::Start,
+                wrap: LabelWrap::None,
+                max_font_size: TEXT_FONT_SIZE,
+                max_line_height: TEXT_LINE_HEIGHT,
+            },
         );
 
         assert!(second > first);
@@ -275,12 +283,14 @@
         let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
         let mut atlas_cache = TextAtlasFrameCache::default();
         let mut text = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             PhysicalSize::new(320, 120),
             1.0,
             Vec::new(),
@@ -336,12 +346,14 @@
         };
 
         let mut first = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             PhysicalSize::new(320, 120),
             1.0,
             Vec::new(),
@@ -359,12 +371,14 @@
         assert_eq!(first_frame.stats.deferred, 1);
 
         let mut second = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             PhysicalSize::new(320, 120),
             1.0,
             Vec::new(),
@@ -407,12 +421,14 @@
         };
 
         let mut first = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             PhysicalSize::new(320, 120),
             1.0,
             Vec::new(),
@@ -426,12 +442,14 @@
         label_cache.bytes = 0;
 
         let mut second = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             PhysicalSize::new(320, 120),
             1.0,
             Vec::new(),

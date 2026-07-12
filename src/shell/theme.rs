@@ -5,6 +5,18 @@ use crate::shell::tasks::ShellTaskStatusKind;
 
 pub(crate) type UiColor = [f32; 4];
 
+pub(crate) const NEUTRAL_ICON_COLOR: UiColor = ui_color_rgb8(75, 81, 91);
+pub(crate) const PROPERTIES_ICON_COLOR: UiColor = ui_color_rgb8(55, 65, 81);
+
+const fn ui_color_rgb8(red: u8, green: u8, blue: u8) -> UiColor {
+    [
+        red as f32 / 255.0,
+        green as f32 / 255.0,
+        blue as f32 / 255.0,
+        1.0,
+    ]
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShellThemeMode {
     Light,

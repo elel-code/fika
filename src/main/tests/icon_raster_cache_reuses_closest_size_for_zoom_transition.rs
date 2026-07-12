@@ -10,17 +10,73 @@
         );
 
         assert!(cache.contains_icon_variant(&path));
-        assert!(
-            cache
-                .get(&IconRasterCacheKey::icon(path.clone(), 64))
-                .is_none()
-        );
+        let requested = IconRasterCacheKey::icon(path.clone(), 64);
+        assert!(cache.get(&requested).is_none());
         let raster = cache
-            .get_closest_icon_variant(&path, 64)
+            .get_closest_icon_variant(&requested)
             .expect("zoom should reuse a cached neighboring icon size");
 
         assert_eq!(raster.width, 4);
         assert_eq!(raster.height, 4);
+    }
+
+    #[test]
+    fn icon_raster_cache_keeps_rounded_file_icons_separate_from_named_icons() {
+        let mut cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
+        let path = PathBuf::from("/theme/mimetypes/text-plain.svg");
+        let original = IconRasterCacheKey::icon(path.clone(), 48);
+        let rounded = IconRasterCacheKey::file_icon(
+            path.clone(),
+            64,
+            &FileIconKind::Mime {
+                mime: Arc::from("text/plain"),
+            },
+        );
+        let rounded_folder =
+            IconRasterCacheKey::file_icon(path, 64, &FileIconKind::Directory);
+        cache.begin_frame();
+        cache.insert(original, test_icon_raster(4, 7));
+
+        assert_eq!(rounded.style, IconRasterStyle::RoundedFile);
+        assert_eq!(rounded_folder.style, IconRasterStyle::RoundedFolder);
+        assert!(cache.get_closest_icon_variant(&rounded).is_none());
+        assert!(cache.get_closest_icon_variant(&rounded_folder).is_none());
+    }
+
+    #[test]
+    fn rounded_file_system_icon_raster_masks_only_alpha_content_corners() {
+        let width = 20;
+        let height = 20;
+        let mut pixels = vec![0; (width * height * 4) as usize];
+        for y in 2..18 {
+            for x in 2..18 {
+                let offset = ((y * width + x) * 4) as usize;
+                pixels[offset..offset + 4].copy_from_slice(&[40, 120, 220, 255]);
+            }
+        }
+        let raster = IconRaster {
+            pixels: Arc::from(pixels),
+            width,
+            height,
+        };
+
+        assert_eq!(
+            icon_alpha_content_bounds(raster.pixels.as_ref(), width, height),
+            Some((2, 2, 18, 18))
+        );
+        let rounded =
+            rounded_file_system_icon_raster(raster.clone(), FILE_ICON_CORNER_RADIUS_RATIO);
+        let alpha_at = |x: u32, y: u32| rounded.pixels[((y * width + x) * 4 + 3) as usize];
+
+        assert!(alpha_at(2, 2) < 64, "outer content corner should be softened");
+        assert!(
+            alpha_at(3, 2) > alpha_at(2, 2) && alpha_at(3, 2) < 255,
+            "neighboring corner pixel should be antialiased"
+        );
+        assert_eq!(alpha_at(10, 2), 255, "flat top edge should stay crisp");
+        assert_eq!(alpha_at(10, 10), 255, "icon interior should be unchanged");
+        assert_eq!(alpha_at(1, 1), 0, "transparent padding should stay clear");
+        assert_eq!(raster.pixels[((2 * width + 2) * 4 + 3) as usize], 255);
     }
 
     #[test]

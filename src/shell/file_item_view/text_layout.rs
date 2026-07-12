@@ -139,12 +139,14 @@ fn dolphin_wrapped_text_lines(
     configure_text_buffer(
         buffer,
         label,
-        Some(max_width.max(1.0)),
-        None,
-        Wrap::WordOrGlyph,
-        Align::Center,
-        font_size,
-        line_height,
+        TextBufferConfig {
+            width: Some(max_width.max(1.0)),
+            height: None,
+            wrap: Wrap::WordOrGlyph,
+            align: Align::Center,
+            font_size,
+            line_height,
+        },
     );
     buffer.shape_until_scroll(font_system, false);
 
@@ -267,12 +269,14 @@ pub(crate) fn dolphin_text_width_no_wrap(
     configure_text_buffer(
         buffer,
         label,
-        None,
-        None,
-        Wrap::None,
-        Align::Left,
-        font_size,
-        line_height,
+        TextBufferConfig {
+            width: None,
+            height: None,
+            wrap: Wrap::None,
+            align: Align::Left,
+            font_size,
+            line_height,
+        },
     );
     buffer.shape_until_scroll(font_system, false);
     buffer
@@ -282,22 +286,22 @@ pub(crate) fn dolphin_text_width_no_wrap(
         .unwrap_or(0.0)
 }
 
-fn configure_text_buffer(
-    buffer: &mut Buffer,
-    label: &str,
+struct TextBufferConfig {
     width: Option<f32>,
     height: Option<f32>,
     wrap: Wrap,
     align: Align,
     font_size: f32,
     line_height: f32,
-) {
+}
+
+fn configure_text_buffer(buffer: &mut Buffer, label: &str, config: TextBufferConfig) {
     let attrs = Attrs::new().family(Family::SansSerif);
-    buffer.set_metrics(Metrics::new(font_size, line_height));
-    buffer.set_wrap(wrap);
+    buffer.set_metrics(Metrics::new(config.font_size, config.line_height));
+    buffer.set_wrap(config.wrap);
     buffer.set_ellipsize(Ellipsize::None);
-    buffer.set_size(width, height);
-    buffer.set_text(label, &attrs, Shaping::Advanced, Some(align));
+    buffer.set_size(config.width, config.height);
+    buffer.set_text(label, &attrs, Shaping::Advanced, Some(config.align));
 }
 
 fn dolphin_escape_text(label: &str) -> Cow<'_, str> {

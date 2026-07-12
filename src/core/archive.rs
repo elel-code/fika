@@ -74,7 +74,7 @@ pub struct ArkDndExtractRequest {
 #[derive(Debug)]
 pub enum ArkDndExtractError {
     InvalidDestination { path: PathBuf, message: String },
-    Bus(BusError),
+    Bus(Box<BusError>),
 }
 
 impl fmt::Display for ArkDndExtractError {
@@ -95,7 +95,7 @@ impl fmt::Display for ArkDndExtractError {
 impl Error for ArkDndExtractError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Bus(error) => Some(error),
+            Self::Bus(error) => Some(error.as_ref()),
             Self::InvalidDestination { .. } => None,
         }
     }
@@ -103,7 +103,7 @@ impl Error for ArkDndExtractError {
 
 impl From<BusError> for ArkDndExtractError {
     fn from(error: BusError) -> Self {
-        Self::Bus(error)
+        Self::Bus(Box::new(error))
     }
 }
 

@@ -209,9 +209,7 @@ fn ark_context_archive_items(items: &[ArkContextItem]) -> Vec<ArkContextItem> {
 }
 
 fn ark_context_parent_writable(items: &[ArkContextItem]) -> bool {
-    items
-        .first()
-        .is_none_or(|item| ark_context_item_parent_writable(item))
+    items.first().is_none_or(ark_context_item_parent_writable)
 }
 
 fn ark_context_all_parents_writable(items: &[ArkContextItem]) -> bool {

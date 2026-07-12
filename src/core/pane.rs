@@ -19,7 +19,7 @@ pub struct PaneGenerationCounter {
 }
 
 impl PaneGenerationCounter {
-    pub fn next(&mut self) -> Generation {
+    pub fn advance(&mut self) -> Generation {
         self.current += 1;
         Generation(self.current)
     }
@@ -93,14 +93,14 @@ impl SelectionState {
     }
 
     pub fn is_excluded(&self, id: ItemId) -> bool {
-        self.excluded_ids.iter().any(|excluded| *excluded == id)
+        self.excluded_ids.contains(&id)
     }
 
     pub fn is_selected(&self, id: ItemId) -> bool {
         if self.all_selected {
             !self.is_excluded(id)
         } else {
-            self.selected_ids.iter().any(|selected| *selected == id)
+            self.selected_ids.contains(&id)
         }
     }
 
@@ -175,13 +175,13 @@ impl SelectionState {
             .collect();
         if self
             .anchor_id
-            .is_none_or(|anchor| !self.selected_ids.iter().any(|id| *id == anchor))
+            .is_none_or(|anchor| !self.selected_ids.contains(&anchor))
         {
             self.anchor_id = self.selected_ids.first().copied();
         }
         if self
             .active_id
-            .is_none_or(|active| !self.selected_ids.iter().any(|id| *id == active))
+            .is_none_or(|active| !self.selected_ids.contains(&active))
         {
             self.active_id = self.selected_ids.first().copied();
         }
@@ -575,7 +575,7 @@ impl PaneController {
     }
 
     pub fn load(&mut self, pane_id: PaneId, path: PathBuf) -> Option<DirectoryListerEvent> {
-        let generation = self.generation_counter.next();
+        let generation = self.generation_counter.advance();
         let pane = self.panes.get_mut(&pane_id)?;
         pane.navigate_to(path, generation);
         Some(pane.lister.load_directory(LoadMode::Load))
@@ -597,14 +597,14 @@ impl PaneController {
     }
 
     pub fn go_back(&mut self, pane_id: PaneId) -> Option<DirectoryListerEvent> {
-        let generation = self.generation_counter.next();
+        let generation = self.generation_counter.advance();
         let pane = self.panes.get_mut(&pane_id)?;
         pane.pop_back(generation)?;
         Some(pane.lister.load_directory(LoadMode::Load))
     }
 
     pub fn go_forward(&mut self, pane_id: PaneId) -> Option<DirectoryListerEvent> {
-        let generation = self.generation_counter.next();
+        let generation = self.generation_counter.advance();
         let pane = self.panes.get_mut(&pane_id)?;
         pane.pop_forward(generation)?;
         Some(pane.lister.load_directory(LoadMode::Load))

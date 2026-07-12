@@ -188,17 +188,13 @@
         let mut icon_rasters = IconRasterResolver::new();
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
         let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
-        let mut builder = IconFrameBuilder::new(
+        let mut builder = IconFrameBuilder::new_for_test(
             &mut resolver,
             &mut thumbnails,
             &mut icon_rasters,
             &mut raster_cache,
             &mut role_raster_cache,
             PhysicalSize::new(128, 96),
-                1.0,
-            0,
-            0,
-            0,
         );
         let raster = test_icon_raster(2, 7);
         builder.copy_raster_to_atlas(
@@ -241,17 +237,13 @@
         let mut icon_rasters = IconRasterResolver::new();
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
         let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
-        let mut builder = IconFrameBuilder::new(
+        let mut builder = IconFrameBuilder::new_for_test(
             &mut resolver,
             &mut thumbnails,
             &mut icon_rasters,
             &mut raster_cache,
             &mut role_raster_cache,
             PhysicalSize::new(128, 96),
-                1.0,
-            0,
-            0,
-            0,
         );
         let raster = test_icon_raster(2, 7);
         builder.copy_raster_to_atlas(
@@ -303,17 +295,13 @@
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
         let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
         seed_directory_role_raster(&mut role_raster_cache, Path::new("/tmp/album"), 96.0);
-        let mut builder = IconFrameBuilder::new(
+        let mut builder = IconFrameBuilder::new_for_test(
             &mut resolver,
             &mut thumbnails,
             &mut icon_rasters,
             &mut raster_cache,
             &mut role_raster_cache,
             PhysicalSize::new(240, 180),
-                1.0,
-            0,
-            0,
-            0,
         );
         let entry = test_entry_with_mime_and_modified("album", true, "inode/directory", Some(7));
         let preview = FolderPreviewReady {
@@ -369,17 +357,13 @@
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
         let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
         seed_directory_role_raster(&mut role_raster_cache, Path::new("/tmp/album"), 28.0);
-        let mut builder = IconFrameBuilder::new(
+        let mut builder = IconFrameBuilder::new_for_test(
             &mut resolver,
             &mut thumbnails,
             &mut icon_rasters,
             &mut raster_cache,
             &mut role_raster_cache,
             PhysicalSize::new(160, 80),
-                1.0,
-            0,
-            0,
-            0,
         );
         let entry = test_entry_with_mime_and_modified("album", true, "inode/directory", Some(7));
         let preview = FolderPreviewReady {
@@ -444,17 +428,13 @@
         };
 
         {
-            let mut builder = IconFrameBuilder::new(
+            let mut builder = IconFrameBuilder::new_for_test(
                 &mut harness.resolver,
                 &mut thumbnails,
                 &mut icon_rasters,
                 &mut raster_cache,
                 &mut role_raster_cache,
                 PhysicalSize::new(128, 96),
-                1.0,
-                0,
-                0,
-                0,
             );
             assert!(!builder.push_named_theme_icon(
                 "archive-insert",
@@ -471,17 +451,13 @@
         harness.complete(request_key, Some(resolved_path.clone()));
 
         {
-            let mut builder = IconFrameBuilder::new(
+            let mut builder = IconFrameBuilder::new_for_test(
                 &mut harness.resolver,
                 &mut thumbnails,
                 &mut icon_rasters,
                 &mut raster_cache,
                 &mut role_raster_cache,
                 PhysicalSize::new(128, 96),
-                1.0,
-                0,
-                0,
-                0,
             );
             assert!(!builder.push_named_theme_icon(
                 "archive-insert",

@@ -74,22 +74,22 @@ fn folder_preview_damage_rect_for_changed_key(
                     key.directory_modified_secs,
                     requested_size,
                 );
-                let damage_rect = if preview
+                let exact_preview_changed = preview
                     .filter(|preview| preview.size_px == key.size_px)
-                    .is_some()
-                {
-                    folder_preview_role_shell_rect(pixmap_layout)
-                } else if previous.is_some()
+                    .is_some();
+                let previous_preview_disappeared = previous.is_some()
                     && preview
                         .map(|preview| preview.size_px != requested_size)
-                        .unwrap_or(true)
+                        .unwrap_or(true);
+                let requested_preview_failed =
+                    requested_size == key.size_px && roles.failed.contains(key);
+                if !(exact_preview_changed
+                    || previous_preview_disappeared
+                    || requested_preview_failed)
                 {
-                    folder_preview_role_shell_rect(pixmap_layout)
-                } else if requested_size == key.size_px && roles.failed.contains(key) {
-                    folder_preview_role_shell_rect(pixmap_layout)
-                } else {
                     continue;
-                };
+                }
+                let damage_rect = folder_preview_role_shell_rect(pixmap_layout);
                 return Some(pane_content_rect_to_screen(damage_rect, projection));
             }
         }

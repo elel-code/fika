@@ -1,8 +1,9 @@
 use fika_core::{Entry, ViewRect};
 use winit::dpi::PhysicalSize;
 
+use crate::shell::icon_roles::{FILE_ICON_CORNER_RADIUS_RATIO, FOLDER_ICON_CORNER_RADIUS_RATIO};
 use crate::shell::render::quad::{QuadVertex, push_clipped_rect, push_clipped_rounded_rect};
-use crate::shell::theme::{ShellScrollbarColors, ShellTheme, UiColor};
+use crate::shell::theme::{NEUTRAL_ICON_COLOR, ShellScrollbarColors, ShellTheme, UiColor};
 
 pub(crate) fn push_scrollbar(
     vertices: &mut Vec<QuadVertex>,
@@ -167,7 +168,7 @@ fn place_icon_colors(paint: PlaceIconPaint, theme: ShellTheme) -> (UiColor, UiCo
     match paint.color_role {
         PlaceIconColorRole::Trash => ([0.690, 0.282, 0.282, 1.0], [1.000, 0.922, 0.922, 1.0]),
         PlaceIconColorRole::Network => ([0.184, 0.435, 0.929, 1.0], [0.918, 0.945, 1.000, 1.0]),
-        PlaceIconColorRole::Root => ([0.294, 0.318, 0.357, 1.0], [0.902, 0.922, 0.945, 1.0]),
+        PlaceIconColorRole::Root => (NEUTRAL_ICON_COLOR, [0.902, 0.922, 0.945, 1.0]),
         PlaceIconColorRole::Editable => ([0.192, 0.486, 0.310, 1.0], [0.910, 0.973, 0.925, 1.0]),
         PlaceIconColorRole::Folder => ([0.749, 0.435, 0.047, 1.0], [1.000, 0.953, 0.855, 1.0]),
     }
@@ -302,7 +303,9 @@ pub(crate) fn push_fallback_file_icon(
             width: icon_rect.width * 0.84,
             height: icon_rect.height * 0.56,
         };
-        let radius = (icon_rect.width.min(icon_rect.height) * 0.08).max(1.0);
+        let radius =
+            (icon_rect.width.min(icon_rect.height) * FOLDER_ICON_CORNER_RADIUS_RATIO * 0.8)
+                .max(1.0);
         push_clipped_rounded_rect(
             vertices,
             tab,
@@ -319,15 +322,18 @@ pub(crate) fn push_fallback_file_icon(
             palette.folder_body,
             size,
         );
-        push_clipped_rect(
+        let highlight_inset = radius * 0.55;
+        let highlight = ViewRect {
+            x: body.x + highlight_inset,
+            y: body.y + radius * 0.45,
+            width: (body.width - highlight_inset * 2.0).max(1.0),
+            height: (body.height * 0.10).max(1.0),
+        };
+        push_clipped_rounded_rect(
             vertices,
-            ViewRect {
-                x: body.x,
-                y: body.y,
-                width: body.width,
-                height: body.height * 0.20,
-            },
+            highlight,
             content_clip,
+            highlight.height / 2.0,
             palette.folder_highlight,
             size,
         );
@@ -338,7 +344,7 @@ pub(crate) fn push_fallback_file_icon(
             width: icon_rect.width * 0.64,
             height: icon_rect.height * 0.78,
         };
-        let radius = (icon_rect.width.min(icon_rect.height) * 0.06).max(1.0);
+        let radius = (body.width.min(body.height) * FILE_ICON_CORNER_RADIUS_RATIO).max(1.0);
         push_clipped_rounded_rect(
             vertices,
             body,
@@ -348,7 +354,7 @@ pub(crate) fn push_fallback_file_icon(
             size,
         );
         let fold = icon_rect.width.min(icon_rect.height) * 0.18;
-        push_clipped_rect(
+        push_clipped_rounded_rect(
             vertices,
             ViewRect {
                 x: body.right() - fold,
@@ -357,6 +363,7 @@ pub(crate) fn push_fallback_file_icon(
                 height: fold,
             },
             content_clip,
+            radius * 0.65,
             palette.file_fold,
             size,
         );

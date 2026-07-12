@@ -377,13 +377,16 @@ impl TextHitTestRuntime {
     fn cursor_x(
         &mut self,
         label: &str,
-        rect: ViewRect,
         cursor: usize,
-        alignment: LabelAlignment,
-        wrap: LabelWrap,
-        max_font_size: f32,
-        max_line_height: f32,
+        layout: TextCursorLayout,
     ) -> f32 {
+        let TextCursorLayout {
+            rect,
+            alignment,
+            wrap,
+            max_font_size,
+            max_line_height,
+        } = layout;
         if label.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
             return 0.0;
         }
@@ -415,6 +418,17 @@ impl TextHitTestRuntime {
         measured_x / (label_width as f32 / rect.width.max(1.0))
     }
 }
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct TextCursorLayout {
+    rect: ViewRect,
+    alignment: LabelAlignment,
+    wrap: LabelWrap,
+    max_font_size: f32,
+    max_line_height: f32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LabelCacheOutcome {
     Hit,

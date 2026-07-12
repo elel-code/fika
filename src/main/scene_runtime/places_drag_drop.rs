@@ -181,10 +181,7 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) -> Option<ShellDropOperationRequest> {
         let command = self.drop_menu_command_at_screen_point(point, size);
-        let menu = self.drop_menu.take();
-        let Some(menu) = menu else {
-            return None;
-        };
+        let menu = self.drop_menu.take()?;
         match command {
             Some(ShellDropMenuCommand::Mode { mode, privileged }) => {
                 let request = ShellDropOperationRequest {
@@ -380,14 +377,14 @@ impl ShellScene {
                 (open_with_apps, service_actions)
             }
             ShellContextTarget::Blank { path, .. } => {
-                let open_with_apps = if file_ops::is_trash_files_dir(&path) || is_network_path(path)
+                let open_with_apps = if file_ops::is_trash_files_dir(path) || is_network_path(path)
                 {
                     Vec::new()
                 } else {
                     open_with_applications_for_mime(cache, Some("inode/directory"))
                 };
                 let service_actions =
-                    if file_ops::is_trash_files_dir(&path) || is_network_path(path) {
+                    if file_ops::is_trash_files_dir(path) || is_network_path(path) {
                         Vec::new()
                     } else {
                         cache.service_actions_for_targets(&[ServiceMenuTarget::new(

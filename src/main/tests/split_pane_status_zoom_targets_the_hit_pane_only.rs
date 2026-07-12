@@ -156,12 +156,14 @@
         let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
         let mut atlas_cache = TextAtlasFrameCache::default();
         let mut text = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             PhysicalSize::new(320, 180),
             1.0,
             Vec::new(),
@@ -244,12 +246,14 @@
         let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
         let mut atlas_cache = TextAtlasFrameCache::default();
         let mut text = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             size,
             scene.ui_scale(),
             Vec::new(),

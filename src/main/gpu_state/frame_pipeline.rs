@@ -1,3 +1,17 @@
+#[derive(Clone, Copy)]
+struct DialogRenderViewport {
+    popup_theme: PopupTheme,
+    scale: f32,
+    layout_size: PhysicalSize<u32>,
+}
+
+struct DetachedDialogRenderRequest<'a> {
+    window: &'a dyn Window,
+    viewport: DialogRenderViewport,
+    reason: &'static str,
+    dialog_label: &'static str,
+}
+
 impl WgpuState {
 
     fn prewarm_text_labels(
@@ -9,12 +23,7 @@ impl WgpuState {
         self.text_renderer.label_cache.begin_frame();
         self.text_renderer.metrics_cache.begin_frame();
         let mut text_builder = TextFrameBuilder::new(
-            &mut self.text_renderer.font_system,
-            &mut self.text_renderer.swash_cache,
-            &mut self.text_renderer.text_buffer,
-            &mut self.text_renderer.label_cache,
-            &mut self.text_renderer.metrics_cache,
-            &mut self.text_renderer.atlas_cache,
+            TextFrameResources::from_renderer(&mut self.text_renderer),
             self.size,
             scene.ui_scale(),
             Vec::new(),
@@ -25,13 +34,7 @@ impl WgpuState {
 
     fn render_detached_dialog(
         &mut self,
-        window: &dyn Window,
-        _event_loop: &dyn ActiveEventLoop,
-        popup_theme: PopupTheme,
-        scale: f32,
-        layout_size: PhysicalSize<u32>,
-        reason: &'static str,
-        dialog_label: &'static str,
+        request: DetachedDialogRenderRequest<'_>,
         paint: impl FnOnce(
             &mut Vec<QuadVertex>,
             &mut TextFrameBuilder<'_>,
@@ -39,6 +42,17 @@ impl WgpuState {
             PhysicalSize<u32>,
         ),
     ) -> ShellRenderOutcome {
+        let DetachedDialogRenderRequest {
+            window,
+            viewport:
+                DialogRenderViewport {
+                    popup_theme,
+                    scale,
+                    layout_size,
+                },
+            reason,
+            dialog_label,
+        } = request;
         let Some(frame) = self.acquire_surface_frame(
             window,
             reason,
@@ -48,14 +62,20 @@ impl WgpuState {
         };
 
         let dialog_frame = prepare_dialog_frame(
-            &mut self.text_renderer,
-            &mut self.icon_renderer,
-            &mut self.quad_renderer,
-            &self.device,
-            &self.queue,
-            layout_size,
-            scale,
-            reason,
+            DialogFrameRenderers {
+                text: &mut self.text_renderer,
+                icons: &mut self.icon_renderer,
+                quads: &mut self.quad_renderer,
+            },
+            FrameGpuContext {
+                device: &self.device,
+                queue: &self.queue,
+            },
+            DialogFrameRequest {
+                layout_size,
+                scale,
+                reason,
+            },
             paint,
         );
         if dialog_frame.work_pending() {
@@ -93,32 +113,35 @@ impl WgpuState {
     fn render_open_with_dialog(
         &mut self,
         window: &dyn Window,
-        event_loop: &dyn ActiveEventLoop,
         chooser: &ShellOpenWithChooser,
-        popup_theme: PopupTheme,
-        scale: f32,
-        layout_size: PhysicalSize<u32>,
+        viewport: DialogRenderViewport,
         caret_visible: bool,
         reason: &'static str,
     ) -> ShellRenderOutcome {
-        self.render_detached_dialog(
-            window,
-            event_loop,
+        let DialogRenderViewport {
             popup_theme,
             scale,
-            layout_size,
-            reason,
-            ShellDialogWindowKind::OpenWith.as_str(),
+            layout_size: _,
+        } = viewport;
+        self.render_detached_dialog(
+            DetachedDialogRenderRequest {
+                window,
+                viewport,
+                reason,
+                dialog_label: ShellDialogWindowKind::OpenWith.as_str(),
+            },
             |vertices, text_builder, icon_builder, size| {
                 shell::open_with::paint::push_open_with_chooser_dialog(
                     chooser,
-                    popup_theme,
-                    scale,
-                    caret_visible,
                     vertices,
                     text_builder,
                     icon_builder,
-                    size,
+                    shell::open_with::paint::OpenWithDialogPaintConfig {
+                        theme: popup_theme,
+                        scale,
+                        caret_visible,
+                        size,
+                    },
                 );
             },
         )
@@ -127,21 +150,22 @@ impl WgpuState {
     fn render_create_dialog(
         &mut self,
         window: &dyn Window,
-        event_loop: &dyn ActiveEventLoop,
         dialog: &ShellCreateDialog,
-        popup_theme: PopupTheme,
-        scale: f32,
-        layout_size: PhysicalSize<u32>,
+        viewport: DialogRenderViewport,
         reason: &'static str,
     ) -> ShellRenderOutcome {
-        self.render_detached_dialog(
-            window,
-            event_loop,
+        let DialogRenderViewport {
             popup_theme,
             scale,
-            layout_size,
-            reason,
-            ShellDialogWindowKind::Create.as_str(),
+            layout_size: _,
+        } = viewport;
+        self.render_detached_dialog(
+            DetachedDialogRenderRequest {
+                window,
+                viewport,
+                reason,
+                dialog_label: ShellDialogWindowKind::Create.as_str(),
+            },
             |vertices, text_builder, _icon_builder, size| {
                 shell::create_rename::paint::push_create_dialog(
                     dialog,
@@ -158,21 +182,22 @@ impl WgpuState {
     fn render_rename_dialog(
         &mut self,
         window: &dyn Window,
-        event_loop: &dyn ActiveEventLoop,
         dialog: &ShellRenameDialog,
-        popup_theme: PopupTheme,
-        scale: f32,
-        layout_size: PhysicalSize<u32>,
+        viewport: DialogRenderViewport,
         reason: &'static str,
     ) -> ShellRenderOutcome {
-        self.render_detached_dialog(
-            window,
-            event_loop,
+        let DialogRenderViewport {
             popup_theme,
             scale,
-            layout_size,
-            reason,
-            ShellDialogWindowKind::Rename.as_str(),
+            layout_size: _,
+        } = viewport;
+        self.render_detached_dialog(
+            DetachedDialogRenderRequest {
+                window,
+                viewport,
+                reason,
+                dialog_label: ShellDialogWindowKind::Rename.as_str(),
+            },
             |vertices, text_builder, _icon_builder, size| {
                 shell::create_rename::paint::push_rename_dialog(
                     dialog,
@@ -375,19 +400,25 @@ impl WgpuState {
             self.overlay_text_renderer = Some(TextRenderer::new(&self.device, self.config.format));
         }
         let mut scene_frame = prepare_scene_frame(
-            &mut self.text_renderer,
-            if overlay_text_active {
-                self.overlay_text_renderer.as_mut()
-            } else {
-                None
+            SceneFrameRenderers {
+                text: &mut self.text_renderer,
+                overlay_text: if overlay_text_active {
+                    self.overlay_text_renderer.as_mut()
+                } else {
+                    None
+                },
+                icons: &mut self.icon_renderer,
             },
-            &mut self.icon_renderer,
-            &self.device,
-            &self.queue,
-            scene,
-            &frame_projections,
-            self.size,
-            reason,
+            FrameGpuContext {
+                device: &self.device,
+                queue: &self.queue,
+            },
+            SceneFrameRequest {
+                scene,
+                projections: &frame_projections,
+                size: self.size,
+                reason,
+            },
         );
         drop(frame_projections);
         let prepare_us = prepare_start.elapsed().as_micros();

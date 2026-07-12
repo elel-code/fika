@@ -210,10 +210,10 @@ impl ShellFolderPreviewRoleRuntime {
         let stale = self
             .pending
             .iter()
-            .filter_map(|(key, priority)| {
-                (*priority == ThumbnailRequestPriority::Deferred && !keep.contains(key))
-                    .then(|| key.clone())
+            .filter(|(key, priority)| {
+                **priority == ThumbnailRequestPriority::Deferred && !keep.contains(*key)
             })
+            .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
         for key in stale {
             self.pending.remove(&key);

@@ -116,12 +116,12 @@ impl IconRenderer {
             let Some(path) = snapshot.path else {
                 continue;
             };
-            let key = IconRasterCacheKey::icon(path, size_px);
+            let key = IconRasterCacheKey::file_icon(path, size_px, &role.kind);
             if let Some(raster) = self.raster_cache.get(&key) {
                 self.role_raster_cache.insert(role, raster);
                 continue;
             }
-            let Some(raster) = rasterize_icon(&key.path, size_px as u32) else {
+            let Some(raster) = rasterize_icon_for_cache_key(&key) else {
                 continue;
             };
             let raster = self.raster_cache.insert(key, raster);
@@ -177,7 +177,8 @@ impl IconRenderer {
                     stats.failed += 1;
                     continue;
                 };
-                let raster_key = IconRasterCacheKey::icon(icon_path, size_px);
+                let raster_key =
+                    IconRasterCacheKey::file_icon(icon_path, size_px, &role_key.kind);
                 if !seen.insert(raster_key.clone()) {
                     continue;
                 }
@@ -189,7 +190,7 @@ impl IconRenderer {
                 }
                 stats.cache_misses += 1;
                 let raster_start = Instant::now();
-                let Some(raster) = rasterize_icon(&raster_key.path, size_px as u32) else {
+                let Some(raster) = rasterize_icon_for_cache_key(&raster_key) else {
                     stats.raster_us += raster_start.elapsed().as_micros();
                     stats.failed += 1;
                     continue;

@@ -69,7 +69,7 @@ pub(crate) fn launch_request_for_chooser(
         let mime_type = chooser
             .mime_type
             .as_deref()
-            .ok_or_else(|| "cannot set a default application for an unknown MIME type")?
+            .ok_or("cannot set a default application for an unknown MIME type")?
             .to_string();
         Some(OpenWithDefaultUpdate {
             mime_type,

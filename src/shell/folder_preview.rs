@@ -382,7 +382,7 @@ fn blur_alpha_shadow(image: &mut image::RgbaImage, radius: u32) {
                     count += 1;
                 }
             }
-            let alpha = if count == 0 { 0 } else { (total / count) as u8 };
+            let alpha = total.checked_div(count).unwrap_or(0) as u8;
             image.put_pixel(x, y, image::Rgba([0, 0, 0, alpha]));
         }
     }

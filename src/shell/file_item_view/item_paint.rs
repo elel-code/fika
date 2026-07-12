@@ -30,27 +30,32 @@ pub(crate) struct DolphinItemPaint {
     pub(crate) focus: Option<DolphinItemFocus>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DolphinItemGeometry {
+    pub(crate) item: ViewRect,
+    pub(crate) visual: ViewRect,
+    pub(crate) content: ViewRect,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DolphinItemInteraction {
+    pub(crate) selected: bool,
+    pub(crate) hovered: bool,
+    pub(crate) current: bool,
+    pub(crate) alternate: bool,
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn dolphin_item_paint(
     view_mode: ShellViewMode,
-    item_rect: ViewRect,
-    visual_rect: ViewRect,
-    content_rect: ViewRect,
-    selected: bool,
-    hovered: bool,
-    current: bool,
-    alternate: bool,
+    geometry: DolphinItemGeometry,
+    interaction: DolphinItemInteraction,
     scale: f32,
 ) -> DolphinItemPaint {
     dolphin_item_paint_with_palette(
         view_mode,
-        item_rect,
-        visual_rect,
-        content_rect,
-        selected,
-        hovered,
-        current,
-        alternate,
+        geometry,
+        interaction,
         scale,
         DolphinItemPalette::light(),
     )
@@ -58,25 +63,15 @@ pub(crate) fn dolphin_item_paint(
 
 pub(crate) fn dolphin_item_paint_with_palette(
     view_mode: ShellViewMode,
-    item_rect: ViewRect,
-    visual_rect: ViewRect,
-    content_rect: ViewRect,
-    selected: bool,
-    hovered: bool,
-    current: bool,
-    alternate: bool,
+    geometry: DolphinItemGeometry,
+    interaction: DolphinItemInteraction,
     scale: f32,
     palette: DolphinItemPalette,
 ) -> DolphinItemPaint {
     dolphin_item_paint_with_palette_and_hover_progress(
         view_mode,
-        item_rect,
-        visual_rect,
-        content_rect,
-        selected,
-        hovered,
-        current,
-        alternate,
+        geometry,
+        interaction,
         scale,
         palette,
         1.0,
@@ -85,17 +80,23 @@ pub(crate) fn dolphin_item_paint_with_palette(
 
 pub(crate) fn dolphin_item_paint_with_palette_and_hover_progress(
     view_mode: ShellViewMode,
-    item_rect: ViewRect,
-    visual_rect: ViewRect,
-    content_rect: ViewRect,
-    selected: bool,
-    hovered: bool,
-    current: bool,
-    alternate: bool,
+    geometry: DolphinItemGeometry,
+    interaction: DolphinItemInteraction,
     scale: f32,
     palette: DolphinItemPalette,
     hover_progress: f32,
 ) -> DolphinItemPaint {
+    let DolphinItemGeometry {
+        item: item_rect,
+        visual: visual_rect,
+        content: content_rect,
+    } = geometry;
+    let DolphinItemInteraction {
+        selected,
+        hovered,
+        current,
+        alternate,
+    } = interaction;
     let radius = BREEZE_ITEM_ROUNDNESS * scale.max(1.0);
     let highlight_rect = match view_mode {
         ShellViewMode::Details => item_rect,
@@ -226,17 +227,38 @@ mod tests {
         }
     }
 
+    fn geometry(item: ViewRect, visual: ViewRect, content: ViewRect) -> DolphinItemGeometry {
+        DolphinItemGeometry {
+            item,
+            visual,
+            content,
+        }
+    }
+
+    fn interaction(
+        selected: bool,
+        hovered: bool,
+        current: bool,
+        alternate: bool,
+    ) -> DolphinItemInteraction {
+        DolphinItemInteraction {
+            selected,
+            hovered,
+            current,
+            alternate,
+        }
+    }
+
     #[test]
     fn details_item_paint_uses_alternate_row_base_without_idle_highlight() {
         let paint = dolphin_item_paint(
             ShellViewMode::Details,
-            rect(0.0, 0.0, 320.0, 28.0),
-            rect(8.0, 2.0, 180.0, 24.0),
-            rect(8.0, 2.0, 180.0, 24.0),
-            false,
-            false,
-            false,
-            true,
+            geometry(
+                rect(0.0, 0.0, 320.0, 28.0),
+                rect(8.0, 2.0, 180.0, 24.0),
+                rect(8.0, 2.0, 180.0, 24.0),
+            ),
+            interaction(false, false, false, true),
             1.0,
         );
 
@@ -256,13 +278,12 @@ mod tests {
     fn details_item_paint_layers_selection_highlight_over_alternate_row() {
         let paint = dolphin_item_paint(
             ShellViewMode::Details,
-            rect(0.0, 0.0, 320.0, 28.0),
-            rect(8.0, 2.0, 180.0, 24.0),
-            rect(8.0, 2.0, 180.0, 24.0),
-            true,
-            false,
-            false,
-            true,
+            geometry(
+                rect(0.0, 0.0, 320.0, 28.0),
+                rect(8.0, 2.0, 180.0, 24.0),
+                rect(8.0, 2.0, 180.0, 24.0),
+            ),
+            interaction(true, false, false, true),
             1.0,
         );
 
@@ -288,26 +309,24 @@ mod tests {
     fn icons_item_paint_only_fills_interactive_items() {
         let idle = dolphin_item_paint(
             ShellViewMode::Icons,
-            rect(0.0, 0.0, 120.0, 120.0),
-            rect(4.0, 4.0, 112.0, 112.0),
-            rect(4.0, 4.0, 112.0, 112.0),
-            false,
-            false,
-            false,
-            false,
+            geometry(
+                rect(0.0, 0.0, 120.0, 120.0),
+                rect(4.0, 4.0, 112.0, 112.0),
+                rect(4.0, 4.0, 112.0, 112.0),
+            ),
+            interaction(false, false, false, false),
             1.0,
         );
         assert_eq!(idle.background, None);
 
         let selected = dolphin_item_paint(
             ShellViewMode::Icons,
-            rect(0.0, 0.0, 120.0, 120.0),
-            rect(4.0, 4.0, 112.0, 112.0),
-            rect(4.0, 4.0, 112.0, 112.0),
-            true,
-            false,
-            false,
-            false,
+            geometry(
+                rect(0.0, 0.0, 120.0, 120.0),
+                rect(4.0, 4.0, 112.0, 112.0),
+                rect(4.0, 4.0, 112.0, 112.0),
+            ),
+            interaction(true, false, false, false),
             1.0,
         );
         assert_eq!(
@@ -324,13 +343,12 @@ mod tests {
     fn compact_item_paint_uses_item_content_rect() {
         let paint = dolphin_item_paint(
             ShellViewMode::Compact,
-            rect(10.0, 0.0, 180.0, 32.0),
-            rect(12.0, 2.0, 176.0, 28.0),
-            rect(12.0, 2.0, 176.0, 28.0),
-            true,
-            false,
-            false,
-            false,
+            geometry(
+                rect(10.0, 0.0, 180.0, 32.0),
+                rect(12.0, 2.0, 176.0, 28.0),
+                rect(12.0, 2.0, 176.0, 28.0),
+            ),
+            interaction(true, false, false, false),
             1.0,
         );
 
@@ -348,13 +366,12 @@ mod tests {
     fn current_compact_item_paint_uses_inset_breeze_focus_stroke_on_content_rect() {
         let paint = dolphin_item_paint(
             ShellViewMode::Compact,
-            rect(10.0, 0.0, 180.0, 32.0),
-            rect(2.0, 2.0, 176.0, 28.0),
-            rect(2.0, 2.0, 176.0, 28.0),
-            false,
-            false,
-            true,
-            false,
+            geometry(
+                rect(10.0, 0.0, 180.0, 32.0),
+                rect(2.0, 2.0, 176.0, 28.0),
+                rect(2.0, 2.0, 176.0, 28.0),
+            ),
+            interaction(false, false, true, false),
             1.0,
         );
 

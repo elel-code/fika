@@ -380,27 +380,25 @@
         let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
         let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
         let mut text = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             size,
             scene.ui_scale(),
             Vec::new(),
         );
-        let mut icons = IconFrameBuilder::new(
+        let mut icons = IconFrameBuilder::new_for_test(
             &mut icon_resolver,
             &mut thumbnails,
             &mut icon_rasters,
             &mut raster_cache,
             &mut role_raster_cache,
             size,
-                1.0,
-            0,
-            0,
-            0,
         );
         scene.push_drag_preview_overlay(&mut vertices, &mut text, &mut icons, scene.theme(), size);
         assert!(!vertices.is_empty());
@@ -461,27 +459,25 @@
             test_icon_raster(8, 3),
         );
         let mut text = TextFrameBuilder::new(
-            &mut font_system,
-            &mut swash_cache,
-            &mut text_buffer,
-            &mut label_cache,
-            &mut metrics_cache,
-            &mut atlas_cache,
+            TextFrameResources::new(
+                &mut font_system,
+                &mut swash_cache,
+                &mut text_buffer,
+                &mut label_cache,
+                &mut metrics_cache,
+                &mut atlas_cache,
+            ),
             size,
             scene.ui_scale(),
             Vec::new(),
         );
-        let mut icons = IconFrameBuilder::new(
+        let mut icons = IconFrameBuilder::new_for_test(
             &mut icon_resolver,
             &mut thumbnails,
             &mut icon_rasters,
             &mut raster_cache,
             &mut role_raster_cache,
             size,
-                1.0,
-            0,
-            0,
-            0,
         );
         scene.push_drag_preview_overlay(&mut vertices, &mut text, &mut icons, scene.theme(), size);
         let frame = icons.finish();

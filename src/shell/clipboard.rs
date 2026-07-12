@@ -389,8 +389,8 @@ struct ClipboardWorkerState {
     data_device_manager: DataDeviceManagerState,
     registry_state: RegistryState,
     seat_state: SeatState,
-    seats: HashMap<ObjectId, ClipboardSeatState>,
-    latest_seat: Option<ObjectId>,
+    seats: HashMap<u32, ClipboardSeatState>,
+    latest_seat: Option<u32>,
     queue_handle: QueueHandle<Self>,
     sources: Vec<CopyPasteSource>,
     content: ClipboardContent,
@@ -403,7 +403,7 @@ impl ClipboardWorkerState {
         let seat_state = SeatState::new(globals, queue_handle);
         let mut seats = HashMap::new();
         for seat in seat_state.seats() {
-            seats.insert(seat.id(), ClipboardSeatState::default());
+            seats.insert(seat.id().protocol_id(), ClipboardSeatState::default());
         }
 
         Some(Self {
@@ -502,7 +502,8 @@ impl SeatHandler for ClipboardWorkerState {
     }
 
     fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, seat: WlSeat) {
-        self.seats.insert(seat.id(), ClipboardSeatState::default());
+        self.seats
+            .insert(seat.id().protocol_id(), ClipboardSeatState::default());
     }
 
     fn new_capability(
@@ -512,7 +513,7 @@ impl SeatHandler for ClipboardWorkerState {
         seat: WlSeat,
         capability: Capability,
     ) {
-        let Some(seat_state) = self.seats.get_mut(&seat.id()) else {
+        let Some(seat_state) = self.seats.get_mut(&seat.id().protocol_id()) else {
             return;
         };
         match capability {
@@ -537,23 +538,23 @@ impl SeatHandler for ClipboardWorkerState {
         seat: WlSeat,
         capability: Capability,
     ) {
-        let Some(seat_state) = self.seats.get_mut(&seat.id()) else {
+        let Some(seat_state) = self.seats.get_mut(&seat.id().protocol_id()) else {
             return;
         };
         match capability {
             Capability::Keyboard => {
                 seat_state.data_device = None;
-                if let Some(keyboard) = seat_state.keyboard.take() {
-                    if keyboard.version() >= 3 {
-                        keyboard.release();
-                    }
+                if let Some(keyboard) = seat_state.keyboard.take()
+                    && keyboard.version() >= 3
+                {
+                    keyboard.release();
                 }
             }
             Capability::Pointer => {
-                if let Some(pointer) = seat_state.pointer.take() {
-                    if pointer.version() >= 3 {
-                        pointer.release();
-                    }
+                if let Some(pointer) = seat_state.pointer.take()
+                    && pointer.version() >= 3
+                {
+                    pointer.release();
                 }
             }
             _ => {}
@@ -561,7 +562,7 @@ impl SeatHandler for ClipboardWorkerState {
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, seat: WlSeat) {
-        self.seats.remove(&seat.id());
+        self.seats.remove(&seat.id().protocol_id());
     }
 }
 
@@ -576,7 +577,7 @@ impl PointerHandler for ClipboardWorkerState {
         let Some(pointer_data) = pointer.data::<PointerData>() else {
             return;
         };
-        let seat_id = pointer_data.seat().id();
+        let seat_id = pointer_data.seat().id().protocol_id();
         let Some(seat_state) = self.seats.get_mut(&seat_id) else {
             return;
         };
@@ -689,18 +690,19 @@ impl Dispatch<WlKeyboard, ObjectId, ClipboardWorkerState> for ClipboardWorkerSta
     ) {
         use smithay_client_toolkit::reexports::client::protocol::wl_keyboard::Event as WlKeyboardEvent;
 
-        let Some(seat_state) = state.seats.get_mut(data) else {
+        let seat_id = data.protocol_id();
+        let Some(seat_state) = state.seats.get_mut(&seat_id) else {
             return;
         };
         match event {
             WlKeyboardEvent::Key { serial, .. } | WlKeyboardEvent::Modifiers { serial, .. } => {
                 seat_state.latest_serial = serial;
-                state.latest_seat = Some(data.clone());
+                state.latest_seat = Some(seat_id);
             }
             WlKeyboardEvent::Enter { serial, .. } => {
                 seat_state.latest_serial = serial;
                 seat_state.has_focus = true;
-                state.latest_seat = Some(data.clone());
+                state.latest_seat = Some(seat_id);
             }
             WlKeyboardEvent::Leave { .. } => {
                 seat_state.latest_serial = 0;
@@ -727,15 +729,15 @@ struct ClipboardSeatState {
 
 impl Drop for ClipboardSeatState {
     fn drop(&mut self) {
-        if let Some(keyboard) = self.keyboard.take() {
-            if keyboard.version() >= 3 {
-                keyboard.release();
-            }
+        if let Some(keyboard) = self.keyboard.take()
+            && keyboard.version() >= 3
+        {
+            keyboard.release();
         }
-        if let Some(pointer) = self.pointer.take() {
-            if pointer.version() >= 3 {
-                pointer.release();
-            }
+        if let Some(pointer) = self.pointer.take()
+            && pointer.version() >= 3
+        {
+            pointer.release();
         }
     }
 }

@@ -293,16 +293,27 @@ fn text_color_to_vertex_color(color: TextColor) -> [f32; 4] {
         a as f32 / 255.0,
     ]
 }
+#[derive(Clone, Copy, Debug)]
+struct TextAlphaRect {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
 fn fill_text_alpha_pixels(
     pixels: &mut [u8],
     width: u32,
     height: u32,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
+    rect: TextAlphaRect,
     color: TextColor,
 ) {
+    let TextAlphaRect {
+        x,
+        y,
+        width: w,
+        height: h,
+    } = rect;
     if color.a() == 0 || w == 0 || h == 0 {
         return;
     }

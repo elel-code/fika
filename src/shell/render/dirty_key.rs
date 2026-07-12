@@ -521,8 +521,24 @@ fn push_folder_preview_roles_dirty_hash(
     values.push(hasher.finish());
 }
 
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct FolderPreviewRoleVisualState {
+    pane_index: usize,
+    path: std::path::PathBuf,
+    directory_modified_secs: u64,
+    requested_size: u16,
+    status: FolderPreviewRoleVisualStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct FolderPreviewRoleVisualStatus {
+    kind: u8,
+    size_px: u16,
+    stamp: u64,
+}
+
 fn push_folder_preview_role_states_for_projection(
-    states: &mut Vec<(usize, std::path::PathBuf, u64, u16, (u8, u16, u64))>,
+    states: &mut Vec<FolderPreviewRoleVisualState>,
     scene: &ShellScene,
     roles: &ShellFolderPreviewRoleRuntime,
     projection: &ShellPaneProjection<'_>,
@@ -558,15 +574,33 @@ fn push_folder_preview_role_states_for_projection(
         let requested_key = FolderPreviewRoleKey::new(path.clone(), modified_secs, requested_size);
         let state = roles
             .preview_or_closest(&path, modified_secs, requested_size)
-            .map(|preview| (1_u8, preview.size_px, preview.stamp))
+            .map(|preview| FolderPreviewRoleVisualStatus {
+                kind: 1,
+                size_px: preview.size_px,
+                stamp: preview.stamp,
+            })
             .or_else(|| {
                 roles
                     .failed
                     .contains(&requested_key)
-                    .then_some((2_u8, requested_size, 0))
+                    .then_some(FolderPreviewRoleVisualStatus {
+                        kind: 2,
+                        size_px: requested_size,
+                        stamp: 0,
+                    })
             })
-            .unwrap_or((0_u8, requested_size, 0));
-        states.push((pane_id.index(), path, modified_secs, requested_size, state));
+            .unwrap_or(FolderPreviewRoleVisualStatus {
+                kind: 0,
+                size_px: requested_size,
+                stamp: 0,
+            });
+        states.push(FolderPreviewRoleVisualState {
+            pane_index: pane_id.index(),
+            path,
+            directory_modified_secs: modified_secs,
+            requested_size,
+            status: state,
+        });
     }
 }
 

@@ -321,9 +321,8 @@ impl ThumbnailProbeCancelHandle {
         let keys = state
             .active
             .iter()
-            .filter_map(|(key, priority)| {
-                (!state.canceled.contains(key) && predicate(key, priority)).then(|| key.clone())
-            })
+            .filter(|(key, priority)| !state.canceled.contains(*key) && predicate(key, priority))
+            .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
         for key in &keys {
             state.canceled.insert(key.clone());
@@ -393,7 +392,7 @@ pub fn thumbnail_probe_results_for_requests(
         requests,
         THUMBNAIL_PROBE_WORKER_LIMIT,
         Some(cancel_handle),
-        |request| thumbnail_probe_result_for_request(&cache_root, &thumbnailers, request),
+        |request| thumbnail_probe_result_for_request(&cache_root, thumbnailers, request),
     )
 }
 

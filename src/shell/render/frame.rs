@@ -8,8 +8,8 @@ use crate::shell::prewarm::icon_raster_miss_budget_for_frame;
 use crate::shell::render::gpu::VertexBufferUploadStats;
 use crate::shell::render::quad::{QuadRenderer, QuadVertex};
 use crate::{
-    IconFrameBuilder, IconFrameStats, IconRenderer, ShellScene, TextFrameBuilder, TextFrameStats,
-    TextRenderer,
+    FolderPreviewCacheStats, IconFrameBuilder, IconFrameConfig, IconFrameResources, IconFrameStats,
+    IconRenderer, ShellScene, TextFrameBuilder, TextFrameResources, TextFrameStats, TextRenderer,
 };
 
 pub(crate) struct SceneFrame {
@@ -124,17 +124,54 @@ impl DialogFrame {
     }
 }
 
+pub(crate) struct SceneFrameRenderers<'a> {
+    pub(crate) text: &'a mut TextRenderer,
+    pub(crate) overlay_text: Option<&'a mut TextRenderer>,
+    pub(crate) icons: &'a mut IconRenderer,
+}
+
+pub(crate) struct DialogFrameRenderers<'a> {
+    pub(crate) text: &'a mut TextRenderer,
+    pub(crate) icons: &'a mut IconRenderer,
+    pub(crate) quads: &'a mut QuadRenderer,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct FrameGpuContext<'a> {
+    pub(crate) device: &'a wgpu::Device,
+    pub(crate) queue: &'a wgpu::Queue,
+}
+
+pub(crate) struct SceneFrameRequest<'a, 'projection> {
+    pub(crate) scene: &'a ShellScene,
+    pub(crate) projections: &'a SceneFrameProjections<'projection>,
+    pub(crate) size: PhysicalSize<u32>,
+    pub(crate) reason: &'a str,
+}
+
+pub(crate) struct DialogFrameRequest<'a> {
+    pub(crate) layout_size: PhysicalSize<u32>,
+    pub(crate) scale: f32,
+    pub(crate) reason: &'a str,
+}
+
 pub(crate) fn prepare_scene_frame(
-    text_renderer: &mut TextRenderer,
-    overlay_text_renderer: Option<&mut TextRenderer>,
-    icon_renderer: &mut IconRenderer,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    scene: &ShellScene,
-    frame_projections: &SceneFrameProjections<'_>,
-    size: PhysicalSize<u32>,
-    reason: &str,
+    renderers: SceneFrameRenderers<'_>,
+    gpu: FrameGpuContext<'_>,
+    request: SceneFrameRequest<'_, '_>,
 ) -> SceneFrame {
+    let SceneFrameRenderers {
+        text: text_renderer,
+        overlay_text: overlay_text_renderer,
+        icons: icon_renderer,
+    } = renderers;
+    let FrameGpuContext { device, queue } = gpu;
+    let SceneFrameRequest {
+        scene,
+        projections: frame_projections,
+        size,
+        reason,
+    } = request;
     text_renderer.label_cache.begin_frame();
     text_renderer.metrics_cache.begin_frame();
     icon_renderer.raster_cache.begin_frame();
@@ -147,38 +184,28 @@ pub(crate) fn prepare_scene_frame(
             let text_pixels = text_renderer.take_staging_pixels();
             let overlay_text_pixels = overlay_text_renderer.take_staging_pixels();
             let mut text_builder = TextFrameBuilder::new(
-                &mut text_renderer.font_system,
-                &mut text_renderer.swash_cache,
-                &mut text_renderer.text_buffer,
-                &mut text_renderer.label_cache,
-                &mut text_renderer.metrics_cache,
-                &mut text_renderer.atlas_cache,
+                TextFrameResources::from_renderer(text_renderer),
                 size,
                 scene.ui_scale(),
                 text_pixels,
             );
             let mut overlay_text_builder = TextFrameBuilder::new(
-                &mut overlay_text_renderer.font_system,
-                &mut overlay_text_renderer.swash_cache,
-                &mut overlay_text_renderer.text_buffer,
-                &mut overlay_text_renderer.label_cache,
-                &mut overlay_text_renderer.metrics_cache,
-                &mut overlay_text_renderer.atlas_cache,
+                TextFrameResources::from_renderer(overlay_text_renderer),
                 size,
                 scene.ui_scale(),
                 overlay_text_pixels,
             );
             let mut icon_builder = IconFrameBuilder::new(
-                &mut icon_renderer.resolver,
-                &mut icon_renderer.thumbnails,
-                &mut icon_renderer.icon_rasters,
-                &mut icon_renderer.raster_cache,
-                &mut icon_renderer.role_raster_cache,
-                size,
-                scene.ui_scale(),
-                icon_raster_miss_budget_for_frame(reason),
-                scene.folder_preview_roles.borrow().ready_len(),
-                scene.folder_preview_roles.borrow().ready_bytes(),
+                IconFrameResources::from_renderer(icon_renderer),
+                IconFrameConfig {
+                    surface_size: size,
+                    ui_scale: scene.ui_scale(),
+                    raster_miss_budget: icon_raster_miss_budget_for_frame(reason),
+                    folder_preview_cache: FolderPreviewCacheStats {
+                        ready_entries: scene.folder_preview_roles.borrow().ready_len(),
+                        ready_bytes: scene.folder_preview_roles.borrow().ready_bytes(),
+                    },
+                },
             );
             let scene_frame = scene.build_frame(
                 size,
@@ -219,27 +246,22 @@ pub(crate) fn prepare_scene_frame(
         let (mut scene_frame, mut text_frame, mut icon_frame) = {
             let text_pixels = text_renderer.take_staging_pixels();
             let mut text_builder = TextFrameBuilder::new(
-                &mut text_renderer.font_system,
-                &mut text_renderer.swash_cache,
-                &mut text_renderer.text_buffer,
-                &mut text_renderer.label_cache,
-                &mut text_renderer.metrics_cache,
-                &mut text_renderer.atlas_cache,
+                TextFrameResources::from_renderer(text_renderer),
                 size,
                 scene.ui_scale(),
                 text_pixels,
             );
             let mut icon_builder = IconFrameBuilder::new(
-                &mut icon_renderer.resolver,
-                &mut icon_renderer.thumbnails,
-                &mut icon_renderer.icon_rasters,
-                &mut icon_renderer.raster_cache,
-                &mut icon_renderer.role_raster_cache,
-                size,
-                scene.ui_scale(),
-                icon_raster_miss_budget_for_frame(reason),
-                scene.folder_preview_roles.borrow().ready_len(),
-                scene.folder_preview_roles.borrow().ready_bytes(),
+                IconFrameResources::from_renderer(icon_renderer),
+                IconFrameConfig {
+                    surface_size: size,
+                    ui_scale: scene.ui_scale(),
+                    raster_miss_budget: icon_raster_miss_budget_for_frame(reason),
+                    folder_preview_cache: FolderPreviewCacheStats {
+                        ready_entries: scene.folder_preview_roles.borrow().ready_len(),
+                        ready_bytes: scene.folder_preview_roles.borrow().ready_bytes(),
+                    },
+                },
             );
             let scene_frame = scene.build_frame(
                 size,
@@ -270,14 +292,9 @@ pub(crate) fn prepare_scene_frame(
 }
 
 pub(crate) fn prepare_dialog_frame(
-    text_renderer: &mut TextRenderer,
-    icon_renderer: &mut IconRenderer,
-    quad_renderer: &mut QuadRenderer,
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    layout_size: PhysicalSize<u32>,
-    scale: f32,
-    reason: &str,
+    renderers: DialogFrameRenderers<'_>,
+    gpu: FrameGpuContext<'_>,
+    request: DialogFrameRequest<'_>,
     paint: impl FnOnce(
         &mut Vec<QuadVertex>,
         &mut TextFrameBuilder<'_>,
@@ -285,6 +302,17 @@ pub(crate) fn prepare_dialog_frame(
         PhysicalSize<u32>,
     ),
 ) -> DialogFrame {
+    let DialogFrameRenderers {
+        text: text_renderer,
+        icons: icon_renderer,
+        quads: quad_renderer,
+    } = renderers;
+    let FrameGpuContext { device, queue } = gpu;
+    let DialogFrameRequest {
+        layout_size,
+        scale,
+        reason,
+    } = request;
     text_renderer.label_cache.begin_frame();
     text_renderer.metrics_cache.begin_frame();
     icon_renderer.raster_cache.begin_frame();
@@ -298,27 +326,19 @@ pub(crate) fn prepare_dialog_frame(
     let (vertices, mut text_frame, mut icon_frame) = {
         let text_pixels = text_renderer.take_staging_pixels();
         let mut text_builder = TextFrameBuilder::new(
-            &mut text_renderer.font_system,
-            &mut text_renderer.swash_cache,
-            &mut text_renderer.text_buffer,
-            &mut text_renderer.label_cache,
-            &mut text_renderer.metrics_cache,
-            &mut text_renderer.atlas_cache,
+            TextFrameResources::from_renderer(text_renderer),
             layout_size,
             scale,
             text_pixels,
         );
         let mut icon_builder = IconFrameBuilder::new(
-            &mut icon_renderer.resolver,
-            &mut icon_renderer.thumbnails,
-            &mut icon_renderer.icon_rasters,
-            &mut icon_renderer.raster_cache,
-            &mut icon_renderer.role_raster_cache,
-            layout_size,
-            scale,
-            icon_raster_miss_budget_for_frame(reason),
-            0,
-            0,
+            IconFrameResources::from_renderer(icon_renderer),
+            IconFrameConfig {
+                surface_size: layout_size,
+                ui_scale: scale,
+                raster_miss_budget: icon_raster_miss_budget_for_frame(reason),
+                folder_preview_cache: FolderPreviewCacheStats::default(),
+            },
         );
         let mut vertices = Vec::with_capacity(256);
         paint(

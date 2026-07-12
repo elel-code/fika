@@ -788,12 +788,11 @@ fn draw_file_card(pixels: &mut [u8], size: u32, rect: PixelRect, alpha: u8) {
     draw_triangle(
         pixels,
         size,
-        fold_rect.x,
-        fold_rect.y,
-        fold_rect.right(),
-        fold_rect.y,
-        fold_rect.right(),
-        fold_rect.bottom(),
+        [
+            [fold_rect.x, fold_rect.y],
+            [fold_rect.right(), fold_rect.y],
+            [fold_rect.right(), fold_rect.bottom()],
+        ],
         [191, 212, 233, alpha],
     );
     let line_color = [78, 122, 165, alpha.saturating_mul(7) / 10];
@@ -1117,17 +1116,8 @@ fn draw_circle_outline(
     }
 }
 
-fn draw_triangle(
-    pixels: &mut [u8],
-    size: u32,
-    x0: i32,
-    y0: i32,
-    x1: i32,
-    y1: i32,
-    x2: i32,
-    y2: i32,
-    color: [u8; 4],
-) {
+fn draw_triangle(pixels: &mut [u8], size: u32, points: [[i32; 2]; 3], color: [u8; 4]) {
+    let [[x0, y0], [x1, y1], [x2, y2]] = points;
     let min_x = x0.min(x1).min(x2).max(0);
     let max_x = x0.max(x1).max(x2).min(size as i32 - 1);
     let min_y = y0.min(y1).min(y2).max(0);

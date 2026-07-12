@@ -365,7 +365,7 @@
         assert!(places.iter().any(|place| {
             place.group == "Network"
                 && place.label == "Share Name on server"
-                && place.path == PathBuf::from("smb://server/Share%20Name/")
+                && place.path == Path::new("smb://server/Share%20Name/")
                 && place.network
                 && place.editable
         }));

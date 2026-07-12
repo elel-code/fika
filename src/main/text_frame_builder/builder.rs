@@ -1,4 +1,13 @@
-impl<'a> TextFrameBuilder<'a> {
+struct TextFrameResources<'a> {
+    font_system: &'a mut FontSystem,
+    swash_cache: &'a mut SwashCache,
+    text_buffer: &'a mut Buffer,
+    label_cache: &'a mut LabelRasterCache,
+    metrics_cache: &'a mut LabelMetricsCache,
+    atlas_cache: &'a mut TextAtlasFrameCache,
+}
+
+impl<'a> TextFrameResources<'a> {
     fn new(
         font_system: &'a mut FontSystem,
         swash_cache: &'a mut SwashCache,
@@ -6,10 +15,58 @@ impl<'a> TextFrameBuilder<'a> {
         label_cache: &'a mut LabelRasterCache,
         metrics_cache: &'a mut LabelMetricsCache,
         atlas_cache: &'a mut TextAtlasFrameCache,
+    ) -> Self {
+        Self {
+            font_system,
+            swash_cache,
+            text_buffer,
+            label_cache,
+            metrics_cache,
+            atlas_cache,
+        }
+    }
+
+    fn from_renderer(renderer: &'a mut TextRenderer) -> Self {
+        Self::new(
+            &mut renderer.font_system,
+            &mut renderer.swash_cache,
+            &mut renderer.text_buffer,
+            &mut renderer.label_cache,
+            &mut renderer.metrics_cache,
+            &mut renderer.atlas_cache,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TextLabelLayout {
+    draw: ViewRect,
+    layout: ViewRect,
+    clip: ViewRect,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TextLabelStyle {
+    color: TextColor,
+    alignment: LabelAlignment,
+    wrap: LabelWrap,
+}
+
+impl<'a> TextFrameBuilder<'a> {
+    fn new(
+        resources: TextFrameResources<'a>,
         surface_size: PhysicalSize<u32>,
         text_scale_factor: f32,
         atlas_pixels: Vec<u8>,
     ) -> Self {
+        let TextFrameResources {
+            font_system,
+            swash_cache,
+            text_buffer,
+            label_cache,
+            metrics_cache,
+            atlas_cache,
+        } = resources;
         let atlas_width = atlas_cache.width;
         let max_line_height = (TEXT_LINE_HEIGHT * text_scale_factor).round().max(1.0);
         let max_font_size = (TEXT_FONT_SIZE * max_line_height / TEXT_LINE_HEIGHT).max(1.0);
@@ -96,12 +153,16 @@ impl<'a> TextFrameBuilder<'a> {
         );
         self.push_label_aligned_wrapped_with_layout(
             &display,
-            draw_rect,
-            layout_rect,
-            clip,
-            color,
-            alignment,
-            LabelWrap::None,
+            TextLabelLayout {
+                draw: draw_rect,
+                layout: layout_rect,
+                clip,
+            },
+            TextLabelStyle {
+                color,
+                alignment,
+                wrap: LabelWrap::None,
+            },
         );
     }
 
@@ -125,12 +186,16 @@ impl<'a> TextFrameBuilder<'a> {
         .display;
         self.push_label_aligned_wrapped_with_layout(
             &display,
-            draw_rect,
-            layout_rect,
-            clip,
-            color,
-            LabelAlignment::Center,
-            LabelWrap::WordOrGlyph,
+            TextLabelLayout {
+                draw: draw_rect,
+                layout: layout_rect,
+                clip,
+            },
+            TextLabelStyle {
+                color,
+                alignment: LabelAlignment::Center,
+                wrap: LabelWrap::WordOrGlyph,
+            },
         );
     }
 
@@ -144,20 +209,36 @@ impl<'a> TextFrameBuilder<'a> {
         wrap: LabelWrap,
     ) {
         self.push_label_aligned_wrapped_with_layout(
-            label, rect, rect, clip, color, alignment, wrap,
+            label,
+            TextLabelLayout {
+                draw: rect,
+                layout: rect,
+                clip,
+            },
+            TextLabelStyle {
+                color,
+                alignment,
+                wrap,
+            },
         );
     }
 
     fn push_label_aligned_wrapped_with_layout(
         &mut self,
         label: &str,
-        draw_rect: ViewRect,
-        layout_rect: ViewRect,
-        clip: ViewRect,
-        color: TextColor,
-        alignment: LabelAlignment,
-        wrap: LabelWrap,
+        layout: TextLabelLayout,
+        style: TextLabelStyle,
     ) {
+        let TextLabelLayout {
+            draw: draw_rect,
+            layout: layout_rect,
+            clip,
+        } = layout;
+        let TextLabelStyle {
+            color,
+            alignment,
+            wrap,
+        } = style;
         let Some((key, adjusted_layout_rect, label_width, label_height)) =
             self.label_raster_key(label, layout_rect, alignment, wrap)
         else {

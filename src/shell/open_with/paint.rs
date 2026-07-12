@@ -17,43 +17,48 @@ use crate::shell::open_with::{OpenWithTreeRow, ShellOpenWithChooser};
 use crate::shell::popup::style::PopupTheme;
 use crate::shell::ui_chrome::push_scrollbar;
 use crate::{
-    IconDrawLayer, IconFrameBuilder, LabelAlignment, LabelWrap, QuadVertex, TextFrameBuilder,
-    path_name_or_display, push_clipped_rect_outline, push_clipped_rounded_highlight,
-    push_clipped_rounded_rect, push_rect,
+    IconDrawLayer, IconFrameBuilder, LabelAlignment, LabelWrap, QuadVertex, RoundedHighlightStyle,
+    TextFrameBuilder, path_name_or_display, push_clipped_rect_outline,
+    push_clipped_rounded_highlight, push_clipped_rounded_rect, push_rect,
 };
+
+#[derive(Clone, Copy)]
+pub(crate) struct OpenWithDialogPaintConfig {
+    pub(crate) theme: PopupTheme,
+    pub(crate) scale: f32,
+    pub(crate) caret_visible: bool,
+    pub(crate) size: PhysicalSize<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct OpenWithRoundedBoxStyle {
+    fill: [f32; 4],
+    border: [f32; 4],
+}
 
 pub(crate) fn push_open_with_chooser_dialog(
     chooser: &ShellOpenWithChooser,
-    theme: PopupTheme,
-    scale: f32,
-    caret_visible: bool,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     icons: &mut IconFrameBuilder<'_>,
-    size: PhysicalSize<u32>,
+    config: OpenWithDialogPaintConfig,
 ) {
-    push_open_with_chooser_surface(
-        chooser,
-        theme,
-        scale,
-        caret_visible,
-        vertices,
-        text,
-        icons,
-        size,
-    );
+    push_open_with_chooser_surface(chooser, vertices, text, icons, config);
 }
 
 fn push_open_with_chooser_surface(
     chooser: &ShellOpenWithChooser,
-    theme: PopupTheme,
-    scale: f32,
-    caret_visible: bool,
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     icons: &mut IconFrameBuilder<'_>,
-    size: PhysicalSize<u32>,
+    config: OpenWithDialogPaintConfig,
 ) {
+    let OpenWithDialogPaintConfig {
+        theme,
+        scale,
+        caret_visible,
+        size,
+    } = config;
     let screen = ViewRect {
         x: 0.0,
         y: 0.0,
@@ -70,8 +75,10 @@ fn push_open_with_chooser_surface(
         rect,
         screen,
         dialog_radius,
-        theme.surface,
-        theme.border,
+        OpenWithRoundedBoxStyle {
+            fill: theme.surface,
+            border: theme.border,
+        },
         scale,
         size,
     );
@@ -146,8 +153,10 @@ fn push_open_with_chooser_surface(
         query,
         rect,
         scaled_dialog_metric(7.0, scale),
-        theme.input,
-        theme.divider,
+        OpenWithRoundedBoxStyle {
+            fill: theme.input,
+            border: theme.divider,
+        },
         scale,
         size,
     );
@@ -239,8 +248,10 @@ fn push_open_with_chooser_surface(
         list,
         rect,
         scaled_dialog_metric(8.0, scale),
-        theme.input,
-        theme.divider,
+        OpenWithRoundedBoxStyle {
+            fill: theme.input,
+            border: theme.divider,
+        },
         scale,
         size,
     );
@@ -282,9 +293,11 @@ fn push_open_with_chooser_surface(
                     row_rect,
                     list,
                     row_radius,
-                    theme.selection_fill,
-                    theme.field_focus,
-                    scaled_dialog_metric(1.25, scale),
+                    RoundedHighlightStyle {
+                        fill: theme.selection_fill,
+                        border: theme.field_focus,
+                        border_width: scaled_dialog_metric(1.25, scale),
+                    },
                     size,
                 );
             }
@@ -434,15 +447,17 @@ fn push_open_with_chooser_surface(
         checkbox,
         rect,
         scaled_dialog_metric(4.0, scale),
-        if chooser.set_as_default {
-            theme.button_primary
-        } else {
-            theme.input
-        },
-        if default_enabled {
-            theme.border
-        } else {
-            theme.divider
+        OpenWithRoundedBoxStyle {
+            fill: if chooser.set_as_default {
+                theme.button_primary
+            } else {
+                theme.input
+            },
+            border: if default_enabled {
+                theme.border
+            } else {
+                theme.divider
+            },
         },
         scale,
         size,
@@ -518,12 +533,14 @@ fn push_open_with_chooser_surface(
             button,
             rect,
             scaled_dialog_metric(5.0, scale),
-            if active && enabled {
-                theme.button_primary
-            } else {
-                theme.button_secondary
+            OpenWithRoundedBoxStyle {
+                fill: if active && enabled {
+                    theme.button_primary
+                } else {
+                    theme.button_secondary
+                },
+                border: theme.border,
             },
-            theme.border,
             scale,
             size,
         );
@@ -553,11 +570,11 @@ fn push_open_with_rounded_box(
     rect: ViewRect,
     clip: ViewRect,
     radius: f32,
-    fill: [f32; 4],
-    border: [f32; 4],
+    style: OpenWithRoundedBoxStyle,
     scale: f32,
     size: PhysicalSize<u32>,
 ) {
+    let OpenWithRoundedBoxStyle { fill, border } = style;
     let border_width = scaled_dialog_metric(1.0, scale);
     push_clipped_rounded_rect(vertices, rect, clip, radius, border, size);
     if let Some(inner) = open_with_inset_rect(rect, border_width) {

@@ -344,11 +344,29 @@ struct IconRaster {
     width: u32,
     height: u32,
 }
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum IconRasterStyle {
+    Original,
+    RoundedFile,
+    RoundedFolder,
+}
+impl IconRasterStyle {
+    fn for_file_icon_kind(kind: &FileIconKind) -> Self {
+        match kind {
+            FileIconKind::Directory => Self::RoundedFolder,
+            FileIconKind::Mime { .. }
+            | FileIconKind::PreliminaryFile { .. }
+            | FileIconKind::File { .. } => Self::RoundedFile,
+            FileIconKind::Named { .. } => Self::Original,
+        }
+    }
+}
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct IconRasterCacheKey {
     path: PathBuf,
     size_px: u16,
     stamp: Option<u64>,
+    style: IconRasterStyle,
 }
 impl IconRasterCacheKey {
     fn icon(path: PathBuf, size_px: u16) -> Self {
@@ -356,6 +374,16 @@ impl IconRasterCacheKey {
             path,
             size_px,
             stamp: None,
+            style: IconRasterStyle::Original,
+        }
+    }
+
+    fn file_icon(path: PathBuf, size_px: u16, kind: &FileIconKind) -> Self {
+        Self {
+            path,
+            size_px,
+            stamp: None,
+            style: IconRasterStyle::for_file_icon_kind(kind),
         }
     }
 
@@ -364,6 +392,7 @@ impl IconRasterCacheKey {
             path,
             size_px,
             stamp: Some(modified_secs),
+            style: IconRasterStyle::Original,
         }
     }
 
@@ -372,6 +401,7 @@ impl IconRasterCacheKey {
             path,
             size_px,
             stamp: Some(stamp),
+            style: IconRasterStyle::Original,
         }
     }
 }

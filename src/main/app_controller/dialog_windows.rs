@@ -51,15 +51,15 @@ impl FikaWgpuApp {
     }
 
     fn reconcile_dialog_window_lifecycle(&mut self) {
-        if self.dialog_windows.is_open(ShellDialogWindowKind::Create) {
-            if !self.scene.is_create_dialog_open() {
-                self.close_create_dialog_window();
-            }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Create)
+            && !self.scene.is_create_dialog_open()
+        {
+            self.close_create_dialog_window();
         }
-        if self.dialog_windows.is_open(ShellDialogWindowKind::Rename) {
-            if !self.scene.is_rename_dialog_open() {
-                self.close_rename_dialog_window();
-            }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Rename)
+            && !self.scene.is_rename_dialog_open()
+        {
+            self.close_rename_dialog_window();
         }
         self.reconcile_open_with_dialog_lifecycle();
     }
@@ -449,9 +449,7 @@ impl FikaWgpuApp {
             task_id,
             source,
             mode,
-            &target_dir,
             paths.len(),
-            clear_clipboard,
             base_detail,
         );
         let tx = self.async_task_tx.clone();

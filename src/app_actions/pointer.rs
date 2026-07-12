@@ -247,10 +247,11 @@ impl FikaWgpuApp {
         size: winit::dpi::PhysicalSize<u32>,
         route: MainLeftPointerButtonRoute,
     ) -> ShellActionEffect {
-        let location_blur_changed = route
-            .should_blur_location(state)
-            .then(|| self.scene.close_location_draft_if_outside(point, size))
-            .unwrap_or(false);
+        let location_blur_changed = if route.should_blur_location(state) {
+            self.scene.close_location_draft_if_outside(point, size)
+        } else {
+            false
+        };
 
         match route.intent {
             MainLeftPointerButtonIntent::EndScrollbarDrag => {

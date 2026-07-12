@@ -764,7 +764,7 @@ mod tests {
     fn listing_requests_from_events_keeps_only_loading_events() {
         let first = listing_request(1, 1);
         let second = listing_request(2, 1);
-        let events = vec![
+        let events = [
             listing_started(&first),
             listing_completed(&first),
             listing_started(&second),

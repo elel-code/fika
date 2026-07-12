@@ -26,7 +26,7 @@ impl FikaWgpuApp {
         renderer.prewarm_scene_caches(&mut self.scene, reason);
     }
 
-    fn render_create_dialog_now(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
+    fn render_create_dialog_now(&mut self, reason: &'static str) {
         let Some(dialog_state) = self.scene.create_dialog.as_ref() else {
             self.close_create_dialog_window();
             return;
@@ -40,16 +40,17 @@ impl FikaWgpuApp {
         let (renderer, window) = dialog_window.renderer_and_window_mut();
         renderer.render_create_dialog(
             window,
-            event_loop,
             dialog_state,
-            popup_theme,
-            scale,
-            layout_size,
+            DialogRenderViewport {
+                popup_theme,
+                scale,
+                layout_size,
+            },
             reason,
         );
     }
 
-    fn render_rename_dialog_now(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
+    fn render_rename_dialog_now(&mut self, reason: &'static str) {
         let Some(dialog_state) = self.scene.rename_dialog.as_ref() else {
             self.close_rename_dialog_window();
             return;
@@ -63,18 +64,18 @@ impl FikaWgpuApp {
         let (renderer, window) = dialog_window.renderer_and_window_mut();
         renderer.render_rename_dialog(
             window,
-            event_loop,
             dialog_state,
-            popup_theme,
-            scale,
-            layout_size,
+            DialogRenderViewport {
+                popup_theme,
+                scale,
+                layout_size,
+            },
             reason,
         );
     }
 
     fn render_open_with_dialog_now(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
         reason: &'static str,
     ) {
         let Some(chooser) = self.scene.open_with_chooser.as_ref() else {
@@ -91,11 +92,12 @@ impl FikaWgpuApp {
         let (renderer, window) = dialog.renderer_and_window_mut();
         renderer.render_open_with_dialog(
             window,
-            event_loop,
             chooser,
-            popup_theme,
-            scale,
-            layout_size,
+            DialogRenderViewport {
+                popup_theme,
+                scale,
+                layout_size,
+            },
             caret_visible,
             reason,
         );
@@ -174,7 +176,7 @@ impl ShellPlace {
     ) -> Self {
         let trash = file_ops::is_trash_files_dir(&path);
         let network = is_network_path(&path);
-        let root = path == PathBuf::from("/");
+        let root = path == Path::new("/");
         let icon_name = shell_place_icon_name(marker, trash, network, root, editable);
         Self {
             group,

@@ -503,7 +503,7 @@ fn read_gio_network_entries(
     let mut entries = Vec::new();
     let mut index = 0usize;
     loop {
-        if index % 64 == 0 && is_cancelled() {
+        if index.is_multiple_of(64) && is_cancelled() {
             cancellable.cancel();
             return Err(NetworkScanError::Cancelled);
         }
@@ -858,14 +858,14 @@ fn percent_decode_lossy(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(high), Some(low)) =
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
                 (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-            {
-                output.push((high << 4) | low);
-                index += 3;
-                continue;
-            }
+        {
+            output.push((high << 4) | low);
+            index += 3;
+            continue;
         }
         output.push(bytes[index]);
         index += 1;

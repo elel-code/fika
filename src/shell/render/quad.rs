@@ -367,20 +367,33 @@ pub(crate) fn push_clipped_rounded_rect_outline(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RoundedHighlightStyle {
+    pub(crate) fill: [f32; 4],
+    pub(crate) border: [f32; 4],
+    pub(crate) border_width: f32,
+}
+
 pub(crate) fn push_clipped_rounded_highlight(
     vertices: &mut Vec<QuadVertex>,
     rect: ViewRect,
     clip: ViewRect,
     radius: f32,
-    fill: [f32; 4],
-    border: [f32; 4],
-    border_width: f32,
+    style: RoundedHighlightStyle,
     size: PhysicalSize<u32>,
 ) {
-    if fill[3] > 0.0 {
-        push_clipped_rounded_rect(vertices, rect, clip, radius, fill, size);
+    if style.fill[3] > 0.0 {
+        push_clipped_rounded_rect(vertices, rect, clip, radius, style.fill, size);
     }
-    push_clipped_rounded_rect_outline(vertices, rect, clip, radius, border_width, border, size);
+    push_clipped_rounded_rect_outline(
+        vertices,
+        rect,
+        clip,
+        radius,
+        style.border_width,
+        style.border,
+        size,
+    );
 }
 
 pub(crate) fn push_rect(
@@ -467,9 +480,11 @@ mod tests {
                 height: 80.0,
             },
             5.0,
-            [0.0, 0.0, 0.0, 0.0],
-            border,
-            1.25,
+            RoundedHighlightStyle {
+                fill: [0.0, 0.0, 0.0, 0.0],
+                border,
+                border_width: 1.25,
+            },
             size,
         );
 
@@ -503,9 +518,11 @@ mod tests {
                 height: 80.0,
             },
             5.0,
-            fill,
-            border,
-            1.25,
+            RoundedHighlightStyle {
+                fill,
+                border,
+                border_width: 1.25,
+            },
             size,
         );
 

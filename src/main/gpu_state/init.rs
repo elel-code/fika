@@ -194,9 +194,15 @@ impl WgpuState {
             wgpu::CurrentSurfaceTexture::Success(frame) => Some(frame),
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 if context.reconfigure_on_suboptimal() {
+                    // `configure` and the retry below both require the currently acquired
+                    // surface texture to have been released first.
+                    drop(frame);
+                    context.log_retry(reason);
                     self.force_reconfigure(window.surface_size());
+                    self.acquire_surface_frame_after_reconfigure(window, reason, context)
+                } else {
+                    Some(frame)
                 }
-                Some(frame)
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 context.log_retry(reason);
@@ -466,19 +472,25 @@ impl WgpuState {
             self.overlay_text_renderer = Some(TextRenderer::new(&self.device, self.config.format));
         }
         let scene_frame = prepare_scene_frame(
-            &mut self.text_renderer,
-            if overlay_text_active {
-                self.overlay_text_renderer.as_mut()
-            } else {
-                None
+            SceneFrameRenderers {
+                text: &mut self.text_renderer,
+                overlay_text: if overlay_text_active {
+                    self.overlay_text_renderer.as_mut()
+                } else {
+                    None
+                },
+                icons: &mut self.icon_renderer,
             },
-            &mut self.icon_renderer,
-            &self.device,
-            &self.queue,
-            scene,
-            &frame_projections,
-            self.size,
-            reason,
+            FrameGpuContext {
+                device: &self.device,
+                queue: &self.queue,
+            },
+            SceneFrameRequest {
+                scene,
+                projections: &frame_projections,
+                size: self.size,
+                reason,
+            },
         );
         let prepare_us = prepare_start.elapsed().as_micros();
         fika_log!(

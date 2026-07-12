@@ -23,7 +23,7 @@ pub(crate) fn task_detail_dialog_rect_scaled(
     let dialog_width = scaled_dialog_metric(TASK_DETAIL_DIALOG_WIDTH, scale_factor)
         .min((width - margin * 2.0).max(1.0))
         .max(1.0);
-    let rows = task_count.max(1).min(4) as f32;
+    let rows = task_count.clamp(1, 4) as f32;
     let dialog_height = (scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale_factor)
         + scaled_dialog_metric(18.0, scale_factor)
         + rows * scaled_dialog_metric(TASK_DETAIL_ROW_HEIGHT, scale_factor)

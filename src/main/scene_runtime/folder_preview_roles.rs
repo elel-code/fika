@@ -422,9 +422,11 @@ impl ShellScene {
                         row,
                         panel,
                         self.scale_metric(8.0),
-                        drop_target.fill,
-                        drop_target.border,
-                        self.scale_metric(1.0),
+                        RoundedHighlightStyle {
+                            fill: drop_target.fill,
+                            border: drop_target.border,
+                            border_width: self.scale_metric(1.0),
+                        },
                         size,
                     );
                 }

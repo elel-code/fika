@@ -1,3 +1,15 @@
+struct LocationBarLayout {
+    size: PhysicalSize<u32>,
+    rect: ViewRect,
+    clip: ViewRect,
+}
+
+struct LocationBarContent<'a> {
+    label: &'a str,
+    active: bool,
+    cursor: Option<usize>,
+}
+
 impl ShellScene {
 
     fn push_location_focus_shine(
@@ -51,14 +63,16 @@ impl ShellScene {
         &self,
         vertices: &mut Vec<QuadVertex>,
         text: &mut TextFrameBuilder<'_>,
-        size: PhysicalSize<u32>,
-        rect: ViewRect,
-        clip: ViewRect,
-        label: &str,
-        active: bool,
-        cursor: Option<usize>,
+        layout: LocationBarLayout,
+        content: LocationBarContent<'_>,
         theme: ShellTheme,
     ) {
+        let LocationBarLayout { size, rect, clip } = layout;
+        let LocationBarContent {
+            label,
+            active,
+            cursor,
+        } = content;
         let radius = self.scale_metric(7.0);
         let editing = active && cursor.is_some();
         let border_color = theme.divider();
@@ -84,9 +98,11 @@ impl ShellScene {
                 rect,
                 clip,
                 radius,
-                [0.0, 0.0, 0.0, 0.0],
-                focus_border,
-                (0.75 * self.ui_scale()).clamp(1.0, 1.5),
+                RoundedHighlightStyle {
+                    fill: [0.0, 0.0, 0.0, 0.0],
+                    border: focus_border,
+                    border_width: (0.75 * self.ui_scale()).clamp(1.0, 1.5),
+                },
                 size,
             );
         }

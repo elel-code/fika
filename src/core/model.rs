@@ -822,19 +822,14 @@ fn thumbnail_failed_can_be_reused(old: &ModelEntry, new: &ModelEntry) -> bool {
 }
 
 fn thumbnail_base_can_be_reused(old: &ModelEntry, new: &ModelEntry) -> bool {
-    if old.is_dir
+    !(old.is_dir
         || new.is_dir
         || old.name != new.name
         || !old.effective_metadata_complete()
         || !new.effective_metadata_complete()
         || old.effective_size_bytes() != new.effective_size_bytes()
         || old.effective_modified_secs().is_none()
-        || old.effective_modified_secs() != new.effective_modified_secs()
-    {
-        false
-    } else {
-        true
-    }
+        || old.effective_modified_secs() != new.effective_modified_secs())
 }
 
 fn preserve_refreshed_entry_roles(old: &ModelEntry, new: &mut ModelEntry) {
