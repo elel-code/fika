@@ -26,6 +26,6 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt",
 usvg = "0.45"
 wayland-backend = { version = "0.3", default-features = false, features = ["client_system"] }
 wgpu = "30"
-winit = { git = "https://github.com/slint-ui/winit.git", branch = "drag-n-drop" }
+winit = { git = "https://github.com/rust-windowing/winit.git", branch = "master" }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 zbus_polkit = { version = "5", default-features = false, features = ["tokio"] }
