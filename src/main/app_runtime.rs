@@ -17,7 +17,6 @@ struct FikaWgpuApp {
     // Drop order matters: renderer owns a surface tied to the window handle.
     renderer: Option<WgpuState>,
     dialog_windows: ShellDialogWindows,
-    dialog_close_main_close_guard_until: Option<Instant>,
     clipboard: Option<ShellClipboard>,
     window: Option<Arc<dyn Window>>,
     cursor_icon: CursorIcon,
@@ -264,45 +263,18 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
             }
         }
-        if self.dialog_windows.is_recently_closed_window(window_id) {
-            if matches!(event, WindowEvent::CloseRequested)
-                && window_manager_close_request_exits_application(
-                    ShellWindowCloseRequestTarget::RecentlyClosedDialog,
-                    self.dialog_windows.has_modal_window(),
-                )
-                && self.window.is_some()
-            {
-                self.close_main_window_from_window_manager_request(
-                    event_loop,
-                    "recently-closed-dialog-close-requested",
-                );
-            }
-            return;
-        }
         let Some(main_window_id) = self.window.as_ref().map(|window| window.id()) else {
             return;
         };
         if main_window_id != window_id {
             return;
         }
-        let modal_disposition = self.dialog_windows.modal_event_disposition(&event);
-        if modal_disposition.blocks() {
-            if modal_disposition.requests_attention() {
-                self.dialog_windows.request_modal_attention();
-            }
-            return;
-        }
         match event {
             WindowEvent::CloseRequested => {
-                if window_manager_close_request_exits_application(
-                    ShellWindowCloseRequestTarget::Main,
-                    self.dialog_windows.has_modal_window(),
-                ) {
-                    self.close_main_window_from_window_manager_request(
-                        event_loop,
-                        "main-close-requested",
-                    );
-                }
+                self.close_main_window_from_window_manager_request(
+                    event_loop,
+                    "main-close-requested",
+                );
             }
             WindowEvent::SurfaceResized(size) => {
                 if let Some(renderer) = self.renderer.as_mut() {

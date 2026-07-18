@@ -311,7 +311,7 @@ impl FikaWgpuApp {
                     self.finish_dialog_lifecycle_autosmoke(false, event_loop);
                     return;
                 };
-                if self.dialog_windows.has_modal_window() || frame_count < smoke.close_frame {
+                if self.dialog_windows.has_open_window() || frame_count < smoke.close_frame {
                     self.request_main_redraw();
                     return;
                 }
@@ -367,11 +367,10 @@ impl FikaWgpuApp {
             return;
         };
         fika_log!(
-            "[fika-wgpu] dialog-smoke {} main_open={} modal={} guard={}",
+            "[fika-wgpu] dialog-smoke {} main_open={} dialogs_open={}",
             if success { "complete" } else { "failed" },
             self.window.is_some() as u8,
-            self.dialog_windows.has_modal_window() as u8,
-            self.dialog_close_guard_trace()
+            self.dialog_windows.has_open_window() as u8,
         );
     }
 

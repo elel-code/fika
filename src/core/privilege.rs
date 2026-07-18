@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use super::bus::{BusController, BusKind, with_bus_tokio_context};
 use super::file_ops;
 use super::network::is_network_path;
@@ -71,14 +69,6 @@ pub struct PrivilegedOperationResult {
     pub label: String,
     pub affected_dirs: Vec<PathBuf>,
     pub result: Result<String, String>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ExternalEditSession {
-    pub(crate) original_path: PathBuf,
-    pub(crate) scratch_path: PathBuf,
-    pub(crate) token: String,
-    pub(crate) unit: Option<String>,
 }
 
 impl PrivilegedCommand {
@@ -235,14 +225,6 @@ trait Privileged {
     ) -> zbus::Result<()>;
 }
 
-pub(crate) fn is_permission_error(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    error.contains("permission denied")
-        || error.contains("os error 13")
-        || error.contains("operation not permitted")
-        || error.contains("os error 1")
-}
-
 pub async fn run_via_dbus(command: PrivilegedCommand) -> PrivilegedOperationResult {
     let label = command.label().to_string();
     let affected_dirs = command.affected_dirs();
@@ -348,181 +330,6 @@ async fn call_dbus_command(
                 .await
                 .map_err(|err| err.to_string()),
         }
-    })
-    .await
-}
-
-async fn prepare_external_edit_via_system_bus(path: &Path) -> Result<ExternalEditSession, String> {
-    let connection = privileged_bus_connection(BusKind::System).await?;
-    prepare_external_edit_call(&connection, path).await
-}
-
-async fn prepare_external_edit_via_session_bus(path: &Path) -> Result<ExternalEditSession, String> {
-    let connection = privileged_bus_connection(BusKind::Session).await?;
-    prepare_external_edit_call(&connection, path).await
-}
-
-pub(crate) async fn prepare_external_edit_via_dbus(
-    path: PathBuf,
-) -> Result<ExternalEditSession, String> {
-    ensure_privileged_local_path(&path)?;
-    match prepare_external_edit_via_system_bus(&path).await {
-        Ok(session) => Ok(session),
-        Err(system_error) => match prepare_external_edit_via_session_bus(&path).await {
-            Ok(session) => Ok(session),
-            Err(session_error) => {
-                let mut helper = start_dbus_helper().map_err(|err| {
-                    privileged_helper_start_failed_message(&system_error, &session_error, &err)
-                })?;
-                let wait_result = wait_for_service().await;
-                if wait_result.is_err() {
-                    let _ = helper.try_wait();
-                }
-                wait_result.map_err(|err| {
-                    privileged_helper_start_failed_message(&system_error, &session_error, &err)
-                })?;
-                prepare_external_edit_via_session_bus(&path).await
-            }
-        },
-    }
-}
-
-pub(crate) async fn commit_external_edit_via_dbus(
-    session: &ExternalEditSession,
-) -> Result<PathBuf, String> {
-    let system_result = async {
-        let connection = privileged_bus_connection(BusKind::System).await?;
-        commit_external_edit_call(session, &connection).await
-    }
-    .await;
-    match system_result {
-        Ok(path) => Ok(path),
-        Err(system_error) => {
-            let connection = privileged_bus_connection(BusKind::Session)
-                .await
-                .map_err(|err| format!("{err}; system bus call failed: {system_error}"))?;
-            commit_external_edit_call(session, &connection).await
-        }
-    }
-}
-
-pub(crate) async fn discard_external_edit_via_dbus(
-    session: &ExternalEditSession,
-) -> Result<PathBuf, String> {
-    let system_result = async {
-        let connection = privileged_bus_connection(BusKind::System).await?;
-        discard_external_edit_call(session, &connection).await
-    }
-    .await;
-    match system_result {
-        Ok(path) => Ok(path),
-        Err(system_error) => {
-            let connection = privileged_bus_connection(BusKind::Session)
-                .await
-                .map_err(|err| format!("{err}; system bus call failed: {system_error}"))?;
-            discard_external_edit_call(session, &connection).await
-        }
-    }
-}
-
-pub(crate) async fn associate_external_edit_unit_via_dbus(
-    session: &ExternalEditSession,
-) -> Result<(), String> {
-    let Some(unit) = session.unit.as_deref() else {
-        return Ok(());
-    };
-    let session_bus_address = env::var("DBUS_SESSION_BUS_ADDRESS").unwrap_or_default();
-    let system_result = async {
-        let connection = privileged_bus_connection(BusKind::System).await?;
-        associate_external_edit_unit_call(session, unit, &session_bus_address, &connection).await
-    }
-    .await;
-    match system_result {
-        Ok(()) => Ok(()),
-        Err(system_error) => {
-            let connection = privileged_bus_connection(BusKind::Session)
-                .await
-                .map_err(|err| format!("{err}; system bus call failed: {system_error}"))?;
-            associate_external_edit_unit_call(session, unit, &session_bus_address, &connection)
-                .await
-        }
-    }
-}
-
-async fn commit_external_edit_call(
-    session: &ExternalEditSession,
-    connection: &Connection,
-) -> Result<PathBuf, String> {
-    with_bus_tokio_context(async move {
-        let proxy = PrivilegedProxy::new(connection)
-            .await
-            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
-        proxy
-            .commit_external_edit(
-                &session.token,
-                session.scratch_path.display().to_string().as_str(),
-            )
-            .await
-            .map(PathBuf::from)
-            .map_err(|err| err.to_string())
-    })
-    .await
-}
-
-async fn discard_external_edit_call(
-    session: &ExternalEditSession,
-    connection: &Connection,
-) -> Result<PathBuf, String> {
-    with_bus_tokio_context(async move {
-        let proxy = PrivilegedProxy::new(connection)
-            .await
-            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
-        proxy
-            .discard_external_edit(&session.token)
-            .await
-            .map(|()| session.original_path.clone())
-            .map_err(|err| err.to_string())
-    })
-    .await
-}
-
-async fn associate_external_edit_unit_call(
-    session: &ExternalEditSession,
-    unit: &str,
-    session_bus_address: &str,
-    connection: &Connection,
-) -> Result<(), String> {
-    with_bus_tokio_context(async move {
-        let proxy = PrivilegedProxy::new(connection)
-            .await
-            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
-        proxy
-            .associate_external_edit_unit(&session.token, unit, session_bus_address)
-            .await
-            .map_err(|err| err.to_string())
-    })
-    .await
-}
-
-async fn prepare_external_edit_call(
-    connection: &Connection,
-    path: &Path,
-) -> Result<ExternalEditSession, String> {
-    ensure_privileged_local_path(path)?;
-    with_bus_tokio_context(async move {
-        let proxy = PrivilegedProxy::new(connection)
-            .await
-            .map_err(|err| format!("cannot create privileged helper proxy: {err}"))?;
-        let (scratch_path, token) = proxy
-            .prepare_external_edit(path.display().to_string().as_str())
-            .await
-            .map_err(|err| err.to_string())?;
-        Ok(ExternalEditSession {
-            original_path: path.to_path_buf(),
-            scratch_path: PathBuf::from(scratch_path),
-            token,
-            unit: None,
-        })
     })
     .await
 }
@@ -1488,66 +1295,6 @@ fn privileged_helper_start_failed_message(
     )
 }
 
-pub(crate) fn run_helper(args: &[String]) -> Result<String, String> {
-    let Some(operation) = args.first().map(String::as_str) else {
-        return Err("missing privileged helper operation".to_string());
-    };
-
-    match operation {
-        "create-folder" => {
-            let [_, parent, name] = args else {
-                return Err("create-folder expects parent and name".to_string());
-            };
-            ensure_privileged_local_path(Path::new(parent))?;
-            file_ops::create_folder(Path::new(parent), name).map(|path| path.display().to_string())
-        }
-        "create-file" => {
-            let [_, parent, name] = args else {
-                return Err("create-file expects parent and name".to_string());
-            };
-            ensure_privileged_local_path(Path::new(parent))?;
-            file_ops::create_file(Path::new(parent), name).map(|path| path.display().to_string())
-        }
-        "rename" => {
-            let [_, path, new_name] = args else {
-                return Err("rename expects path and new name".to_string());
-            };
-            ensure_privileged_local_path(Path::new(path))?;
-            file_ops::rename_path(Path::new(path), new_name).map(|path| path.display().to_string())
-        }
-        "trash" => {
-            if args.len() < 2 {
-                return Err("trash expects at least one path".to_string());
-            }
-            let paths = args[1..]
-                .iter()
-                .map(PathBuf::from)
-                .collect::<Vec<PathBuf>>();
-            for path in &paths {
-                ensure_privileged_local_path(path)?;
-            }
-            file_ops::trash_paths(&paths).to_result_message("moved to trash")
-        }
-        "transfer" => {
-            let [_, operation, source, target_dir] = args else {
-                return Err("transfer expects operation, source and target directory".to_string());
-            };
-            ensure_privileged_local_path(Path::new(source))?;
-            ensure_privileged_local_path(Path::new(target_dir))?;
-            file_ops::perform_transfer_with_progress(
-                operation,
-                Path::new(source),
-                Path::new(target_dir),
-                "keep-both",
-                None,
-                |_| {},
-            )
-            .map(|path| path.display().to_string())
-        }
-        _ => Err(format!("unknown privileged helper operation: {operation}")),
-    }
-}
-
 fn push_unique(paths: &mut Vec<PathBuf>, path: PathBuf) {
     if !paths.iter().any(|existing| existing == &path) {
         paths.push(path);
@@ -1831,29 +1578,6 @@ mod tests {
     }
 
     #[test]
-    fn privileged_helper_cli_rejects_network_paths() {
-        let error = run_helper(&strings(&[
-            "create-folder",
-            "smb://server/share/",
-            "folder",
-        ]))
-        .unwrap_err();
-        assert!(error.contains("network locations are not supported"));
-
-        let error = run_helper(&strings(&["trash", "smb://server/share/file.txt"])).unwrap_err();
-        assert!(error.contains("network locations are not supported"));
-
-        let error = run_helper(&strings(&[
-            "transfer",
-            "copy",
-            "/tmp/file.txt",
-            "smb://server/share/",
-        ]))
-        .unwrap_err();
-        assert!(error.contains("network locations are not supported"));
-    }
-
-    #[test]
     fn polkit_diagnostics_include_action_and_install_hint() {
         let failed = polkit_check_failed_message("missing action");
         assert!(failed.contains(ACTION_ID));
@@ -1892,9 +1616,5 @@ mod tests {
             std::process::id(),
             TOKEN_COUNTER.fetch_add(1, Ordering::Relaxed)
         ))
-    }
-
-    fn strings(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| value.to_string()).collect()
     }
 }

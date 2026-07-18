@@ -6,13 +6,11 @@ use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::PhysicalSize;
 use winit::event::{Modifiers, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Theme, UserAttentionType, Window, WindowAttributes, WindowId};
+use winit::window::{Theme, Window, WindowAttributes, WindowId};
 
 use crate::WgpuState;
 use crate::shell::window_semantics::{
-    ShellDialogWindowRole, ShellModalWindowEventDisposition, ShellWaylandDialogParentStatus,
-    ShellWindowRole, apply_window_platform_semantics, modal_window_event_disposition,
-    wayland_dialog_parent_status,
+    ShellDialogWindowRole, ShellWindowRole, apply_window_platform_semantics,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -97,7 +95,6 @@ pub(crate) struct ShellDetachedDialogWindow {
 impl ShellDetachedDialogWindow {
     pub(crate) fn create(
         event_loop: &dyn ActiveEventLoop,
-        parent: Option<&dyn Window>,
         shared_renderer: Option<&WgpuState>,
         kind: ShellDialogWindowKind,
         spec: &ShellDialogWindowSpec,
@@ -106,7 +103,6 @@ impl ShellDetachedDialogWindow {
             .create_window(spec.window_attributes(event_loop, kind))
             .map_err(|error| format!("{} dialog window create failed: {error}", kind.as_str()))?;
         let window: Arc<dyn Window> = window.into();
-        log_dialog_parent_status(event_loop, parent, window.as_ref(), kind);
         let renderer = match shared_renderer {
             Some(renderer) => WgpuState::new_with_shared_device(window.clone(), renderer),
             None => WgpuState::new(window.clone()),
@@ -183,11 +179,6 @@ impl ShellDetachedDialogWindow {
         self.window.set_cursor(WinitCursor::Icon(cursor_icon));
     }
 
-    pub(crate) fn request_attention(&self) {
-        self.window
-            .request_user_attention(Some(UserAttentionType::Informational));
-    }
-
     fn prepare_for_drop(&mut self) {
         fika_dialog_trace!(
             "[fika-wgpu] dialog-window-renderer-idle kind={} window={:?}",
@@ -199,29 +190,6 @@ impl ShellDetachedDialogWindow {
 
     pub(crate) fn renderer_and_window_mut(&mut self) -> (&mut WgpuState, &dyn Window) {
         (&mut self.renderer, self.window.as_ref())
-    }
-}
-
-fn log_dialog_parent_status(
-    event_loop: &dyn ActiveEventLoop,
-    parent: Option<&dyn Window>,
-    dialog: &dyn Window,
-    kind: ShellDialogWindowKind,
-) {
-    match wayland_dialog_parent_status(event_loop, parent, dialog) {
-        ShellWaylandDialogParentStatus::NotWayland => {}
-        ShellWaylandDialogParentStatus::MissingToplevel => {
-            fika_log!(
-                "[fika-wgpu] wayland-dialog-parent-unavailable kind={} reason=missing-xdg-toplevel",
-                kind.as_str()
-            );
-        }
-        ShellWaylandDialogParentStatus::WinitParentApiUnavailable => {
-            fika_log!(
-                "[fika-wgpu] wayland-dialog-parent-unavailable kind={} reason=winit-set-parent-api-unavailable",
-                kind.as_str()
-            );
-        }
     }
 }
 
@@ -248,42 +216,14 @@ pub(crate) struct ShellDialogWindows {
     create: Option<ShellDetachedDialogWindow>,
     open_with: Option<ShellDetachedDialogWindow>,
     rename: Option<ShellDetachedDialogWindow>,
-    recently_closed: VecDeque<WindowId>,
     deferred_closes: VecDeque<ShellDeferredDialogClose>,
 }
 
 impl ShellDialogWindows {
-    const RECENTLY_CLOSED_LIMIT: usize = 8;
     const DEFERRED_CLOSE_DELAY: Duration = Duration::from_millis(1);
 
-    pub(crate) fn has_modal_window(&self) -> bool {
+    pub(crate) fn has_open_window(&self) -> bool {
         self.create.is_some() || self.open_with.is_some() || self.rename.is_some()
-    }
-
-    pub(crate) fn modal_event_disposition(
-        &self,
-        event: &WindowEvent,
-    ) -> ShellModalWindowEventDisposition {
-        if self.has_modal_window() {
-            modal_window_event_disposition(event)
-        } else {
-            ShellModalWindowEventDisposition::Pass
-        }
-    }
-
-    pub(crate) fn request_modal_attention(&self) -> bool {
-        [
-            self.open_with.as_ref(),
-            self.rename.as_ref(),
-            self.create.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .next()
-        .is_some_and(|window| {
-            window.request_attention();
-            true
-        })
     }
 
     pub(crate) fn is_open(&self, kind: ShellDialogWindowKind) -> bool {
@@ -366,7 +306,6 @@ impl ShellDialogWindows {
 
     pub(crate) fn set(&mut self, kind: ShellDialogWindowKind, window: ShellDetachedDialogWindow) {
         debug_assert_eq!(window.kind(), kind);
-        self.forget_recently_closed(window.window_id());
         fika_dialog_trace!(
             "[fika-wgpu] dialog-window-set kind={} window={:?}",
             kind.as_str(),
@@ -392,7 +331,6 @@ impl ShellDialogWindows {
                 kind.as_str(),
                 window_id
             );
-            self.remember_recently_closed(window_id);
             self.deferred_closes.push_back(ShellDeferredDialogClose {
                 kind,
                 window_id,
@@ -449,7 +387,6 @@ impl ShellDialogWindows {
                 window.window_id()
             );
             window.prepare_for_drop();
-            self.remember_recently_closed(window.window_id());
         }
         while let Some(mut close) = self.deferred_closes.pop_front() {
             fika_dialog_trace!(
@@ -473,25 +410,7 @@ impl ShellDialogWindows {
         .map(ShellDetachedDialogWindow::kind)
     }
 
-    pub(crate) fn is_recently_closed_window(&self, window_id: WindowId) -> bool {
-        self.recently_closed.contains(&window_id)
-    }
-
     pub(crate) fn frame_count(&self, kind: ShellDialogWindowKind) -> Option<u64> {
         self.get(kind).map(ShellDetachedDialogWindow::frame_count)
-    }
-
-    fn remember_recently_closed(&mut self, window_id: WindowId) {
-        if self.recently_closed.contains(&window_id) {
-            return;
-        }
-        self.recently_closed.push_back(window_id);
-        while self.recently_closed.len() > Self::RECENTLY_CLOSED_LIMIT {
-            self.recently_closed.pop_front();
-        }
-    }
-
-    fn forget_recently_closed(&mut self, window_id: WindowId) {
-        self.recently_closed.retain(|closed| *closed != window_id);
     }
 }

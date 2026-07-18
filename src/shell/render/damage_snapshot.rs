@@ -12,7 +12,7 @@ use crate::shell::menu_geometry::{
 use crate::shell::metrics::*;
 use crate::shell::pane::ShellPaneProjection;
 use crate::shell::properties::geometry::properties_overlay_rect_scaled;
-use crate::shell::render::dirty_key::ShellRenderDirtyKey;
+use crate::shell::render::dirty_key::{ShellRenderDirtyKey, ShellRenderDirtyKeyContext};
 use crate::shell::tasks::geometry::task_detail_dialog_rect_scaled;
 use crate::{
     RubberBand, ShellPaneItemTarget, ShellScene, intersect_rect, pane_content_rect_to_screen,
@@ -64,11 +64,23 @@ pub(crate) struct DropMenuDamageState {
 }
 
 impl ShellRenderDamageSnapshot {
+    #[cfg(test)]
     pub(crate) fn from_scene(
         scene: &ShellScene,
         size: PhysicalSize<u32>,
         projections: &[ShellPaneProjection<'_>],
         dirty_key: ShellRenderDirtyKey,
+    ) -> Self {
+        let context = ShellRenderDirtyKeyContext::from_scene(scene, projections);
+        Self::from_scene_inner(scene, size, projections, dirty_key, &context)
+    }
+
+    fn from_scene_inner(
+        scene: &ShellScene,
+        size: PhysicalSize<u32>,
+        projections: &[ShellPaneProjection<'_>],
+        dirty_key: ShellRenderDirtyKey,
+        context: &ShellRenderDirtyKeyContext,
     ) -> Self {
         let mut item_rects = Vec::new();
         for projection in projections {
@@ -128,25 +140,21 @@ impl ShellRenderDamageSnapshot {
         let task_detail_dialog_rect = scene.task_detail_dialog.as_ref().map(|_| {
             task_detail_dialog_rect_scaled(scene.task_statuses.len(), size, scene.ui_scale())
         });
+        let hoverless_dirty_key =
+            ShellRenderDirtyKey::from_scene_ignoring_hover_with_context(scene, size, context);
+        let folder_previewless_dirty_key =
+            ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles_with_context(
+                scene, size, context,
+            );
+        let hoverless_folder_previewless_dirty_key =
+            ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles_with_context(
+                scene, size, context,
+            );
         Self {
             dirty_key,
-            hoverless_dirty_key: ShellRenderDirtyKey::from_scene_ignoring_hover_with_projections(
-                scene,
-                size,
-                projections,
-            ),
-            folder_previewless_dirty_key:
-                ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles_with_projections(
-                    scene,
-                    size,
-                    projections,
-                ),
-            hoverless_folder_previewless_dirty_key:
-                ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles_with_projections(
-                    scene,
-                    size,
-                    projections,
-                ),
+            hoverless_dirty_key,
+            folder_previewless_dirty_key,
+            hoverless_folder_previewless_dirty_key,
             hovered_item: scene.hovered_item,
             hovered_place: scene.hovered_place,
             dnd_hover_target: scene.dnd_hover_target.clone(),
@@ -165,6 +173,16 @@ impl ShellRenderDamageSnapshot {
             task_detail_dialog_rect,
             size,
         }
+    }
+
+    pub(crate) fn from_scene_with_dirty_key_context(
+        scene: &ShellScene,
+        size: PhysicalSize<u32>,
+        projections: &[ShellPaneProjection<'_>],
+        dirty_key: ShellRenderDirtyKey,
+        context: &ShellRenderDirtyKeyContext,
+    ) -> Self {
+        Self::from_scene_inner(scene, size, projections, dirty_key, context)
     }
 
     pub(super) fn item_rect(&self, target: ShellPaneItemTarget) -> Option<ViewRect> {

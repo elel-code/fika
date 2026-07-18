@@ -28,7 +28,6 @@ impl FikaWgpuApp {
             outgoing_dnd_start_failed: false,
             renderer: None,
             dialog_windows: ShellDialogWindows::default(),
-            dialog_close_main_close_guard_until: None,
             clipboard: None,
             window: None,
             cursor_icon: CursorIcon::Default,
@@ -87,24 +86,6 @@ impl FikaWgpuApp {
         self.dialog_windows.request_redraw(kind)
     }
 
-    fn dialog_close_guard_trace(&self) -> String {
-        let Some(deadline) = self.dialog_close_main_close_guard_until else {
-            return "none".to_string();
-        };
-        let now = Instant::now();
-        if deadline >= now {
-            format!(
-                "active:{}ms",
-                deadline.saturating_duration_since(now).as_millis()
-            )
-        } else {
-            format!(
-                "expired:{}ms",
-                now.saturating_duration_since(deadline).as_millis()
-            )
-        }
-    }
-
     fn trace_window_event(&self, window_id: WindowId, event: &WindowEvent) {
         if !fika_dialog_trace_enabled() {
             return;
@@ -114,18 +95,15 @@ impl FikaWgpuApp {
         }
         let main_id = self.window.as_ref().map(|window| window.id());
         let dialog_kind = self.dialog_windows.window_kind_for_id(window_id);
-        let recently_closed = self.dialog_windows.is_recently_closed_window(window_id);
         let role = if main_id == Some(window_id) {
             "main"
         } else if dialog_kind.is_some() {
             "dialog"
-        } else if recently_closed {
-            "recently-closed-dialog"
         } else {
             "unknown"
         };
         fika_dialog_trace!(
-            "[fika-wgpu] window-event event={} window={:?} role={} main={:?} dialog={} recently_closed={} modal={} guard={}",
+            "[fika-wgpu] window-event event={} window={:?} role={} main={:?} dialog={} dialogs_open={}",
             window_event_label(event),
             window_id,
             role,
@@ -133,19 +111,16 @@ impl FikaWgpuApp {
             dialog_kind
                 .map(ShellDialogWindowKind::as_str)
                 .unwrap_or("none"),
-            recently_closed as u8,
-            self.dialog_windows.has_modal_window() as u8,
-            self.dialog_close_guard_trace()
+            self.dialog_windows.has_open_window() as u8,
         );
     }
 
     fn exit_event_loop(&self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
         fika_log!(
-            "[fika-wgpu] event-loop-exit reason={} main_open={} modal={} guard={}",
+            "[fika-wgpu] event-loop-exit reason={} main_open={} dialogs_open={}",
             reason,
             self.window.is_some() as u8,
-            self.dialog_windows.has_modal_window() as u8,
-            self.dialog_close_guard_trace()
+            self.dialog_windows.has_open_window() as u8,
         );
         event_loop.exit();
     }
@@ -198,7 +173,6 @@ impl FikaWgpuApp {
         }
         let dialog = match ShellDetachedDialogWindow::create(
             event_loop,
-            self.window.as_deref(),
             self.renderer.as_ref(),
             kind,
             spec,
@@ -227,9 +201,6 @@ impl FikaWgpuApp {
             kind.as_str(),
             closed as u8
         );
-        if closed {
-            self.arm_dialog_close_main_close_guard(kind);
-        }
         closed
     }
 
@@ -249,28 +220,15 @@ impl FikaWgpuApp {
         changed
     }
 
-    fn arm_dialog_close_main_close_guard(&mut self, kind: ShellDialogWindowKind) {
-        let deadline = Instant::now() + Duration::from_millis(1_500);
-        self.dialog_close_main_close_guard_until = Some(deadline);
-        fika_dialog_trace!(
-            "[fika-wgpu] dialog-close-guard arm kind={} duration_ms=1500",
-            kind.as_str()
-        );
-    }
-
     fn close_main_window_from_window_manager_request(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         reason: &'static str,
     ) {
-        let previous_guard = self.dialog_close_guard_trace();
-        let modal = self.dialog_windows.has_modal_window();
-        self.dialog_close_main_close_guard_until = None;
         fika_dialog_trace!(
-            "[fika-wgpu] main-close accept=1 reason={} modal={} previous_guard={}",
+            "[fika-wgpu] main-close accept=1 reason={} dialogs_open={}",
             reason,
-            modal as u8,
-            previous_guard
+            self.dialog_windows.has_open_window() as u8,
         );
         self.drop_windows_for_exit();
         self.exit_event_loop(event_loop, reason);

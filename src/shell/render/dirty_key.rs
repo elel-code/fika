@@ -19,45 +19,58 @@ pub(crate) struct ShellRenderDirtyKey {
     pub(crate) values: Box<[u64]>,
 }
 
+pub(crate) struct ShellRenderDirtyKeyContext {
+    pane_entries_hashes: [u64; 2],
+    folder_preview_roles_hash: u64,
+}
+
+impl ShellRenderDirtyKeyContext {
+    pub(crate) fn from_scene(scene: &ShellScene, projections: &[ShellPaneProjection<'_>]) -> Self {
+        let mut pane_entries_hashes = [0; 2];
+        for pane_id in ShellPaneId::ALL {
+            if let Some(pane) = scene.panes.get(pane_id) {
+                pane_entries_hashes[pane_id.index()] =
+                    pane_entries_dirty_hash(pane_id, pane, projections);
+            }
+        }
+        Self {
+            pane_entries_hashes,
+            folder_preview_roles_hash: folder_preview_roles_dirty_hash(scene, projections),
+        }
+    }
+}
+
 impl ShellRenderDirtyKey {
     #[cfg(test)]
     pub(crate) fn from_scene(scene: &ShellScene, size: PhysicalSize<u32>) -> Self {
-        Self::from_scene_with_options(scene, size, None, ShellRenderDirtyKeyOptions::default())
+        let context = dirty_key_context_from_scene_lookup(scene, size);
+        Self::from_scene_with_context(scene, size, &context)
     }
 
-    pub(crate) fn from_scene_with_projections(
+    pub(crate) fn from_scene_with_context(
         scene: &ShellScene,
         size: PhysicalSize<u32>,
-        projections: &[ShellPaneProjection<'_>],
+        context: &ShellRenderDirtyKeyContext,
     ) -> Self {
-        Self::from_scene_with_options(
-            scene,
-            size,
-            Some(projections),
-            ShellRenderDirtyKeyOptions::default(),
-        )
+        Self::from_scene_with_options(scene, size, ShellRenderDirtyKeyOptions::default(), context)
     }
 
     #[cfg(test)]
     pub(crate) fn from_scene_ignoring_hover(scene: &ShellScene, size: PhysicalSize<u32>) -> Self {
-        Self::from_scene_with_options(
-            scene,
-            size,
-            None,
-            ShellRenderDirtyKeyOptions::ignoring_hover(),
-        )
+        let context = dirty_key_context_from_scene_lookup(scene, size);
+        Self::from_scene_ignoring_hover_with_context(scene, size, &context)
     }
 
-    pub(crate) fn from_scene_ignoring_hover_with_projections(
+    pub(crate) fn from_scene_ignoring_hover_with_context(
         scene: &ShellScene,
         size: PhysicalSize<u32>,
-        projections: &[ShellPaneProjection<'_>],
+        context: &ShellRenderDirtyKeyContext,
     ) -> Self {
         Self::from_scene_with_options(
             scene,
             size,
-            Some(projections),
             ShellRenderDirtyKeyOptions::ignoring_hover(),
+            context,
         )
     }
 
@@ -66,24 +79,20 @@ impl ShellRenderDirtyKey {
         scene: &ShellScene,
         size: PhysicalSize<u32>,
     ) -> Self {
-        Self::from_scene_with_options(
-            scene,
-            size,
-            None,
-            ShellRenderDirtyKeyOptions::ignoring_folder_preview_roles(),
-        )
+        let context = dirty_key_context_from_scene_lookup(scene, size);
+        Self::from_scene_ignoring_folder_preview_roles_with_context(scene, size, &context)
     }
 
-    pub(crate) fn from_scene_ignoring_folder_preview_roles_with_projections(
+    pub(crate) fn from_scene_ignoring_folder_preview_roles_with_context(
         scene: &ShellScene,
         size: PhysicalSize<u32>,
-        projections: &[ShellPaneProjection<'_>],
+        context: &ShellRenderDirtyKeyContext,
     ) -> Self {
         Self::from_scene_with_options(
             scene,
             size,
-            Some(projections),
             ShellRenderDirtyKeyOptions::ignoring_folder_preview_roles(),
+            context,
         )
     }
 
@@ -92,32 +101,28 @@ impl ShellRenderDirtyKey {
         scene: &ShellScene,
         size: PhysicalSize<u32>,
     ) -> Self {
-        Self::from_scene_with_options(
-            scene,
-            size,
-            None,
-            ShellRenderDirtyKeyOptions::ignoring_hover_and_folder_preview_roles(),
-        )
+        let context = dirty_key_context_from_scene_lookup(scene, size);
+        Self::from_scene_ignoring_hover_and_folder_preview_roles_with_context(scene, size, &context)
     }
 
-    pub(crate) fn from_scene_ignoring_hover_and_folder_preview_roles_with_projections(
+    pub(crate) fn from_scene_ignoring_hover_and_folder_preview_roles_with_context(
         scene: &ShellScene,
         size: PhysicalSize<u32>,
-        projections: &[ShellPaneProjection<'_>],
+        context: &ShellRenderDirtyKeyContext,
     ) -> Self {
         Self::from_scene_with_options(
             scene,
             size,
-            Some(projections),
             ShellRenderDirtyKeyOptions::ignoring_hover_and_folder_preview_roles(),
+            context,
         )
     }
 
     fn from_scene_with_options(
         scene: &ShellScene,
         size: PhysicalSize<u32>,
-        projections: Option<&[ShellPaneProjection<'_>]>,
         options: ShellRenderDirtyKeyOptions,
+        context: &ShellRenderDirtyKeyContext,
     ) -> Self {
         let mut values = Vec::with_capacity(128);
         push_u64(&mut values, size.width as u64);
@@ -162,14 +167,7 @@ impl ShellRenderDirtyKey {
                     push_u64(&mut values, pane.entries.len() as u64);
                     push_u64(&mut values, pane.dir_count as u64);
                     push_u64(&mut values, pane.filtered_indexes.len() as u64);
-                    push_pane_entries_dirty_hash(
-                        &mut values,
-                        scene,
-                        pane_id,
-                        pane,
-                        size,
-                        projections,
-                    );
+                    push_u64(&mut values, context.pane_entries_hashes[pane_id.index()]);
                     push_u64(&mut values, pane.selection.len() as u64);
                     push_option_usize(&mut values, pane.selection.anchor);
                     push_option_usize(&mut values, pane.selection.focus);
@@ -181,7 +179,7 @@ impl ShellRenderDirtyKey {
             }
         }
         if options.include_folder_preview_roles {
-            push_folder_preview_roles_dirty_hash(&mut values, scene, size, projections);
+            push_u64(&mut values, context.folder_preview_roles_hash);
         }
 
         push_pane_item_target(
@@ -423,54 +421,47 @@ fn push_hash(values: &mut Vec<u64>, value: impl Hash) {
     values.push(hasher.finish());
 }
 
-fn push_pane_entries_dirty_hash(
-    values: &mut Vec<u64>,
+#[cfg(test)]
+fn dirty_key_context_from_scene_lookup(
     scene: &ShellScene,
+    size: PhysicalSize<u32>,
+) -> ShellRenderDirtyKeyContext {
+    let projections = ShellPaneId::ALL
+        .into_iter()
+        .filter_map(|pane_id| scene.pane_projection(pane_id, size))
+        .collect::<Vec<_>>();
+    ShellRenderDirtyKeyContext::from_scene(scene, &projections)
+}
+
+fn pane_entries_dirty_hash(
     pane_id: ShellPaneId,
     pane: &ShellPaneState,
-    size: PhysicalSize<u32>,
-    projections: Option<&[ShellPaneProjection<'_>]>,
-) {
-    if pane.view_mode == ShellViewMode::Details {
-        if let Some(projection) = projections.and_then(|projections| {
-            projections
+    projections: &[ShellPaneProjection<'_>],
+) -> u64 {
+    if pane.view_mode == ShellViewMode::Details
+        && let Some(projection) = projections
+            .iter()
+            .find(|projection| projection.geometry.kind == pane_id)
+    {
+        return pane_entries_visual_hash_for_indexes(
+            pane,
+            projection
+                .visible_items
                 .iter()
-                .find(|projection| projection.geometry.kind == pane_id)
-        }) {
-            push_pane_entries_visual_hash_for_indexes(
-                values,
-                pane,
-                projection
-                    .visible_items
-                    .iter()
-                    .filter_map(|item| pane.filtered_indexes.get(item.layout.model_index).copied()),
-            );
-            return;
-        }
-        if let Some(projection) = scene.pane_projection(pane_id, size) {
-            push_pane_entries_visual_hash_for_indexes(
-                values,
-                pane,
-                projection
-                    .visible_items
-                    .iter()
-                    .filter_map(|item| pane.filtered_indexes.get(item.layout.model_index).copied()),
-            );
-            return;
-        }
+                .filter_map(|item| pane.filtered_indexes.get(item.layout.model_index).copied()),
+        );
     }
-    push_pane_entries_visual_hash(values, pane);
+    pane_entries_visual_hash(pane)
 }
 
-fn push_pane_entries_visual_hash(values: &mut Vec<u64>, pane: &ShellPaneState) {
-    push_pane_entries_visual_hash_for_indexes(values, pane, pane.filtered_indexes.iter().copied());
+fn pane_entries_visual_hash(pane: &ShellPaneState) -> u64 {
+    pane_entries_visual_hash_for_indexes(pane, pane.filtered_indexes.iter().copied())
 }
 
-fn push_pane_entries_visual_hash_for_indexes(
-    values: &mut Vec<u64>,
+fn pane_entries_visual_hash_for_indexes(
     pane: &ShellPaneState,
     indexes: impl IntoIterator<Item = usize>,
-) {
+) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for entry_index in indexes {
         entry_index.hash(&mut hasher);
@@ -492,33 +483,22 @@ fn push_pane_entries_visual_hash_for_indexes(
             None => false.hash(&mut hasher),
         }
     }
-    values.push(hasher.finish());
+    hasher.finish()
 }
 
-fn push_folder_preview_roles_dirty_hash(
-    values: &mut Vec<u64>,
+fn folder_preview_roles_dirty_hash(
     scene: &ShellScene,
-    size: PhysicalSize<u32>,
-    projections: Option<&[ShellPaneProjection<'_>]>,
-) {
+    projections: &[ShellPaneProjection<'_>],
+) -> u64 {
     let roles = scene.folder_preview_roles.borrow();
     let mut states = Vec::new();
-    if let Some(projections) = projections {
-        for projection in projections {
-            push_folder_preview_role_states_for_projection(&mut states, scene, &roles, projection);
-        }
-    } else {
-        for pane_id in ShellPaneId::ALL {
-            let Some(projection) = scene.pane_projection(pane_id, size) else {
-                continue;
-            };
-            push_folder_preview_role_states_for_projection(&mut states, scene, &roles, &projection);
-        }
+    for projection in projections {
+        push_folder_preview_role_states_for_projection(&mut states, scene, &roles, projection);
     }
     states.sort();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     states.hash(&mut hasher);
-    values.push(hasher.finish());
+    hasher.finish()
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

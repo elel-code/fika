@@ -167,7 +167,7 @@ use shell::render::damage_bounds::{DamageScissorRect, ShellRenderDamage, ShellRe
 #[cfg(test)]
 use shell::render::damage_bounds::{damage_scissor_rect, full_surface_rect, rect_area};
 use shell::render::damage_snapshot::ShellRenderDamageSnapshot;
-use shell::render::dirty_key::ShellRenderDirtyKey;
+use shell::render::dirty_key::{ShellRenderDirtyKey, ShellRenderDirtyKeyContext};
 use shell::render::frame::{
     DialogFrameRenderers, DialogFrameRequest, FrameGpuContext, SceneFrame, SceneFrameProjections,
     SceneFrameRenderers, SceneFrameRequest, prepare_dialog_frame, prepare_scene_frame,
@@ -240,10 +240,7 @@ use shell::ui_chrome::{
     PlaceIconPaint, push_fallback_file_icon, push_location_bar_icon, push_place_icon,
     push_scrollbar,
 };
-use shell::window_semantics::{
-    ShellWindowCloseRequestTarget, ShellWindowRole, apply_window_platform_semantics,
-    window_manager_close_request_exits_application,
-};
+use shell::window_semantics::{ShellWindowRole, apply_window_platform_semantics};
 fn startup_view_mode(
     requested: ShellViewMode,
     explicit: bool,

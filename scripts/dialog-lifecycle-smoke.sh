@@ -195,12 +195,6 @@ if ! rg -q "\[fika-wgpu\] dialog-smoke complete" "$log_path"; then
     exit 1
 fi
 
-if ! rg -q "\[fika-wgpu\] dialog-close-guard arm kind=$dialog_kind" "$log_path"; then
-    echo "fail: missing dialog close guard marker" >&2
-    echo "log: $log_path" >&2
-    exit 1
-fi
-
 if ! rg -q "\[fika-wgpu\] renderer-shared-device" "$log_path"; then
     echo "fail: dialog renderer did not reuse the main wgpu device" >&2
     echo "log: $log_path" >&2

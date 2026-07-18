@@ -75,33 +75,26 @@
             .into_iter()
             .filter_map(|kind| scene.pane_projection(kind, size))
             .collect::<Vec<_>>();
+        let context = ShellRenderDirtyKeyContext::from_scene(&scene, &projections);
 
         assert_eq!(
             ShellRenderDirtyKey::from_scene(&scene, size),
-            ShellRenderDirtyKey::from_scene_with_projections(&scene, size, &projections)
+            ShellRenderDirtyKey::from_scene_with_context(&scene, size, &context)
         );
         assert_eq!(
             ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size),
-            ShellRenderDirtyKey::from_scene_ignoring_hover_with_projections(
-                &scene,
-                size,
-                &projections
-            )
+            ShellRenderDirtyKey::from_scene_ignoring_hover_with_context(&scene, size, &context)
         );
         assert_eq!(
             ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles(&scene, size),
-            ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles_with_projections(
-                &scene,
-                size,
-                &projections
+            ShellRenderDirtyKey::from_scene_ignoring_folder_preview_roles_with_context(
+                &scene, size, &context
             )
         );
         assert_eq!(
             ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles(&scene, size),
-            ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles_with_projections(
-                &scene,
-                size,
-                &projections
+            ShellRenderDirtyKey::from_scene_ignoring_hover_and_folder_preview_roles_with_context(
+                &scene, size, &context
             )
         );
     }

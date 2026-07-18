@@ -31,24 +31,20 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 - Dialog window 通用事件：
   common close / resize / scale / modifiers 路径已从具体 dialog handler 中抽出。
 - Dialog 生命周期 / layout size 对齐：
-  参考 Dolphin `QDialog(parent)` / `setModal(true)` / `WA_DeleteOnClose` 和 KIO
-  `KOpenWithDialog` 的 `minimumSizeHint` + 初始 `resize` 模式，detached dialog 关闭后
-  从 active modal 集合移除并隔离尾随 window event，不再误触发主窗口退出；dialog renderer
+  参考 KIO `KOpenWithDialog` 的 `minimumSizeHint` + 初始 `resize` 模式，dialog renderer
   保留实际 surface size，输入 hit-test 和内部绘制使用固定 `layout_size`，避免 compositor
-  或尾随 resize 事件导致弹窗内容尺寸漂移；detached dialog surface validation 不再退出
-  主 event loop；来自主窗口或最近关闭 dialog id 的 WM close request 会被视为用户关闭
-  app 的明确意图并直接退出，避免 niri 等 WM 在 dialog 生命周期后需要第二次 close。
-  dialog close guard 只保留为尾随事件诊断窗口，不再吞掉主窗口 close request。
+  或尾随 resize 事件导致弹窗内容尺寸漂移；detached dialog surface validation 不退出
+  主 event loop，主窗口只响应属于自身 window id 的 close request。
   `FIKA_WGPU_DIALOG_TRACE=1` 会记录
-  `CloseRequested` / `Destroyed` / resize / redraw 等 window event 路由、dialog
-  close guard 和 event-loop exit reason；高频 pointer move 默认折叠，需要时可加
+  `CloseRequested` / `Destroyed` / resize / redraw 等 window event 路由和 event-loop exit
+  reason；高频 pointer move 默认折叠，需要时可加
   `FIKA_WGPU_DIALOG_TRACE_VERBOSE=1`。`scripts/dialog-lifecycle-smoke.sh` 提供
   open-with/create/rename dialog 打开、关闭、主窗口继续渲染的 lifecycle smoke，用来排查 compositor
   尾随事件是否仍误关主窗口。Wayland 下 `Window::set_visible(false)` 是 no-op，隐藏停放
   会留下仍可获焦/吃输入的 zombie dialog；因此 dialog 关闭改为两阶段销毁：当前
-  `window_event` 回调只从 active modal 集合移除并记录 recently-closed id，随后在
-  `about_to_wait` 安全点先等待 dialog renderer idle，再 drop wgpu surface 和 native
-  window。窗口以 `Arc<dyn Window>` 交给 wgpu surface 持有，避免旧的 `'static`
+  `window_event` 回调只移除 active dialog，随后在 `about_to_wait` 安全点先等待 dialog
+  renderer idle，再 drop wgpu surface 和 native window。窗口以 `Arc<dyn Window>` 交给
+  wgpu surface 持有，避免旧的 `'static`
   transmute handle 生命周期假设；dialog renderer 复用主窗口的 wgpu
   instance/adapter/device/queue，只为每个独立窗口创建自己的 surface 和 renderer caches，
   避免关闭 dialog 时销毁额外 Vulkan device 后触发主窗口 swapchain reconfigure 的
@@ -64,19 +60,12 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `measure_label_cursor_x` 光标定位边界。
 - Window platform semantics 边界：
   `src/shell/window_semantics.rs` 集中设置主窗口和 detached dialog 的 Wayland app-id /
-  instance，并记录 dialog parent/transient 语义的当前状态；主窗口在 detached dialog
-  打开时会拦截键鼠、IME、拖拽和手势输入，保留 close / resize / redraw 等生命周期
-  事件，以接近 modal dialog 行为。modal 输入事件分类已收敛为
-  `ShellModalWindowEventDisposition`，主事件循环只消费 pass / block / attention
-  disposition。
+  instance。父子窗口 API 不可用期间，detached dialog 与主窗口按普通独立窗口处理，不再
+  模拟 modal 输入拦截、attention、recently-closed 路由或 close guard。
 - Wayland dialog parent 限制：
-  当前 winit git 版本只公开 `xdg_toplevel()` 指针和 `WindowAttributesWayland::with_name`，
-  没有公开受 winit 管理的 Wayland connection/queue，也没有安全的
-  `xdg_toplevel.set_parent` 包装；不能通过新建 `wayland_client::Connection` 去操作
-  winit 已创建的 proxy。`wayland-client` 虽可 unsafe 包装 raw `wl_display`，但会绕过
-  winit 的事件队列和生命周期所有权，当前不作为主线实现。真正的 transient parent 需要
-  等待 winit API、维护本地 winit 扩展，或把 dialog host 下沉到
-  smithay-client-toolkit / wayland-client 层。
+  当前 winit git 版本没有安全的 `xdg_toplevel.set_parent` 包装。Fika 已删除 parent status
+  探测和伪 modal 兼容层，不通过 raw `wl_display` 或额外 Wayland connection 绕过 winit；
+  真正的 transient parent 等待 winit 上游 API 合并后再直接实现。
 - Render dirty / damage 三层拆分：
   `src/shell/render/dirty_key.rs` 负责 dirty key，`damage_snapshot.rs` 负责采样
   render 可见状态，`damage_bounds.rs` 负责比较 snapshot 并生成 damage bounds；
@@ -188,10 +177,18 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   redraw；后续 visible-priority role、thumbnail read-ahead 和动画 dirty 可以共享同一个
   frame-pending 判定入口。
 - Dirty key / damage projection reuse：
-  `ShellRenderDirtyKey` 增加 `*_with_projections` 入口，主窗口 render 和 damage snapshot
-  复用本帧已经计算好的 `ShellPaneProjection`，不再为了 details 可见项 hash 和 folder
-  preview dirty hash 反复走 layout/projection；旧的 scene lookup 入口只保留给测试和局部
-  helper。
+  主窗口 render 和 damage snapshot 复用本帧已经计算好的 `ShellPaneProjection`，不再为了
+  details 可见项 hash 和 folder preview dirty hash 反复走 layout/projection；测试用的
+  scene lookup 入口也只负责生成 projections，再进入相同的 dirty-key 路径。
+- Dirty key 多变体扫描复用：
+  `ShellRenderDirtyKeyContext` 在每帧基于 prepared projections 只计算一次 pane entry visual
+  hash 和 folder preview role hash；默认、hoverless、folder-previewless 及组合 dirty key
+  共享这份结果，不再为 damage 判定重复遍历可见项、构造 folder preview state 和排序。
+  旧的 `*_with_projections` 双轨入口已删除，测试 scene lookup 也统一先构造同一 context。
+- Privileged helper D-Bus 单路径收敛：
+  删除未被 runtime 使用的直接 argv `run_helper`、未接入的 ExternalEdit 客户端 wrapper 和
+  文件级 `allow(dead_code)`；helper 二进制只保留当前 D-Bus service 入口。服务端
+  ExternalEdit D-Bus contract、实现和回归测试继续保留，不再用兼容代码掩盖未引用符号。
 - SceneFrame projection reuse：
   主窗口 render / prewarm 先用 `prepare_frame_projection_layouts` 生成一次 prepared
   projection layouts，visible slot pool 直接消费其中的可见路径，随后通过
@@ -303,9 +300,8 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   使用同一种 route/effect 边界。
 - 将更多 effect 从“立即 apply outcome”推进为“返回 outcome/request，由上层合并后
   apply”，便于 async completion、动画 timeline 和 render damage 共享同一套调度语义。
-- Detached dialog 的 Wayland transient parent：在 winit 暴露同 connection 的
-  `xdg_toplevel.set_parent` 或切换到可控 Wayland dialog host 后，把
-  `window_semantics.rs` 中的 parent status 替换为实际绑定。
+- Detached dialog 的 Wayland transient parent：等待 winit 上游合并安全的 parent API
+  后再直接绑定；在此之前不恢复 parent status、输入拦截或其他伪 modal 兼容层。
 
 完成标准：
 - `ApplicationHandler::window_event` 中的业务分支减少。

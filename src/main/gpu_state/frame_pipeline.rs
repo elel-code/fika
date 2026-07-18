@@ -237,11 +237,12 @@ impl WgpuState {
             frame_projections.projections(),
             &folder_preview_results.changes,
         );
-        let dirty_key = ShellRenderDirtyKey::from_scene_with_projections(
+        let dirty_key_context = ShellRenderDirtyKeyContext::from_scene(
             scene,
-            self.size,
             frame_projections.projections(),
         );
+        let dirty_key =
+            ShellRenderDirtyKey::from_scene_with_context(scene, self.size, &dirty_key_context);
         let scene_read_ahead_pending = !scene.icon_role_read_ahead.borrow().is_empty()
             || scene.folder_preview_roles.borrow().has_pending();
         let non_folder_preview_async_results_changed = metadata_result_stats.applied > 0
@@ -289,11 +290,12 @@ impl WgpuState {
             }
             return ShellRenderOutcome::SkippedClean;
         }
-        let damage_snapshot = ShellRenderDamageSnapshot::from_scene(
+        let damage_snapshot = ShellRenderDamageSnapshot::from_scene_with_dirty_key_context(
             scene,
             self.size,
             frame_projections.projections(),
             dirty_key,
+            &dirty_key_context,
         );
         let mut render_damage = ShellRenderDamage::between_with_async_damage(
             self.last_render_damage_snapshot.as_ref(),
