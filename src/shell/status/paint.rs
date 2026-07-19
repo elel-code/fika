@@ -303,24 +303,6 @@ pub(crate) fn push_places_task_area(
     );
 
     let padding = scale_metric(10.0, paint.scale);
-    let mark_height = scale_metric(3.0, paint.scale).max(2.0);
-    let mark_width = (inner.width * 0.34)
-        .min(scale_metric(52.0, paint.scale))
-        .max(scale_metric(20.0, paint.scale));
-    push_clipped_rounded_rect(
-        vertices,
-        ViewRect {
-            x: inner.x + padding,
-            y: inner.y + scale_metric(9.0, paint.scale),
-            width: mark_width,
-            height: mark_height,
-        },
-        inner,
-        mark_height / 2.0,
-        paint.theme.accent(),
-        paint.size,
-    );
-
     let row_height = scale_metric(PLACES_TASK_ROW_HEIGHT, paint.scale);
     let mut y = inner.y + scale_metric(18.0, paint.scale);
     let max_rows = ((inner.bottom() - y - scale_metric(4.0, paint.scale)) / row_height)
