@@ -148,6 +148,9 @@ impl ApplicationHandler for FikaWgpuApp {
         {
             window.request_redraw();
         }
+        if progress_changed {
+            self.request_dialog_redraw(ShellDialogWindowKind::TaskDetail);
+        }
         if self.auto_cycle_views && Instant::now() >= self.next_auto_cycle {
             self.next_auto_cycle = Instant::now() + AUTO_CYCLE_INTERVAL;
             if let Some(renderer) = self.renderer.as_ref() {
@@ -257,8 +260,20 @@ impl ApplicationHandler for FikaWgpuApp {
                     self.open_with_dialog_window_event(event_loop, event);
                     return;
                 }
+                ShellDialogWindowKind::Properties => {
+                    self.properties_dialog_window_event(event_loop, event);
+                    return;
+                }
                 ShellDialogWindowKind::Rename => {
                     self.rename_dialog_window_event(event_loop, event);
+                    return;
+                }
+                ShellDialogWindowKind::TaskDetail => {
+                    self.task_detail_dialog_window_event(event_loop, event);
+                    return;
+                }
+                ShellDialogWindowKind::TrashConflict => {
+                    self.trash_conflict_dialog_window_event(event_loop, event);
                     return;
                 }
             }

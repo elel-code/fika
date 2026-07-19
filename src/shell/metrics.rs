@@ -102,10 +102,12 @@ pub(crate) const CONTEXT_MENU_SUBMENU_AIM_DELAY: Duration = Duration::from_milli
 pub(crate) const CONTEXT_MENU_SAFE_TRIANGLE_MARGIN: f32 = 8.0;
 pub(crate) const CONTEXT_MENU_SAFE_TRIANGLE_PARENT_RETENTION_WIDTH: f32 = 84.0;
 pub(crate) const PROPERTIES_OVERLAY_WIDTH: f32 = 440.0;
+#[cfg(test)]
 pub(crate) const PROPERTIES_OVERLAY_MARGIN: f32 = 18.0;
 pub(crate) const PROPERTIES_TITLE_HEIGHT: f32 = 44.0;
 pub(crate) const PROPERTIES_ROW_HEIGHT: f32 = 26.0;
 pub(crate) const TASK_DETAIL_DIALOG_WIDTH: f32 = 620.0;
+#[cfg(test)]
 pub(crate) const TASK_DETAIL_DIALOG_MARGIN: f32 = 18.0;
 pub(crate) const TASK_DETAIL_TITLE_HEIGHT: f32 = 46.0;
 pub(crate) const TASK_DETAIL_ROW_HEIGHT: f32 = 72.0;
@@ -131,6 +133,7 @@ pub(crate) const OPEN_WITH_CHOOSER_BUTTON_HEIGHT: f32 = 28.0;
 pub(crate) const OPEN_WITH_CHOOSER_BUTTON_GAP: f32 = 8.0;
 pub(crate) const TRASH_CONFLICT_DIALOG_WIDTH: f32 = 520.0;
 pub(crate) const TRASH_CONFLICT_DIALOG_HEIGHT: f32 = 224.0;
+#[cfg(test)]
 pub(crate) const TRASH_CONFLICT_DIALOG_MARGIN: f32 = 18.0;
 pub(crate) const TRASH_CONFLICT_DIALOG_TITLE_HEIGHT: f32 = 44.0;
 pub(crate) const PATH_HISTORY_LIMIT: usize = 128;

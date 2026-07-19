@@ -8,7 +8,6 @@ use crate::shell::drop_menu::{ShellDropMenu, ShellDropTarget};
 use crate::shell::location::ShellLocationDraft;
 use crate::shell::options::ShellViewMode;
 use crate::shell::pane::{ShellPaneId, ShellPaneProjection, ShellPaneState};
-use crate::shell::properties::ShellPropertiesOverlay;
 use crate::{
     FolderPreviewRoleKey, ItemPixmapLayout, RubberBand, ShellFolderPreviewRoleRuntime,
     ShellInternalDrag, ShellInternalDragSource, ShellPaneItemTarget, ShellScene,
@@ -249,13 +248,6 @@ impl ShellRenderDirtyKey {
             },
             options.include_drop_menu_hover,
         );
-        push_properties_overlay(
-            &mut values,
-            scene.properties_overlay.as_ref(),
-            options.include_properties_overlay_content,
-        );
-        push_bool(&mut values, scene.trash_conflict_dialog.is_some());
-        push_bool(&mut values, scene.task_detail_dialog.is_some());
         push_u64(&mut values, scene.task_statuses.len() as u64);
 
         for value in [
@@ -267,11 +259,6 @@ impl ShellRenderDirtyKey {
             scene.selection_changes,
             scene.context_target_changes,
             scene.context_menu_actions,
-            if options.include_properties_overlay_changes {
-                scene.properties_changes
-            } else {
-                0
-            },
             scene.open_changes,
             scene.copy_location_changes,
             scene.file_clipboard_changes,
@@ -335,8 +322,6 @@ struct ShellRenderDirtyKeyOptions {
     include_places_scroll: bool,
     include_location_draft: bool,
     include_location_changes: bool,
-    include_properties_overlay_content: bool,
-    include_properties_overlay_changes: bool,
     include_task_status_changes: bool,
     include_rubber_band: bool,
     include_folder_preview_roles: bool,
@@ -356,8 +341,6 @@ impl Default for ShellRenderDirtyKeyOptions {
             include_places_scroll: true,
             include_location_draft: true,
             include_location_changes: true,
-            include_properties_overlay_content: true,
-            include_properties_overlay_changes: true,
             include_task_status_changes: true,
             include_rubber_band: true,
             include_folder_preview_roles: true,
@@ -379,8 +362,6 @@ impl ShellRenderDirtyKeyOptions {
             include_places_scroll: false,
             include_location_draft: false,
             include_location_changes: false,
-            include_properties_overlay_content: false,
-            include_properties_overlay_changes: false,
             include_task_status_changes: false,
             include_rubber_band: false,
             include_folder_preview_roles: true,
@@ -731,27 +712,6 @@ fn push_drop_menu(values: &mut Vec<u64>, menu: Option<&ShellDropMenu>, include_h
             }
             push_hash(values, &menu.target_dir);
             push_drop_target(values, Some(&menu.target));
-        }
-        None => push_bool(values, false),
-    }
-}
-
-fn push_properties_overlay(
-    values: &mut Vec<u64>,
-    overlay: Option<&ShellPropertiesOverlay>,
-    include_content: bool,
-) {
-    match overlay {
-        Some(overlay) => {
-            push_bool(values, true);
-            if include_content {
-                push_hash(values, &overlay.title);
-                push_u64(values, overlay.rows.len() as u64);
-                for row in &overlay.rows {
-                    push_hash(values, row.label);
-                    push_hash(values, &row.value);
-                }
-            }
         }
         None => push_bool(values, false),
     }

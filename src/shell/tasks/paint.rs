@@ -7,7 +7,7 @@ use crate::shell::metrics::{TASK_DETAIL_TITLE_HEIGHT, scaled_dialog_metric};
 use crate::shell::popup::style::PopupTheme;
 use crate::shell::tasks::geometry::{
     task_detail_cancel_button_rect_scaled, task_detail_clear_button_rect_scaled,
-    task_detail_dialog_rect_scaled, task_detail_dismiss_button_rect_scaled,
+    task_detail_dialog_window_rect, task_detail_dismiss_button_rect_scaled,
     task_detail_row_rect_scaled,
 };
 use crate::shell::tasks::{ShellTaskStatus, ShellTaskStatusKind};
@@ -16,7 +16,7 @@ use crate::{
     push_clipped_rounded_rect, push_rect,
 };
 
-pub(crate) fn push_task_detail_dialog_overlay(
+pub(crate) fn push_task_detail_dialog(
     statuses: &VecDeque<ShellTaskStatus>,
     theme: PopupTheme,
     scale: f32,
@@ -24,14 +24,20 @@ pub(crate) fn push_task_detail_dialog_overlay(
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    let screen = ViewRect {
-        x: 0.0,
-        y: 0.0,
-        width: size.width.max(1) as f32,
-        height: size.height.max(1) as f32,
-    };
-    push_rect(vertices, screen, theme.backdrop, size);
-    let rect = task_detail_dialog_rect_scaled(statuses.len(), size, scale);
+    let screen = task_detail_dialog_window_rect(size);
+    push_task_detail_dialog_contents(statuses, theme, scale, vertices, text, size, screen, screen);
+}
+
+fn push_task_detail_dialog_contents(
+    statuses: &VecDeque<ShellTaskStatus>,
+    theme: PopupTheme,
+    scale: f32,
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    size: PhysicalSize<u32>,
+    screen: ViewRect,
+    rect: ViewRect,
+) {
     let title_height = scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale);
     let margin = scaled_dialog_metric(18.0, scale);
     push_clipped_rounded_rect(

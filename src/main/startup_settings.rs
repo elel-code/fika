@@ -158,6 +158,8 @@ use shell::prewarm::{
 use shell::privilege::{run_privileged_command_sync, should_attempt_privileged_operation};
 #[cfg(test)]
 use shell::properties::geometry::properties_overlay_rect;
+use shell::properties::geometry::properties_dialog_window_size_scaled;
+#[cfg(test)]
 use shell::properties::geometry::properties_overlay_rect_scaled;
 use shell::properties::{ShellPropertiesOverlay, property_row};
 #[cfg(test)]
@@ -196,7 +198,7 @@ use shell::service_menu::ServiceMenuLaunchRequest;
 use shell::shortcuts::{
     CreateCommand, FilterCommand, LocationCommand, OpenWithCommand, PathNavigationAction,
     RenameCommand, SelectionCommand, ZoomAction, create_command_for_key_event,
-    open_with_command_for_key_event, rename_command_for_key_event,
+    escape_requested_for_key_event, open_with_command_for_key_event, rename_command_for_key_event,
 };
 #[cfg(test)]
 use shell::shortcuts::{
@@ -222,8 +224,11 @@ use shell::tasks::geometry::{
 };
 use shell::tasks::geometry::{
     task_detail_cancel_button_rect_scaled, task_detail_clear_button_rect_scaled,
-    task_detail_dialog_rect_scaled, task_detail_dismiss_button_rect_scaled,
+    task_detail_dialog_window_rect, task_detail_dialog_window_size_scaled,
+    task_detail_dismiss_button_rect_scaled,
 };
+#[cfg(test)]
+use shell::tasks::geometry::task_detail_dialog_rect_scaled;
 use shell::tasks::{ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, TaskDetailDialogClick};
 use shell::theme::ShellTheme;
 use shell::toolbar::{

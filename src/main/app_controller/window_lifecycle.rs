@@ -208,7 +208,10 @@ impl FikaWgpuApp {
         let changed = match kind {
             ShellDialogWindowKind::Create => self.scene.close_create_dialog(),
             ShellDialogWindowKind::OpenWith => self.scene.close_open_with_chooser(),
+            ShellDialogWindowKind::Properties => self.scene.close_properties_overlay(),
             ShellDialogWindowKind::Rename => self.scene.close_rename_dialog(),
+            ShellDialogWindowKind::TaskDetail => self.scene.close_task_detail_dialog(),
+            ShellDialogWindowKind::TrashConflict => self.scene.close_trash_conflict_dialog(),
         };
         let closed = self.close_dialog_window(kind);
         fika_dialog_trace!(
@@ -238,7 +241,10 @@ impl FikaWgpuApp {
         match kind {
             ShellDialogWindowKind::Create => self.sync_create_dialog_window(),
             ShellDialogWindowKind::OpenWith => self.sync_open_with_dialog_window(),
+            ShellDialogWindowKind::Properties => self.sync_properties_dialog_window(),
             ShellDialogWindowKind::Rename => self.sync_rename_dialog_window(),
+            ShellDialogWindowKind::TaskDetail => self.sync_task_detail_dialog_window(),
+            ShellDialogWindowKind::TrashConflict => self.sync_trash_conflict_dialog_window(),
         }
     }
 
@@ -417,5 +423,119 @@ impl FikaWgpuApp {
             self.open_with_dialog_surface_size()?,
             self.open_with_window_theme(),
         ))
+    }
+
+    fn properties_dialog_spec(&self) -> Option<ShellDialogWindowSpec> {
+        let overlay = self.scene.properties_overlay.as_ref()?;
+        Some(ShellDialogWindowSpec::fixed(
+            overlay.title.clone(),
+            properties_dialog_window_size_scaled(overlay, self.scene.ui_scale()),
+            self.open_with_window_theme(),
+        ))
+    }
+
+    fn ensure_properties_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+        let Some(spec) = self.properties_dialog_spec() else {
+            self.close_properties_dialog_window();
+            return false;
+        };
+        if !self.ensure_dialog_window(event_loop, ShellDialogWindowKind::Properties, &spec) {
+            self.scene.close_properties_overlay();
+            self.request_main_redraw();
+            return false;
+        }
+        true
+    }
+
+    fn sync_properties_dialog_window(&mut self) {
+        let Some(spec) = self.properties_dialog_spec() else {
+            self.close_properties_dialog_window();
+            return;
+        };
+        self.sync_dialog_window(ShellDialogWindowKind::Properties, &spec);
+    }
+
+    fn close_properties_dialog_window(&mut self) {
+        self.close_dialog_window(ShellDialogWindowKind::Properties);
+    }
+
+    fn task_detail_dialog_spec(&self) -> Option<ShellDialogWindowSpec> {
+        self.scene.task_detail_dialog.as_ref()?;
+        Some(ShellDialogWindowSpec::fixed(
+            "Task Details".to_string(),
+            task_detail_dialog_window_size_scaled(
+                self.scene.task_statuses.len(),
+                self.scene.ui_scale(),
+            ),
+            self.open_with_window_theme(),
+        ))
+    }
+
+    fn ensure_task_detail_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+        let Some(spec) = self.task_detail_dialog_spec() else {
+            self.close_task_detail_dialog_window();
+            return false;
+        };
+        if !self.ensure_dialog_window(event_loop, ShellDialogWindowKind::TaskDetail, &spec) {
+            self.scene.close_task_detail_dialog();
+            self.request_main_redraw();
+            return false;
+        }
+        true
+    }
+
+    fn sync_task_detail_dialog_window(&mut self) {
+        let Some(spec) = self.task_detail_dialog_spec() else {
+            self.close_task_detail_dialog_window();
+            return;
+        };
+        self.sync_dialog_window(ShellDialogWindowKind::TaskDetail, &spec);
+    }
+
+    fn close_task_detail_dialog_window(&mut self) {
+        self.close_dialog_window(ShellDialogWindowKind::TaskDetail);
+    }
+
+    fn finish_task_detail_dialog_state_change(&mut self) {
+        if self.scene.is_task_detail_dialog_open() {
+            self.sync_task_detail_dialog_window();
+        } else {
+            self.close_task_detail_dialog_window();
+        }
+        self.request_main_redraw();
+    }
+
+    fn trash_conflict_dialog_spec(&self) -> Option<ShellDialogWindowSpec> {
+        self.scene.trash_conflict_dialog.as_ref()?;
+        Some(ShellDialogWindowSpec::fixed(
+            "Restore Conflict".to_string(),
+            trash_conflict_dialog_window_size_scaled(self.scene.ui_scale()),
+            self.open_with_window_theme(),
+        ))
+    }
+
+    fn ensure_trash_conflict_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+        let Some(spec) = self.trash_conflict_dialog_spec() else {
+            self.close_trash_conflict_dialog_window();
+            return false;
+        };
+        if !self.ensure_dialog_window(event_loop, ShellDialogWindowKind::TrashConflict, &spec) {
+            self.scene.close_trash_conflict_dialog();
+            self.request_main_redraw();
+            return false;
+        }
+        true
+    }
+
+    fn sync_trash_conflict_dialog_window(&mut self) {
+        let Some(spec) = self.trash_conflict_dialog_spec() else {
+            self.close_trash_conflict_dialog_window();
+            return;
+        };
+        self.sync_dialog_window(ShellDialogWindowKind::TrashConflict, &spec);
+    }
+
+    fn close_trash_conflict_dialog_window(&mut self) {
+        self.close_dialog_window(ShellDialogWindowKind::TrashConflict);
     }
 }

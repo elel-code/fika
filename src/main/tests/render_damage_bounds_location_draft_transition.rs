@@ -37,7 +37,7 @@
     }
 
     #[test]
-    fn render_damage_bounds_properties_overlay_content_transition() {
+    fn render_damage_is_clean_for_detached_properties_content_transition() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         scene.properties_overlay = Some(ShellPropertiesOverlay {
@@ -71,10 +71,9 @@
 
         let damage = ShellRenderDamage::between(Some(&initial), &changed, false);
 
-        assert_eq!(damage.kind, ShellRenderDamageKind::Bounded);
-        assert_eq!(damage.rect_count, 1);
-        assert_eq!(damage.bounds, changed.properties_overlay_rect);
-        assert!(damage.area_px < rect_area(full_surface_rect(size)));
+        assert_eq!(damage.kind, ShellRenderDamageKind::Clean);
+        assert_eq!(damage.rect_count, 0);
+        assert_eq!(damage.bounds, None);
     }
 
     #[test]
@@ -116,21 +115,12 @@
         );
 
         let damage = ShellRenderDamage::between(Some(&initial), &changed, false);
-        let bounds = damage.bounds.unwrap();
         let task_area = changed.task_area_rect.unwrap();
-        let task_detail = changed.task_detail_dialog_rect.unwrap();
 
         assert_eq!(damage.kind, ShellRenderDamageKind::Bounded);
-        assert_eq!(damage.rect_count, 2);
-        assert!(bounds.x <= task_area.x);
-        assert!(bounds.y <= task_area.y);
-        assert!(bounds.right() >= task_area.right());
-        assert!(bounds.bottom() >= task_area.bottom());
-        assert!(bounds.x <= task_detail.x);
-        assert!(bounds.y <= task_detail.y);
-        assert!(bounds.right() >= task_detail.right());
-        assert!(bounds.bottom() >= task_detail.bottom());
-        assert!(rect_area(bounds) < rect_area(full_surface_rect(size)));
+        assert_eq!(damage.rect_count, 1);
+        assert_eq!(damage.bounds, Some(task_area));
+        assert!(rect_area(task_area) < rect_area(full_surface_rect(size)));
     }
 
     #[test]

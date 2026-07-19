@@ -10,7 +10,10 @@ const FIKA_WAYLAND_APP_ID: &str = "fika";
 pub(crate) enum ShellDialogWindowRole {
     Create,
     OpenWith,
+    Properties,
     Rename,
+    TaskDetail,
+    TrashConflict,
 }
 
 impl ShellDialogWindowRole {
@@ -18,7 +21,10 @@ impl ShellDialogWindowRole {
         match self {
             Self::Create => "fika-create-dialog",
             Self::OpenWith => "fika-open-with-dialog",
+            Self::Properties => "fika-properties-dialog",
             Self::Rename => "fika-rename-dialog",
+            Self::TaskDetail => "fika-task-detail-dialog",
+            Self::TrashConflict => "fika-trash-conflict-dialog",
         }
     }
 }
@@ -89,6 +95,18 @@ mod tests {
         assert_eq!(
             ShellDialogWindowRole::Rename.wayland_instance(),
             "fika-rename-dialog"
+        );
+        assert_eq!(
+            ShellDialogWindowRole::Properties.wayland_instance(),
+            "fika-properties-dialog"
+        );
+        assert_eq!(
+            ShellDialogWindowRole::TaskDetail.wayland_instance(),
+            "fika-task-detail-dialog"
+        );
+        assert_eq!(
+            ShellDialogWindowRole::TrashConflict.wayland_instance(),
+            "fika-trash-conflict-dialog"
         );
     }
 

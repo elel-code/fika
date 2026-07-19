@@ -211,6 +211,102 @@ impl WgpuState {
         )
     }
 
+    fn render_properties_dialog(
+        &mut self,
+        window: &dyn Window,
+        overlay: &ShellPropertiesOverlay,
+        viewport: DialogRenderViewport,
+        reason: &'static str,
+    ) -> ShellRenderOutcome {
+        let DialogRenderViewport {
+            popup_theme,
+            scale,
+            layout_size: _,
+        } = viewport;
+        self.render_detached_dialog(
+            DetachedDialogRenderRequest {
+                window,
+                viewport,
+                reason,
+                dialog_label: ShellDialogWindowKind::Properties.as_str(),
+            },
+            |vertices, text_builder, _icon_builder, size| {
+                shell::properties::paint::push_properties_dialog(
+                    overlay,
+                    popup_theme,
+                    scale,
+                    vertices,
+                    text_builder,
+                    size,
+                );
+            },
+        )
+    }
+
+    fn render_task_detail_dialog(
+        &mut self,
+        window: &dyn Window,
+        statuses: &ShellTaskStatusStore,
+        viewport: DialogRenderViewport,
+        reason: &'static str,
+    ) -> ShellRenderOutcome {
+        let DialogRenderViewport {
+            popup_theme,
+            scale,
+            layout_size: _,
+        } = viewport;
+        self.render_detached_dialog(
+            DetachedDialogRenderRequest {
+                window,
+                viewport,
+                reason,
+                dialog_label: ShellDialogWindowKind::TaskDetail.as_str(),
+            },
+            |vertices, text_builder, _icon_builder, size| {
+                shell::tasks::paint::push_task_detail_dialog(
+                    statuses,
+                    popup_theme,
+                    scale,
+                    vertices,
+                    text_builder,
+                    size,
+                );
+            },
+        )
+    }
+
+    fn render_trash_conflict_dialog(
+        &mut self,
+        window: &dyn Window,
+        dialog: &ShellTrashConflictDialog,
+        viewport: DialogRenderViewport,
+        reason: &'static str,
+    ) -> ShellRenderOutcome {
+        let DialogRenderViewport {
+            popup_theme,
+            scale,
+            layout_size: _,
+        } = viewport;
+        self.render_detached_dialog(
+            DetachedDialogRenderRequest {
+                window,
+                viewport,
+                reason,
+                dialog_label: ShellDialogWindowKind::TrashConflict.as_str(),
+            },
+            |vertices, text_builder, _icon_builder, size| {
+                push_trash_conflict_dialog_surface(
+                    dialog,
+                    popup_theme,
+                    scale,
+                    vertices,
+                    text_builder,
+                    size,
+                );
+            },
+        )
+    }
+
     fn render(
         &mut self,
         window: &dyn Window,

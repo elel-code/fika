@@ -36,24 +36,6 @@ impl FikaWgpuApp {
         size: PhysicalSize<u32>,
         shortcut: bool,
     ) -> ShellActionEffect {
-        if self.scene.is_trash_conflict_dialog_open() {
-            if escape_requested_for_key_event(event) {
-                let changed = self.scene.close_trash_conflict_dialog();
-                return ShellActionOutcome::redraw_if(changed).into();
-            }
-            return ShellActionOutcome::None.into();
-        }
-        if self.scene.is_task_detail_dialog_open() {
-            if escape_requested_for_key_event(event) {
-                let changed = self.scene.close_task_detail_dialog();
-                return ShellActionOutcome::redraw_if(changed).into();
-            }
-            return ShellActionOutcome::None.into();
-        }
-        if self.scene.is_properties_overlay_open() && escape_requested_for_key_event(event) {
-            let changed = self.scene.close_properties_overlay();
-            return ShellActionOutcome::redraw_if(changed).into();
-        }
         if self.scene.is_drop_menu_open() && escape_requested_for_key_event(event) {
             let changed = self.scene.close_drop_menu();
             return ShellActionOutcome::redraw_if(changed).into();

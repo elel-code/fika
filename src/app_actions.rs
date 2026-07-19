@@ -116,6 +116,9 @@ impl FikaWgpuApp {
             }
             ContextMenuActionDispatch::Properties => {
                 let changed = self.scene.open_properties_overlay_from_context();
+                if changed {
+                    self.ensure_properties_dialog_window(event_loop);
+                }
                 self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
             }
             ContextMenuActionDispatch::CreateNew => {

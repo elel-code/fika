@@ -242,6 +242,7 @@ fn trash_conflict_dialog_rect(
 ) -> ViewRect {
     trash_conflict_dialog_rect_scaled(_dialog, size, 1.0)
 }
+#[cfg(test)]
 fn trash_conflict_dialog_rect_scaled(
     _dialog: &ShellTrashConflictDialog,
     size: PhysicalSize<u32>,
@@ -261,6 +262,24 @@ fn trash_conflict_dialog_rect_scaled(
         y: ((height - dialog_height) / 2.0).max(margin),
         width: dialog_width,
         height: dialog_height,
+    }
+}
+fn trash_conflict_dialog_window_size_scaled(scale_factor: f32) -> PhysicalSize<u32> {
+    PhysicalSize::new(
+        scaled_dialog_metric(TRASH_CONFLICT_DIALOG_WIDTH, scale_factor)
+            .ceil()
+            .max(1.0) as u32,
+        scaled_dialog_metric(TRASH_CONFLICT_DIALOG_HEIGHT, scale_factor)
+            .ceil()
+            .max(1.0) as u32,
+    )
+}
+fn trash_conflict_dialog_window_rect(size: PhysicalSize<u32>) -> ViewRect {
+    ViewRect {
+        x: 0.0,
+        y: 0.0,
+        width: size.width.max(1) as f32,
+        height: size.height.max(1) as f32,
     }
 }
 #[cfg(test)]

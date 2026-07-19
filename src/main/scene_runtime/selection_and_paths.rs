@@ -442,6 +442,7 @@ impl ShellScene {
         true
     }
 
+    #[cfg(test)]
     fn trash_conflict_dialog_click_at_screen_point(
         &self,
         point: ViewPoint,
@@ -459,6 +460,24 @@ impl ShellScene {
             return TrashConflictDialogClick::Cancel;
         }
         if trash_conflict_dialog_replace_button_rect_scaled(rect, scale).contains(point) {
+            return TrashConflictDialogClick::Replace;
+        }
+        TrashConflictDialogClick::Inside
+    }
+
+    fn trash_conflict_dialog_window_click_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> TrashConflictDialogClick {
+        if self.trash_conflict_dialog.is_none() {
+            return TrashConflictDialogClick::Outside;
+        }
+        let rect = trash_conflict_dialog_window_rect(size);
+        if trash_conflict_dialog_cancel_button_rect_scaled(rect, self.ui_scale()).contains(point) {
+            return TrashConflictDialogClick::Cancel;
+        }
+        if trash_conflict_dialog_replace_button_rect_scaled(rect, self.ui_scale()).contains(point) {
             return TrashConflictDialogClick::Replace;
         }
         TrashConflictDialogClick::Inside

@@ -337,7 +337,7 @@
     }
 
     #[test]
-    fn render_dirty_key_can_ignore_properties_overlay_content_for_damage_detection() {
+    fn render_dirty_key_ignores_detached_properties_content() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         scene.properties_overlay = Some(ShellPropertiesOverlay {
@@ -353,7 +353,7 @@
         let changed = ShellRenderDirtyKey::from_scene(&scene, size);
         let changed_hoverless = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
 
-        assert_ne!(initial, changed);
+        assert_eq!(initial, changed);
         assert_eq!(initial_hoverless, changed_hoverless);
     }
 

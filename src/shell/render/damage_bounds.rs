@@ -176,17 +176,7 @@ fn hover_damage_rects(
         previous.location_draft_rect,
         current.location_draft_rect,
     );
-    push_stable_or_changed_damage_rect(
-        &mut rects,
-        previous.properties_overlay_rect,
-        current.properties_overlay_rect,
-    );
     push_stable_or_changed_damage_rect(&mut rects, previous.task_area_rect, current.task_area_rect);
-    push_stable_or_changed_damage_rect(
-        &mut rects,
-        previous.task_detail_dialog_rect,
-        current.task_detail_dialog_rect,
-    );
     rects
 }
 

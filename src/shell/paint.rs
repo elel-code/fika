@@ -1,12 +1,10 @@
 use crate::shell::file_item_view::style::DolphinItemPalette;
-use crate::shell::popup::style::PopupTheme;
 use crate::shell::theme::ShellTheme;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShellPaintPalettes {
     pub(crate) shell: ShellTheme,
     pub(crate) dolphin_item: DolphinItemPalette,
-    pub(crate) popup: PopupTheme,
 }
 
 impl ShellPaintPalettes {
@@ -14,7 +12,6 @@ impl ShellPaintPalettes {
         Self {
             shell,
             dolphin_item: DolphinItemPalette::from_shell_theme(shell),
-            popup: PopupTheme::from_shell_theme(shell),
         }
     }
 }
@@ -33,6 +30,5 @@ mod tests {
             palettes.dolphin_item,
             DolphinItemPalette::from_shell_theme(shell)
         );
-        assert_eq!(palettes.popup, PopupTheme::from_shell_theme(shell));
     }
 }

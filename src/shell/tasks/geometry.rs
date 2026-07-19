@@ -1,10 +1,12 @@
 use fika_core::ViewRect;
 use winit::dpi::PhysicalSize;
 
+#[cfg(test)]
+use crate::shell::metrics::TASK_DETAIL_DIALOG_MARGIN;
 use crate::shell::metrics::{
     TASK_DETAIL_BUTTON_GAP, TASK_DETAIL_BUTTON_HEIGHT, TASK_DETAIL_BUTTON_WIDTH,
-    TASK_DETAIL_DIALOG_MARGIN, TASK_DETAIL_DIALOG_WIDTH, TASK_DETAIL_ROW_HEIGHT,
-    TASK_DETAIL_TITLE_HEIGHT, scaled_dialog_metric,
+    TASK_DETAIL_DIALOG_WIDTH, TASK_DETAIL_ROW_HEIGHT, TASK_DETAIL_TITLE_HEIGHT,
+    scaled_dialog_metric,
 };
 
 #[cfg(test)]
@@ -12,6 +14,7 @@ pub(crate) fn task_detail_dialog_rect(task_count: usize, size: PhysicalSize<u32>
     task_detail_dialog_rect_scaled(task_count, size, 1.0)
 }
 
+#[cfg(test)]
 pub(crate) fn task_detail_dialog_rect_scaled(
     task_count: usize,
     size: PhysicalSize<u32>,
@@ -35,6 +38,33 @@ pub(crate) fn task_detail_dialog_rect_scaled(
         y: ((height - dialog_height) / 2.0).max(margin),
         width: dialog_width,
         height: dialog_height,
+    }
+}
+
+pub(crate) fn task_detail_dialog_window_size_scaled(
+    task_count: usize,
+    scale_factor: f32,
+) -> PhysicalSize<u32> {
+    let rows = task_count.clamp(1, 4) as f32;
+    PhysicalSize::new(
+        scaled_dialog_metric(TASK_DETAIL_DIALOG_WIDTH, scale_factor)
+            .ceil()
+            .max(1.0) as u32,
+        (scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale_factor)
+            + scaled_dialog_metric(18.0, scale_factor)
+            + rows * scaled_dialog_metric(TASK_DETAIL_ROW_HEIGHT, scale_factor)
+            + scaled_dialog_metric(48.0, scale_factor))
+        .ceil()
+        .max(1.0) as u32,
+    )
+}
+
+pub(crate) fn task_detail_dialog_window_rect(size: PhysicalSize<u32>) -> ViewRect {
+    ViewRect {
+        x: 0.0,
+        y: 0.0,
+        width: size.width.max(1) as f32,
+        height: size.height.max(1) as f32,
     }
 }
 

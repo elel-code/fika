@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use winit::cursor::CursorIcon;
 use winit::dpi::PhysicalPosition;
-use winit::event::{ButtonSource, ElementState, MouseButton};
+use winit::event::{ButtonSource, ElementState};
 use winit::event_loop::ActiveEventLoop;
 
 use super::outcome::{ShellActionEffect, ShellActionOutcome};
@@ -13,8 +13,6 @@ use super::pointer_route::{
     main_pointer_move_intent,
 };
 use crate::shell::selection::SelectionClick;
-use crate::shell::tasks::TaskDetailDialogClick;
-use crate::shell::trash_conflict::TrashConflictDialogClick;
 use crate::{
     FikaWgpuApp, ShellItemActivation, ShellPlaceActivation, view_point_from_physical_position,
 };
@@ -58,29 +56,17 @@ impl FikaWgpuApp {
 
         let intent =
             main_pointer_button_intent(state, mouse_button, self.main_pointer_button_snapshot());
-        let effect = self.dispatch_main_pointer_button_intent(
-            event_loop,
-            intent,
-            state,
-            mouse_button,
-            point,
-            size,
-        );
+        let effect =
+            self.dispatch_main_pointer_button_intent(event_loop, intent, state, point, size);
         self.apply_action_effect(event_loop, effect);
     }
 
     fn main_pointer_button_snapshot(&self) -> MainPointerButtonSnapshot {
-        MainPointerButtonSnapshot {
-            trash_conflict_dialog_open: self.scene.is_trash_conflict_dialog_open(),
-            task_detail_dialog_open: self.scene.is_task_detail_dialog_open(),
-            properties_overlay_open: self.scene.is_properties_overlay_open(),
-        }
+        MainPointerButtonSnapshot::default()
     }
 
     fn main_pointer_move_snapshot(&self) -> MainPointerMoveSnapshot {
-        MainPointerMoveSnapshot {
-            task_detail_dialog_open: self.scene.is_task_detail_dialog_open(),
-        }
+        MainPointerMoveSnapshot::default()
     }
 
     fn dispatch_main_pointer_move_intent(
@@ -107,20 +93,13 @@ impl FikaWgpuApp {
         event_loop: &dyn ActiveEventLoop,
         intent: MainPointerButtonIntent,
         state: ElementState,
-        mouse_button: MouseButton,
         point: crate::ViewPoint,
         size: winit::dpi::PhysicalSize<u32>,
     ) -> ShellActionEffect {
         match intent {
-            MainPointerButtonIntent::TrashConflict => self
-                .handle_trash_conflict_pointer_button(event_loop, state, mouse_button, point, size)
-                .into(),
-            MainPointerButtonIntent::TaskDetail => self
-                .handle_task_detail_pointer_button(state, mouse_button, point, size)
-                .into(),
-            MainPointerButtonIntent::PropertiesOverlay => self
-                .handle_properties_overlay_pointer_button(state, mouse_button, point, size)
-                .into(),
+            MainPointerButtonIntent::TrashConflict
+            | MainPointerButtonIntent::TaskDetail
+            | MainPointerButtonIntent::PropertiesOverlay => ShellActionOutcome::None.into(),
             MainPointerButtonIntent::MouseNavigation(action) => {
                 self.perform_path_navigation(event_loop, action);
                 ShellActionOutcome::None.into()
@@ -139,78 +118,6 @@ impl FikaWgpuApp {
                 self.apply_main_left_pointer_button_route(event_loop, state, point, size, route)
             }
             MainPointerButtonIntent::Ignore => ShellActionOutcome::None.into(),
-        }
-    }
-
-    fn handle_trash_conflict_pointer_button(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        state: ElementState,
-        mouse_button: MouseButton,
-        point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
-    ) -> ShellActionOutcome {
-        if state != ElementState::Pressed || mouse_button != MouseButton::Left {
-            return ShellActionOutcome::None;
-        }
-        match self
-            .scene
-            .trash_conflict_dialog_click_at_screen_point(point, size)
-        {
-            TrashConflictDialogClick::Outside | TrashConflictDialogClick::Cancel => {
-                let changed = self.scene.close_trash_conflict_dialog();
-                ShellActionOutcome::redraw_if(changed)
-            }
-            TrashConflictDialogClick::Replace => {
-                self.replace_trash_restore_conflicts(event_loop);
-                ShellActionOutcome::None
-            }
-            TrashConflictDialogClick::Inside => ShellActionOutcome::None,
-        }
-    }
-
-    fn handle_task_detail_pointer_button(
-        &mut self,
-        state: ElementState,
-        mouse_button: MouseButton,
-        point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
-    ) -> ShellActionOutcome {
-        if state != ElementState::Pressed || mouse_button != MouseButton::Left {
-            return ShellActionOutcome::None;
-        }
-        let changed = match self
-            .scene
-            .task_detail_dialog_click_at_screen_point(point, size)
-        {
-            TaskDetailDialogClick::Outside | TaskDetailDialogClick::Cancel => {
-                self.scene.close_task_detail_dialog()
-            }
-            TaskDetailDialogClick::Clear => self.scene.clear_task_statuses(),
-            TaskDetailDialogClick::Dismiss(index) => {
-                let (changed, task_id) = self.scene.dismiss_task_status(index);
-                if let Some(task_id) = task_id {
-                    self.cancel_task_if_running(task_id);
-                }
-                changed
-            }
-            TaskDetailDialogClick::Inside => false,
-        };
-        ShellActionOutcome::redraw_if(changed)
-    }
-
-    fn handle_properties_overlay_pointer_button(
-        &mut self,
-        state: ElementState,
-        mouse_button: MouseButton,
-        point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
-    ) -> ShellActionOutcome {
-        if state == ElementState::Pressed && mouse_button == MouseButton::Left {
-            let changed = self.scene.close_properties_overlay_if_outside(point, size);
-            ShellActionOutcome::redraw_if(changed)
-        } else {
-            ShellActionOutcome::None
         }
     }
 
@@ -268,6 +175,9 @@ impl FikaWgpuApp {
                     .scene
                     .open_task_detail_dialog_at_screen_point(point, size)
                     .unwrap_or(false);
+                if changed {
+                    self.ensure_task_detail_dialog_window(event_loop);
+                }
                 ShellActionOutcome::redraw_if(changed)
                     .with_redraw_if(location_blur_changed)
                     .into()

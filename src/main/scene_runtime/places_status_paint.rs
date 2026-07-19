@@ -250,187 +250,6 @@ impl ShellScene {
         }
     }
 
-    fn push_properties_overlay(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        popup_theme: PopupTheme,
-        size: PhysicalSize<u32>,
-    ) {
-        if let Some(overlay) = self.properties_overlay.as_ref() {
-            shell::properties::paint::push_properties_overlay(
-                overlay,
-                popup_theme,
-                self.ui_scale(),
-                vertices,
-                text,
-                size,
-            );
-        }
-    }
-
-    fn push_task_detail_dialog_overlay(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        popup_theme: PopupTheme,
-        size: PhysicalSize<u32>,
-    ) {
-        if self.task_detail_dialog.is_some() {
-            shell::tasks::paint::push_task_detail_dialog_overlay(
-                &self.task_statuses,
-                popup_theme,
-                self.ui_scale(),
-                vertices,
-                text,
-                size,
-            );
-        }
-    }
-
-    fn push_trash_conflict_dialog_overlay(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        popup_theme: PopupTheme,
-        size: PhysicalSize<u32>,
-    ) {
-        let Some(dialog) = self.trash_conflict_dialog.as_ref() else {
-            return;
-        };
-        let screen = ViewRect {
-            x: 0.0,
-            y: 0.0,
-            width: size.width.max(1) as f32,
-            height: size.height.max(1) as f32,
-        };
-        push_rect(vertices, screen, popup_theme.backdrop, size);
-        let scale = self.ui_scale();
-        let rect = trash_conflict_dialog_rect_scaled(dialog, size, scale);
-        let title_height = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_TITLE_HEIGHT, scale);
-        let margin = scaled_dialog_metric(16.0, scale);
-        push_clipped_rounded_rect(
-            vertices,
-            rect,
-            screen,
-            scaled_dialog_metric(8.0, scale),
-            popup_theme.surface,
-            size,
-        );
-        push_clipped_rect_outline(
-            vertices,
-            rect,
-            screen,
-            1.0,
-            popup_theme.button_warning,
-            size,
-        );
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: title_height,
-            },
-            popup_theme.warning_header,
-            size,
-        );
-        push_rect(
-            vertices,
-            ViewRect {
-                x: rect.x,
-                y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
-                width: rect.width,
-                height: scaled_dialog_metric(1.0, scale).max(1.0),
-            },
-            popup_theme.warning_divider,
-            size,
-        );
-        text.push_label(
-            "Restore Conflict",
-            ViewRect {
-                x: rect.x + margin,
-                y: rect.y + scaled_dialog_metric(12.0, scale),
-                width: (rect.width - margin * 2.0).max(1.0),
-                height: scaled_dialog_metric(18.0, scale),
-            },
-            rect,
-            popup_theme.warning_text,
-        );
-
-        let count = dialog.conflicts.len();
-        text.push_label(
-            &format!("{count} item(s) already exist at the original location."),
-            ViewRect {
-                x: rect.x + margin,
-                y: rect.y + title_height + scaled_dialog_metric(18.0, scale),
-                width: (rect.width - margin * 2.0).max(1.0),
-                height: scaled_dialog_metric(18.0, scale),
-            },
-            rect,
-            popup_theme.body_text,
-        );
-        if let Some(conflict) = dialog.first_conflict() {
-            text.push_label(
-                &format!("Original: {}", conflict.original_path.display()),
-                ViewRect {
-                    x: rect.x + margin,
-                    y: rect.y + title_height + scaled_dialog_metric(48.0, scale),
-                    width: (rect.width - margin * 2.0).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                popup_theme.soft_text,
-            );
-            text.push_label(
-                &format!("Trash: {}", conflict.trash_path.display()),
-                ViewRect {
-                    x: rect.x + margin,
-                    y: rect.y + title_height + scaled_dialog_metric(76.0, scale),
-                    width: (rect.width - margin * 2.0).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                popup_theme.soft_text,
-            );
-        }
-
-        let cancel = trash_conflict_dialog_cancel_button_rect_scaled(rect, scale);
-        let replace = trash_conflict_dialog_replace_button_rect_scaled(rect, scale);
-        for (label, button, active) in [("Cancel", cancel, false), ("Replace", replace, true)] {
-            push_clipped_rounded_rect(
-                vertices,
-                button,
-                rect,
-                scaled_dialog_metric(5.0, scale),
-                if active {
-                    popup_theme.button_warning
-                } else {
-                    popup_theme.button_secondary
-                },
-                size,
-            );
-            push_clipped_rect_outline(vertices, button, rect, 1.0, popup_theme.border, size);
-            text.push_label_aligned(
-                label,
-                ViewRect {
-                    x: button.x + scaled_dialog_metric(10.0, scale),
-                    y: button.y + scaled_dialog_metric(4.0, scale),
-                    width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
-                    height: scaled_dialog_metric(18.0, scale),
-                },
-                rect,
-                if active {
-                    popup_theme.inverse_text
-                } else {
-                    popup_theme.body_text
-                },
-                LabelAlignment::Center,
-            );
-        }
-    }
-
     fn content_origin_x(&self, size: PhysicalSize<u32>) -> f32 {
         let sidebar_width = self.places_sidebar_width(size);
         if sidebar_width <= 0.0 {
@@ -449,5 +268,138 @@ impl ShellScene {
             } else {
                 0.0
             }
+    }
+}
+
+pub(crate) fn push_trash_conflict_dialog_surface(
+    dialog: &ShellTrashConflictDialog,
+    popup_theme: PopupTheme,
+    scale: f32,
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    size: PhysicalSize<u32>,
+) {
+    let rect = trash_conflict_dialog_window_rect(size);
+    let title_height = scaled_dialog_metric(TRASH_CONFLICT_DIALOG_TITLE_HEIGHT, scale);
+    let margin = scaled_dialog_metric(16.0, scale);
+    push_clipped_rounded_rect(
+        vertices,
+        rect,
+        rect,
+        scaled_dialog_metric(8.0, scale),
+        popup_theme.surface,
+        size,
+    );
+    push_clipped_rect_outline(
+        vertices,
+        rect,
+        rect,
+        1.0,
+        popup_theme.button_warning,
+        size,
+    );
+    push_rect(
+        vertices,
+        ViewRect {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: title_height,
+        },
+        popup_theme.warning_header,
+        size,
+    );
+    push_rect(
+        vertices,
+        ViewRect {
+            x: rect.x,
+            y: rect.y + title_height - scaled_dialog_metric(1.0, scale).max(1.0),
+            width: rect.width,
+            height: scaled_dialog_metric(1.0, scale).max(1.0),
+        },
+        popup_theme.warning_divider,
+        size,
+    );
+    text.push_label(
+        "Restore Conflict",
+        ViewRect {
+            x: rect.x + margin,
+            y: rect.y + scaled_dialog_metric(12.0, scale),
+            width: (rect.width - margin * 2.0).max(1.0),
+            height: scaled_dialog_metric(18.0, scale),
+        },
+        rect,
+        popup_theme.warning_text,
+    );
+
+    let count = dialog.conflicts.len();
+    text.push_label(
+        &format!("{count} item(s) already exist at the original location."),
+        ViewRect {
+            x: rect.x + margin,
+            y: rect.y + title_height + scaled_dialog_metric(18.0, scale),
+            width: (rect.width - margin * 2.0).max(1.0),
+            height: scaled_dialog_metric(18.0, scale),
+        },
+        rect,
+        popup_theme.body_text,
+    );
+    if let Some(conflict) = dialog.first_conflict() {
+        text.push_label(
+            &format!("Original: {}", conflict.original_path.display()),
+            ViewRect {
+                x: rect.x + margin,
+                y: rect.y + title_height + scaled_dialog_metric(48.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
+            },
+            rect,
+            popup_theme.soft_text,
+        );
+        text.push_label(
+            &format!("Trash: {}", conflict.trash_path.display()),
+            ViewRect {
+                x: rect.x + margin,
+                y: rect.y + title_height + scaled_dialog_metric(76.0, scale),
+                width: (rect.width - margin * 2.0).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
+            },
+            rect,
+            popup_theme.soft_text,
+        );
+    }
+
+    let cancel = trash_conflict_dialog_cancel_button_rect_scaled(rect, scale);
+    let replace = trash_conflict_dialog_replace_button_rect_scaled(rect, scale);
+    for (label, button, active) in [("Cancel", cancel, false), ("Replace", replace, true)] {
+        push_clipped_rounded_rect(
+            vertices,
+            button,
+            rect,
+            scaled_dialog_metric(5.0, scale),
+            if active {
+                popup_theme.button_warning
+            } else {
+                popup_theme.button_secondary
+            },
+            size,
+        );
+        push_clipped_rect_outline(vertices, button, rect, 1.0, popup_theme.border, size);
+        text.push_label_aligned(
+            label,
+            ViewRect {
+                x: button.x + scaled_dialog_metric(10.0, scale),
+                y: button.y + scaled_dialog_metric(4.0, scale),
+                width: (button.width - scaled_dialog_metric(20.0, scale)).max(1.0),
+                height: scaled_dialog_metric(18.0, scale),
+            },
+            rect,
+            if active {
+                popup_theme.inverse_text
+            } else {
+                popup_theme.body_text
+            },
+            LabelAlignment::Center,
+        );
     }
 }

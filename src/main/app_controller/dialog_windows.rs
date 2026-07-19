@@ -61,6 +61,21 @@ impl FikaWgpuApp {
         {
             self.close_rename_dialog_window();
         }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Properties)
+            && !self.scene.is_properties_overlay_open()
+        {
+            self.close_properties_dialog_window();
+        }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::TaskDetail)
+            && !self.scene.is_task_detail_dialog_open()
+        {
+            self.close_task_detail_dialog_window();
+        }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::TrashConflict)
+            && !self.scene.is_trash_conflict_dialog_open()
+        {
+            self.close_trash_conflict_dialog_window();
+        }
         self.reconcile_open_with_dialog_lifecycle();
     }
 
@@ -110,6 +125,15 @@ impl FikaWgpuApp {
         }
         if self.dialog_windows.is_open(ShellDialogWindowKind::OpenWith) {
             self.sync_open_with_dialog_window();
+        }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Properties) {
+            self.sync_properties_dialog_window();
+        }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::TaskDetail) {
+            self.sync_task_detail_dialog_window();
+        }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::TrashConflict) {
+            self.sync_trash_conflict_dialog_window();
         }
         true
     }
@@ -336,6 +360,9 @@ impl FikaWgpuApp {
                 .scene
                 .open_open_with_chooser_for_autosmoke(&self.mime_applications),
             ShellDialogWindowKind::Rename => self.scene.open_rename_dialog_for_autosmoke(),
+            ShellDialogWindowKind::Properties
+            | ShellDialogWindowKind::TaskDetail
+            | ShellDialogWindowKind::TrashConflict => false,
         }
     }
 
@@ -348,6 +375,15 @@ impl FikaWgpuApp {
             ShellDialogWindowKind::Create => self.ensure_create_dialog_window(event_loop),
             ShellDialogWindowKind::OpenWith => self.ensure_open_with_dialog_window(event_loop),
             ShellDialogWindowKind::Rename => self.ensure_rename_dialog_window(event_loop),
+            ShellDialogWindowKind::Properties => {
+                self.ensure_properties_dialog_window(event_loop)
+            }
+            ShellDialogWindowKind::TaskDetail => {
+                self.ensure_task_detail_dialog_window(event_loop)
+            }
+            ShellDialogWindowKind::TrashConflict => {
+                self.ensure_trash_conflict_dialog_window(event_loop)
+            }
         }
     }
 

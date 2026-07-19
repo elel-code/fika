@@ -134,9 +134,6 @@ impl ShellScene {
         self.internal_drag.as_ref().is_some_and(|drag| drag.active)
             || self.drop_menu.is_some()
             || self.context_menu.is_some()
-            || self.properties_overlay.is_some()
-            || self.task_detail_dialog.is_some()
-            || self.trash_conflict_dialog.is_some()
     }
 
     fn close_drop_menu(&mut self) -> bool {

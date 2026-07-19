@@ -11,6 +11,7 @@ impl ShellScene {
         (true, dismissal.cancel_task_id)
     }
 
+    #[cfg(test)]
     fn task_detail_dialog_click_at_screen_point(
         &self,
         point: ViewPoint,
@@ -32,6 +33,29 @@ impl ShellScene {
         }
         for index in 0..self.task_statuses.len().min(4) {
             if task_detail_dismiss_button_rect_scaled(rect, index, scale).contains(point) {
+                return TaskDetailDialogClick::Dismiss(index);
+            }
+        }
+        TaskDetailDialogClick::Inside
+    }
+
+    fn task_detail_dialog_window_click_at_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> TaskDetailDialogClick {
+        if self.task_detail_dialog.is_none() {
+            return TaskDetailDialogClick::Outside;
+        }
+        let rect = task_detail_dialog_window_rect(size);
+        if task_detail_cancel_button_rect_scaled(rect, self.ui_scale()).contains(point) {
+            return TaskDetailDialogClick::Cancel;
+        }
+        if task_detail_clear_button_rect_scaled(rect, self.ui_scale()).contains(point) {
+            return TaskDetailDialogClick::Clear;
+        }
+        for index in 0..self.task_statuses.len().min(4) {
+            if task_detail_dismiss_button_rect_scaled(rect, index, self.ui_scale()).contains(point) {
                 return TaskDetailDialogClick::Dismiss(index);
             }
         }

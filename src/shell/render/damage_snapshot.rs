@@ -11,9 +11,7 @@ use crate::shell::menu_geometry::{
 };
 use crate::shell::metrics::*;
 use crate::shell::pane::ShellPaneProjection;
-use crate::shell::properties::geometry::properties_overlay_rect_scaled;
 use crate::shell::render::dirty_key::{ShellRenderDirtyKey, ShellRenderDirtyKeyContext};
-use crate::shell::tasks::geometry::task_detail_dialog_rect_scaled;
 use crate::{
     RubberBand, ShellPaneItemTarget, ShellScene, intersect_rect, pane_content_rect_to_screen,
 };
@@ -37,9 +35,7 @@ pub(crate) struct ShellRenderDamageSnapshot {
     pub(crate) drag_preview_rect: Option<ViewRect>,
     pub(crate) rubber_band_rect: Option<ViewRect>,
     pub(crate) location_draft_rect: Option<ViewRect>,
-    pub(crate) properties_overlay_rect: Option<ViewRect>,
     pub(crate) task_area_rect: Option<ViewRect>,
-    pub(crate) task_detail_dialog_rect: Option<ViewRect>,
     pub(super) size: PhysicalSize<u32>,
 }
 
@@ -132,14 +128,7 @@ impl ShellRenderDamageSnapshot {
         let location_draft_rect = scene
             .location_draft_pane()
             .and_then(|pane| scene.pane_path_bar_rect(pane, size));
-        let properties_overlay_rect = scene
-            .properties_overlay
-            .as_ref()
-            .map(|overlay| properties_overlay_rect_scaled(overlay, size, scene.ui_scale()));
         let task_area_rect = scene.places_task_area_rect(size);
-        let task_detail_dialog_rect = scene.task_detail_dialog.as_ref().map(|_| {
-            task_detail_dialog_rect_scaled(scene.task_statuses.len(), size, scene.ui_scale())
-        });
         let hoverless_dirty_key =
             ShellRenderDirtyKey::from_scene_ignoring_hover_with_context(scene, size, context);
         let folder_previewless_dirty_key =
@@ -168,9 +157,7 @@ impl ShellRenderDamageSnapshot {
             drag_preview_rect,
             rubber_band_rect,
             location_draft_rect,
-            properties_overlay_rect,
             task_area_rect,
-            task_detail_dialog_rect,
             size,
         }
     }

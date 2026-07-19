@@ -4,12 +4,12 @@ use winit::dpi::PhysicalSize;
 use crate::shell::metrics::{PROPERTIES_ROW_HEIGHT, PROPERTIES_TITLE_HEIGHT, scaled_dialog_metric};
 use crate::shell::popup::style::PopupTheme;
 use crate::shell::properties::ShellPropertiesOverlay;
-use crate::shell::properties::geometry::properties_overlay_rect_scaled;
+use crate::shell::properties::geometry::properties_dialog_window_rect;
 use crate::{
     QuadVertex, TextFrameBuilder, push_clipped_rect_outline, push_clipped_rounded_rect, push_rect,
 };
 
-pub(crate) fn push_properties_overlay(
+pub(crate) fn push_properties_dialog(
     overlay: &ShellPropertiesOverlay,
     theme: PopupTheme,
     scale: f32,
@@ -17,14 +17,20 @@ pub(crate) fn push_properties_overlay(
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
 ) {
-    let screen = ViewRect {
-        x: 0.0,
-        y: 0.0,
-        width: size.width.max(1) as f32,
-        height: size.height.max(1) as f32,
-    };
-    push_rect(vertices, screen, theme.backdrop, size);
-    let rect = properties_overlay_rect_scaled(overlay, size, scale);
+    let screen = properties_dialog_window_rect(size);
+    push_properties_contents(overlay, theme, scale, vertices, text, size, screen, screen);
+}
+
+fn push_properties_contents(
+    overlay: &ShellPropertiesOverlay,
+    theme: PopupTheme,
+    scale: f32,
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    size: PhysicalSize<u32>,
+    screen: ViewRect,
+    rect: ViewRect,
+) {
     let title_height = scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale);
     let row_height = scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale);
     let margin = scaled_dialog_metric(16.0, scale);

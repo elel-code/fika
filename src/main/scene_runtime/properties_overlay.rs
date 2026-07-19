@@ -37,6 +37,7 @@ impl ShellScene {
         true
     }
 
+    #[cfg(test)]
     fn close_properties_overlay_if_outside(
         &mut self,
         point: ViewPoint,

@@ -330,4 +330,162 @@ impl FikaWgpuApp {
             _ => {}
         }
     }
+
+    fn properties_dialog_window_event(
+        &mut self,
+        _event_loop: &dyn ActiveEventLoop,
+        event: WindowEvent,
+    ) {
+        if self.handle_common_dialog_window_event(ShellDialogWindowKind::Properties, &event) {
+            return;
+        }
+        match event {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } if event.state == ElementState::Pressed
+                && escape_requested_for_key_event(&event) =>
+            {
+                if self.close_dialog_state_and_window(ShellDialogWindowKind::Properties) {
+                    self.request_main_redraw();
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                self.render_properties_dialog_now("properties-dialog-redraw");
+            }
+            _ => {}
+        }
+    }
+
+    fn task_detail_dialog_window_event(
+        &mut self,
+        _event_loop: &dyn ActiveEventLoop,
+        event: WindowEvent,
+    ) {
+        if self.handle_common_dialog_window_event(ShellDialogWindowKind::TaskDetail, &event) {
+            return;
+        }
+        match event {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } if event.state == ElementState::Pressed
+                && escape_requested_for_key_event(&event) =>
+            {
+                if self.close_dialog_state_and_window(ShellDialogWindowKind::TaskDetail) {
+                    self.request_main_redraw();
+                }
+            }
+            WindowEvent::PointerButton {
+                state: ElementState::Pressed,
+                position,
+                button,
+                ..
+            } => {
+                if button.mouse_button() != Some(MouseButton::Left) {
+                    return;
+                }
+                let Some(size) = self
+                    .dialog_windows
+                    .layout_size(ShellDialogWindowKind::TaskDetail)
+                else {
+                    return;
+                };
+                let point = ViewPoint {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                };
+                match self
+                    .scene
+                    .task_detail_dialog_window_click_at_screen_point(point, size)
+                {
+                    TaskDetailDialogClick::Outside | TaskDetailDialogClick::Cancel => {
+                        self.close_dialog_state_and_window(ShellDialogWindowKind::TaskDetail);
+                        self.request_main_redraw();
+                    }
+                    TaskDetailDialogClick::Clear => {
+                        self.scene.clear_task_statuses();
+                        self.finish_task_detail_dialog_state_change();
+                    }
+                    TaskDetailDialogClick::Dismiss(index) => {
+                        let (changed, task_id) = self.scene.dismiss_task_status(index);
+                        if let Some(task_id) = task_id {
+                            self.cancel_task_if_running(task_id);
+                        }
+                        if changed {
+                            self.finish_task_detail_dialog_state_change();
+                        }
+                    }
+                    TaskDetailDialogClick::Inside => {}
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                self.render_task_detail_dialog_now("task-detail-dialog-redraw");
+            }
+            _ => {}
+        }
+    }
+
+    fn trash_conflict_dialog_window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        event: WindowEvent,
+    ) {
+        if self.handle_common_dialog_window_event(ShellDialogWindowKind::TrashConflict, &event) {
+            return;
+        }
+        match event {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } if event.state == ElementState::Pressed
+                && escape_requested_for_key_event(&event) =>
+            {
+                if self.close_dialog_state_and_window(ShellDialogWindowKind::TrashConflict) {
+                    self.request_main_redraw();
+                }
+            }
+            WindowEvent::PointerButton {
+                state: ElementState::Pressed,
+                position,
+                button,
+                ..
+            } => {
+                if button.mouse_button() != Some(MouseButton::Left) {
+                    return;
+                }
+                let Some(size) = self
+                    .dialog_windows
+                    .layout_size(ShellDialogWindowKind::TrashConflict)
+                else {
+                    return;
+                };
+                let point = ViewPoint {
+                    x: position.x as f32,
+                    y: position.y as f32,
+                };
+                match self
+                    .scene
+                    .trash_conflict_dialog_window_click_at_screen_point(point, size)
+                {
+                    TrashConflictDialogClick::Outside | TrashConflictDialogClick::Cancel => {
+                        self.close_dialog_state_and_window(ShellDialogWindowKind::TrashConflict);
+                        self.request_main_redraw();
+                    }
+                    TrashConflictDialogClick::Replace => {
+                        self.close_trash_conflict_dialog_window();
+                        self.replace_trash_restore_conflicts(event_loop);
+                    }
+                    TrashConflictDialogClick::Inside => {}
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                self.render_trash_conflict_dialog_now("trash-conflict-dialog-redraw");
+            }
+            _ => {}
+        }
+    }
 }

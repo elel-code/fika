@@ -448,19 +448,6 @@ impl ShellScene {
             self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
             self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, theme, size);
             self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
-            self.push_properties_overlay(&mut overlay_vertices, overlay_text, paint.popup, size);
-            self.push_task_detail_dialog_overlay(
-                &mut overlay_vertices,
-                overlay_text,
-                paint.popup,
-                size,
-            );
-            self.push_trash_conflict_dialog_overlay(
-                &mut overlay_vertices,
-                overlay_text,
-                paint.popup,
-                size,
-            );
         }
 
         SceneFrame {
