@@ -331,6 +331,16 @@ impl FikaWgpuApp {
                 self.toggle_user_dark_mode(),
                 "overflow-toggle-dark-mode",
             ),
+            Some(ShellOverflowMenuAction::ToggleBackgroundBlur) => ShellActionOutcome::present_if(
+                self.toggle_user_background_blur(),
+                "overflow-toggle-background-blur",
+            ),
+            Some(ShellOverflowMenuAction::SetWindowOpacity(percent)) => {
+                ShellActionOutcome::present_if(
+                    self.set_user_window_opacity_percent(percent),
+                    "overflow-set-window-opacity",
+                )
+            }
             None => ShellActionOutcome::Redraw,
         };
         outcome.with_redraw_if(location_blur_changed).into()

@@ -263,6 +263,8 @@ impl ShellScene {
                 self.show_hidden,
                 self.places_visible,
                 self.dark_mode,
+                self.background_blur,
+                self.window_opacity,
                 theme,
                 self.ui_scale(),
                 vertices,

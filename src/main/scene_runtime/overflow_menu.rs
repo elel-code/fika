@@ -14,7 +14,14 @@ impl ShellScene {
         self.overflow_menu = Some(ShellOverflowMenu::new(self.overflow_button_rect(size)));
         fika_log!(
             "[fika-wgpu] overflow-menu open=1 actions={}",
-            overflow_menu_items(self.show_hidden, self.places_visible, self.dark_mode).len()
+            overflow_menu_items(
+                self.show_hidden,
+                self.places_visible,
+                self.dark_mode,
+                self.background_blur,
+                self.window_opacity,
+            )
+            .len()
         );
         true
     }
@@ -69,13 +76,41 @@ impl ShellScene {
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> Option<ShellOverflowMenuAction> {
-        let action = self
+        let mut action = self
             .overflow_menu_row_at_screen_point(point, size)
             .and_then(|row| {
-                overflow_menu_items(self.show_hidden, self.places_visible, self.dark_mode)
-                    .get(row)
-                    .map(|item| item.action)
+                overflow_menu_items(
+                    self.show_hidden,
+                    self.places_visible,
+                    self.dark_mode,
+                    self.background_blur,
+                    self.window_opacity,
+                )
+                .get(row)
+                .map(|item| item.action)
             });
+        if matches!(action, Some(ShellOverflowMenuAction::SetWindowOpacity(_))) {
+            action = opacity_percent_at_screen_point(
+                self.overflow_menu.as_ref()?,
+                point,
+                size,
+                self.ui_scale(),
+            )
+            .map(ShellOverflowMenuAction::SetWindowOpacity)
+            .or(action);
+        }
+        let keep_open = matches!(action, Some(ShellOverflowMenuAction::SetWindowOpacity(_)));
+        if keep_open {
+            if let Some(action) = action {
+                self.overflow_menu_actions += 1;
+                fika_log!(
+                    "[fika-wgpu] overflow-menu action={} actions={}",
+                    action.as_str(),
+                    self.overflow_menu_actions
+                );
+            }
+            return action;
+        }
         let menu_was_open = self.overflow_menu.take().is_some();
         if let Some(action) = action {
             self.overflow_menu_actions += 1;
@@ -91,5 +126,22 @@ impl ShellScene {
             }
             None
         }
+    }
+
+    fn toggle_background_blur(&mut self) -> bool {
+        self.background_blur = !self.background_blur;
+        self.appearance_changes += 1;
+        true
+    }
+
+    fn set_window_opacity_percent(&mut self, percent: u8) -> bool {
+        let percent = window_opacity_percent(percent as f32 / 100.0);
+        let opacity = percent as f32 / 100.0;
+        if (self.window_opacity - opacity).abs() <= f32::EPSILON {
+            return false;
+        }
+        self.window_opacity = opacity;
+        self.appearance_changes += 1;
+        true
     }
 }

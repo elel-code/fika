@@ -96,12 +96,15 @@
         save_view_mode_setting(&settings_path, ShellViewMode::Details).unwrap();
         save_show_hidden_setting(&settings_path, true).unwrap();
         save_dark_mode_setting(&settings_path, true).unwrap();
+        save_window_effect_settings(&settings_path, true, 0.78).unwrap();
         let loaded = load_app_settings(&settings_path).unwrap();
         assert_eq!(loaded.places_sidebar.width, Some(288.0));
         assert_eq!(loaded.places_sidebar.visible, Some(true));
         assert_eq!(loaded.view.mode, Some(ShellViewMode::Details));
         assert_eq!(loaded.view.show_hidden, Some(true));
         assert_eq!(loaded.appearance.dark_mode, Some(true));
+        assert_eq!(loaded.appearance.background_blur, Some(true));
+        assert_eq!(loaded.appearance.window_opacity, Some(0.78));
         assert_eq!(
             startup_view_mode(ShellViewMode::Icons, false, &loaded),
             ShellViewMode::Details
@@ -112,6 +115,8 @@
         );
         assert!(startup_show_hidden(&loaded));
         assert!(startup_dark_mode(&loaded));
+        assert!(startup_background_blur(&loaded));
+        assert_eq!(startup_window_opacity(&loaded), 0.8);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -338,6 +343,8 @@
             filter_pattern: String::new(),
             show_hidden: false,
             dark_mode: false,
+            background_blur: false,
+            window_opacity: 1.0,
             places_visible: true,
             places_width: PLACES_SIDEBAR_WIDTH,
             places_scroll_y: 0.0,
@@ -401,6 +408,7 @@
             location_changes: 0,
             filter_changes: 0,
             hidden_changes: 0,
+            appearance_changes: 0,
             zoom_changes: 0,
             split_pane_changes: 0,
             dnd_hover_changes: 0,

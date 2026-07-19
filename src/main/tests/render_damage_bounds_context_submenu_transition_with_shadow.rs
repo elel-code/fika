@@ -441,6 +441,31 @@
     }
 
     #[test]
+    fn retained_scene_opacity_matches_surface_alpha_mode() {
+        let premultiplied = retained_scene_vertices_for_opacity(
+            0.75,
+            wgpu::CompositeAlphaMode::PreMultiplied,
+        );
+        assert!(premultiplied.iter().all(|vertex| vertex.color == [0.75; 4]));
+
+        let postmultiplied = retained_scene_vertices_for_opacity(
+            0.75,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+        );
+        assert!(
+            postmultiplied
+                .iter()
+                .all(|vertex| vertex.color == [1.0, 1.0, 1.0, 0.75])
+        );
+
+        let opaque = retained_scene_vertices_for_opacity(
+            0.75,
+            wgpu::CompositeAlphaMode::Opaque,
+        );
+        assert!(opaque.iter().all(|vertex| vertex.color == [1.0; 4]));
+    }
+
+    #[test]
     fn render_dirty_key_tracks_visible_entry_visual_state() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);

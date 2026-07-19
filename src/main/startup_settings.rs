@@ -134,8 +134,8 @@ use shell::open_with::{
 };
 use shell::options::{ShellViewMode, parse_start_options};
 use shell::overflow_menu::{
-    ShellOverflowMenu, ShellOverflowMenuAction, overflow_menu_items,
-    overflow_menu_row_at_screen_point,
+    ShellOverflowMenu, ShellOverflowMenuAction, opacity_percent_at_screen_point,
+    overflow_menu_items, overflow_menu_row_at_screen_point, window_opacity_percent,
 };
 #[cfg(test)]
 use shell::overflow_menu::overflow_menu_row_rect;
@@ -193,7 +193,9 @@ use shell::render::quad::{
 };
 use shell::render::retained::RetainedSceneRenderer;
 #[cfg(test)]
-use shell::render::retained::retained_scene_vertices;
+use shell::render::retained::{
+    retained_scene_vertices, retained_scene_vertices_for_opacity,
+};
 use shell::render::shaders::{TEXT_SHADER, TEXTURE_SHADER};
 use shell::render::texture::{AtlasRect, TextVertex, push_textured_rect};
 use shell::role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
@@ -268,6 +270,12 @@ fn startup_show_hidden(settings: &AppSettings) -> bool {
 fn startup_dark_mode(settings: &AppSettings) -> bool {
     settings.appearance.dark_mode.unwrap_or(false)
 }
+fn startup_background_blur(settings: &AppSettings) -> bool {
+    settings.appearance.background_blur.unwrap_or(false)
+}
+fn startup_window_opacity(settings: &AppSettings) -> f32 {
+    window_opacity_percent(settings.appearance.window_opacity.unwrap_or(1.0)) as f32 / 100.0
+}
 fn load_startup_app_settings(settings_path: &Path) -> AppSettings {
     match load_app_settings(settings_path) {
         Ok(settings) => settings,
@@ -298,6 +306,18 @@ fn save_dark_mode_setting(settings_path: &Path, dark_mode: bool) -> Result<(), S
     let mut settings = load_app_settings(settings_path)
         .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
     settings.appearance.dark_mode = Some(dark_mode);
+    save_app_settings(settings_path, &settings)
+        .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
+}
+fn save_window_effect_settings(
+    settings_path: &Path,
+    background_blur: bool,
+    window_opacity: f32,
+) -> Result<(), String> {
+    let mut settings = load_app_settings(settings_path)
+        .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
+    settings.appearance.background_blur = Some(background_blur);
+    settings.appearance.window_opacity = Some(window_opacity);
     save_app_settings(settings_path, &settings)
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
 }
@@ -333,6 +353,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let show_hidden = startup_show_hidden(&settings);
     let mut scene = ShellScene::load_with_hidden_visibility(options.path, view_mode, show_hidden)?;
     scene.dark_mode = startup_dark_mode(&settings);
+    scene.background_blur = startup_background_blur(&settings);
+    scene.window_opacity = startup_window_opacity(&settings);
 
     let event_loop = EventLoop::new()?;
     let event_loop_proxy = event_loop.create_proxy();

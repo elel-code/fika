@@ -143,6 +143,8 @@ impl ShellRenderDirtyKey {
         push_hash(&mut values, &scene.filter_pattern);
         push_bool(&mut values, scene.show_hidden);
         push_bool(&mut values, scene.dark_mode);
+        push_bool(&mut values, scene.background_blur);
+        push_f32(&mut values, scene.window_opacity);
         push_f32(&mut values, scene.split_pane_left_fraction);
         push_u64(
             &mut values,
@@ -297,6 +299,7 @@ impl ShellRenderDirtyKey {
             },
             scene.filter_changes,
             scene.hidden_changes,
+            scene.appearance_changes,
             scene.zoom_changes,
             scene.split_pane_changes,
             if options.include_dnd_hover {

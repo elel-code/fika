@@ -114,7 +114,7 @@ impl ShellDetachedDialogWindow {
         let window: Arc<dyn Window> = window.into();
         let renderer = match shared_renderer {
             Some(renderer) => WgpuState::new_with_shared_device(window.clone(), renderer),
-            None => WgpuState::new(window.clone()),
+            None => WgpuState::new(window.clone(), 1.0),
         }
         .map_err(|error| format!("{} dialog renderer init failed: {error}", kind.as_str()))?;
         fika_dialog_trace!(

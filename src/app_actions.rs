@@ -1,3 +1,4 @@
+mod appearance;
 mod clipboard;
 mod device;
 mod dialog_commit;

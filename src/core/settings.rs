@@ -11,6 +11,8 @@ const PLACES_SIDEBAR_VISIBLE_KEY: &str = "places.sidebar.visible";
 const VIEW_MODE_KEY: &str = "view.mode";
 const VIEW_SHOW_HIDDEN_KEY: &str = "view.show_hidden";
 const APPEARANCE_DARK_MODE_KEY: &str = "appearance.dark_mode";
+const APPEARANCE_BACKGROUND_BLUR_KEY: &str = "appearance.background_blur";
+const APPEARANCE_WINDOW_OPACITY_KEY: &str = "appearance.window_opacity";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppSettings {
@@ -34,6 +36,8 @@ pub struct ViewSettings {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AppearanceSettings {
     pub dark_mode: Option<bool>,
+    pub background_blur: Option<bool>,
+    pub window_opacity: Option<f32>,
 }
 
 pub fn default_app_settings_path() -> PathBuf {
@@ -107,6 +111,16 @@ pub fn parse_app_settings(contents: &str) -> AppSettings {
                     settings.appearance.dark_mode = Some(dark_mode);
                 }
             }
+            APPEARANCE_BACKGROUND_BLUR_KEY => {
+                if let Some(background_blur) = parse_bool(value) {
+                    settings.appearance.background_blur = Some(background_blur);
+                }
+            }
+            APPEARANCE_WINDOW_OPACITY_KEY => {
+                if let Some(window_opacity) = parse_finite_f32(value) {
+                    settings.appearance.window_opacity = Some(window_opacity);
+                }
+            }
             _ => {}
         }
     }
@@ -129,6 +143,16 @@ pub fn app_settings_tsv(settings: &AppSettings) -> String {
     }
     if let Some(dark_mode) = settings.appearance.dark_mode {
         lines.push(format!("{APPEARANCE_DARK_MODE_KEY}\t{dark_mode}"));
+    }
+    if let Some(background_blur) = settings.appearance.background_blur {
+        lines.push(format!(
+            "{APPEARANCE_BACKGROUND_BLUR_KEY}\t{background_blur}"
+        ));
+    }
+    if let Some(window_opacity) = settings.appearance.window_opacity {
+        lines.push(format!(
+            "{APPEARANCE_WINDOW_OPACITY_KEY}\t{window_opacity:.3}"
+        ));
     }
     if lines.is_empty() {
         String::new()
@@ -172,12 +196,16 @@ places.sidebar.visible\tfalse
 view.mode\tdetails
 view.show_hidden\ttrue
 appearance.dark_mode\ttrue
+appearance.background_blur\ttrue
+appearance.window_opacity\t0.825
 ignored.key\tvalue
 places.sidebar.width\tnan
 places.sidebar.visible\tmaybe
 view.mode\tunknown
 view.show_hidden\tmaybe
 appearance.dark_mode\tmaybe
+appearance.background_blur\tmaybe
+appearance.window_opacity\tnan
 ",
         );
 
@@ -186,6 +214,8 @@ appearance.dark_mode\tmaybe
         assert_eq!(settings.view.mode, Some(ViewMode::Details));
         assert_eq!(settings.view.show_hidden, Some(true));
         assert_eq!(settings.appearance.dark_mode, Some(true));
+        assert_eq!(settings.appearance.background_blur, Some(true));
+        assert_eq!(settings.appearance.window_opacity, Some(0.825));
     }
 
     #[test]
@@ -209,6 +239,8 @@ appearance.dark_mode\tmaybe
             },
             appearance: AppearanceSettings {
                 dark_mode: Some(true),
+                background_blur: Some(true),
+                window_opacity: Some(0.8),
             },
         };
 

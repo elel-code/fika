@@ -136,6 +136,43 @@
         assert_eq!(scene.overflow_menu_actions, 1);
 
         assert!(scene.toggle_overflow_menu(size));
+        let menu = scene.overflow_menu.unwrap();
+        let blur_row = overflow_menu_row_rect(&menu, size, scene.ui_scale(), 3).unwrap();
+        assert_eq!(
+            scene.activate_or_close_overflow_menu(
+                ViewPoint {
+                    x: blur_row.x + 8.0,
+                    y: blur_row.y + blur_row.height / 2.0,
+                },
+                size,
+            ),
+            Some(ShellOverflowMenuAction::ToggleBackgroundBlur)
+        );
+        assert!(!scene.is_overflow_menu_open());
+
+        assert!(scene.toggle_overflow_menu(size));
+        let menu = scene.overflow_menu.unwrap();
+        let track = shell::overflow_menu::overflow_opacity_track_rect(
+            &menu,
+            size,
+            scene.ui_scale(),
+        );
+        assert_eq!(
+            scene.activate_or_close_overflow_menu(
+                ViewPoint {
+                    x: track.x + track.width / 2.0,
+                    y: track.y,
+                },
+                size,
+            ),
+            Some(ShellOverflowMenuAction::SetWindowOpacity(60))
+        );
+        assert!(scene.is_overflow_menu_open());
+        assert!(scene.set_window_opacity_percent(60));
+        assert_eq!(scene.window_opacity, 0.6);
+
+        assert!(scene.close_overflow_menu());
+        assert!(scene.toggle_overflow_menu(size));
         assert!(scene.open_context_menu(ViewPoint { x: 500.0, y: 200.0 }, size));
         assert!(scene.is_context_menu_open());
         assert!(!scene.is_overflow_menu_open());

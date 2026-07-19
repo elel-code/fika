@@ -6,7 +6,11 @@ use crate::shell::menu_geometry::scaled_context_menu_metric;
 use crate::shell::metrics::{
     CONTEXT_MENU_ROW_HEIGHT, CONTEXT_MENU_TEXT_LINE_HEIGHT, CONTEXT_MENU_VERTICAL_PADDING,
 };
-use crate::shell::overflow_menu::{ShellOverflowMenu, overflow_menu_items, overflow_menu_rect};
+use crate::shell::overflow_menu::{
+    ShellOverflowMenu, ShellOverflowMenuAction, WINDOW_OPACITY_MAX_PERCENT,
+    WINDOW_OPACITY_MIN_PERCENT, overflow_menu_items, overflow_menu_rect,
+    overflow_opacity_track_rect,
+};
 use crate::shell::theme::ShellTheme;
 use crate::{LabelAlignment, QuadVertex, TextFrameBuilder, push_clipped_rounded_rect, push_rect};
 
@@ -15,6 +19,8 @@ pub(crate) fn push_overflow_menu_overlay(
     show_hidden: bool,
     places_visible: bool,
     dark_mode: bool,
+    background_blur: bool,
+    window_opacity: f32,
     theme: ShellTheme,
     scale: f32,
     vertices: &mut Vec<QuadVertex>,
@@ -47,9 +53,15 @@ pub(crate) fn push_overflow_menu_overlay(
         surface,
         size,
     );
-    for (row, item) in overflow_menu_items(show_hidden, places_visible, dark_mode)
-        .iter()
-        .enumerate()
+    for (row, item) in overflow_menu_items(
+        show_hidden,
+        places_visible,
+        dark_mode,
+        background_blur,
+        window_opacity,
+    )
+    .iter()
+    .enumerate()
     {
         let row_rect = ViewRect {
             x: rect.x,
@@ -60,6 +72,12 @@ pub(crate) fn push_overflow_menu_overlay(
         let hovered = menu.hovered_row == Some(row);
         if hovered {
             push_rect(vertices, row_rect, hover, size);
+        }
+        if let ShellOverflowMenuAction::SetWindowOpacity(percent) = item.action {
+            push_opacity_slider(
+                menu, row_rect, percent, rect, theme, scale, vertices, text, size,
+            );
+            continue;
         }
         let switch_rect = ViewRect {
             x: row_rect.right() - horizontal_padding - switch_width,
@@ -86,6 +104,81 @@ pub(crate) fn push_overflow_menu_overlay(
         push_switch(vertices, switch_rect, rect, item.active, theme, scale, size);
     }
     crate::push_clipped_rect_outline(vertices, rect, clip, 1.0, border, size);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_opacity_slider(
+    menu: &ShellOverflowMenu,
+    row: ViewRect,
+    percent: u8,
+    clip: ViewRect,
+    theme: ShellTheme,
+    scale: f32,
+    vertices: &mut Vec<QuadVertex>,
+    text: &mut TextFrameBuilder<'_>,
+    size: PhysicalSize<u32>,
+) {
+    let padding = scaled_context_menu_metric(12.0, scale);
+    let text_height = scaled_context_menu_metric(CONTEXT_MENU_TEXT_LINE_HEIGHT, scale);
+    let track = overflow_opacity_track_rect(menu, size, scale);
+    text.push_label_aligned(
+        "Window Opacity",
+        ViewRect {
+            x: row.x + padding,
+            y: row.y + (row.height - text_height) / 2.0,
+            width: (track.x - row.x - padding * 1.5).max(1.0),
+            height: text_height,
+        },
+        clip,
+        theme.primary_text(),
+        LabelAlignment::Start,
+    );
+    push_clipped_rounded_rect(
+        vertices,
+        track,
+        clip,
+        track.height / 2.0,
+        theme.divider(),
+        size,
+    );
+    let opacity_range = WINDOW_OPACITY_MAX_PERCENT - WINDOW_OPACITY_MIN_PERCENT;
+    let fraction = (percent.saturating_sub(WINDOW_OPACITY_MIN_PERCENT) as f32
+        / opacity_range.max(1) as f32)
+        .clamp(0.0, 1.0);
+    let progress = ViewRect {
+        width: (track.width * fraction).max(1.0),
+        ..track
+    };
+    push_clipped_rounded_rect(
+        vertices,
+        progress,
+        clip,
+        progress.height / 2.0,
+        theme.accent(),
+        size,
+    );
+    let knob_size = scaled_context_menu_metric(12.0, scale);
+    let knob = ViewRect {
+        x: (track.x + track.width * fraction - knob_size / 2.0)
+            .clamp(track.x - knob_size / 2.0, track.right() - knob_size / 2.0),
+        y: track.y + (track.height - knob_size) / 2.0,
+        width: knob_size,
+        height: knob_size,
+    };
+    push_clipped_rounded_rect(vertices, knob, clip, knob_size / 2.0, theme.accent(), size);
+    let value = format!("{percent}%");
+    text.push_label_aligned(
+        &value,
+        ViewRect {
+            x: track.right() + scaled_context_menu_metric(6.0, scale),
+            y: row.y + (row.height - text_height) / 2.0,
+            width: (row.right() - track.right() - padding).max(1.0),
+            height: text_height,
+        },
+        clip,
+        theme.muted_text(),
+        LabelAlignment::End,
+    );
 }
 
 fn push_switch(

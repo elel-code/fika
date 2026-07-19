@@ -1,5 +1,5 @@
 impl WgpuState {
-    fn new(window: Arc<dyn Window>) -> Result<Self, String> {
+    fn new(window: Arc<dyn Window>, window_opacity: f32) -> Result<Self, String> {
         let size = nonzero_size(window.surface_size());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
@@ -38,7 +38,15 @@ impl WgpuState {
         }))
         .map_err(|error| format!("request device: {error}"))?;
 
-        Self::from_surface_parts(size, instance, adapter, device, queue, surface)
+        Self::from_surface_parts(
+            size,
+            instance,
+            adapter,
+            device,
+            queue,
+            surface,
+            window_opacity,
+        )
     }
 
     fn new_with_shared_device(window: Arc<dyn Window>, shared: &Self) -> Result<Self, String> {
@@ -54,7 +62,7 @@ impl WgpuState {
             "[fika-wgpu] renderer-shared-device adapter={:?}",
             adapter.get_info().name
         );
-        Self::from_surface_parts(size, instance, adapter, device, queue, surface)
+        Self::from_surface_parts(size, instance, adapter, device, queue, surface, 1.0)
     }
 
     fn from_surface_parts(
@@ -64,6 +72,7 @@ impl WgpuState {
         device: wgpu::Device,
         queue: wgpu::Queue,
         surface: wgpu::Surface<'static>,
+        window_opacity: f32,
     ) -> Result<Self, String> {
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
@@ -81,12 +90,22 @@ impl WgpuState {
             .unwrap_or_else(|| capabilities.present_modes[0]);
         let alpha_mode = capabilities
             .alpha_modes
-            .first()
+            .iter()
             .copied()
+            .find(|mode| *mode == wgpu::CompositeAlphaMode::PreMultiplied)
+            .or_else(|| {
+                capabilities
+                    .alpha_modes
+                    .iter()
+                    .copied()
+                    .find(|mode| *mode == wgpu::CompositeAlphaMode::PostMultiplied)
+            })
+            .or_else(|| capabilities.alpha_modes.first().copied())
             .unwrap_or(wgpu::CompositeAlphaMode::Auto);
         fika_log!(
-            "[fika-wgpu] surface-format={format:?} srgb={}",
-            format.is_srgb() as u8
+            "[fika-wgpu] surface-format={format:?} srgb={} alpha={alpha_mode:?} opacity={:.2}",
+            format.is_srgb() as u8,
+            window_opacity,
         );
 
         let config = wgpu::SurfaceConfiguration {
@@ -106,7 +125,14 @@ impl WgpuState {
         let overlay_quad_renderer = QuadRenderer::new(&device, config.format);
         let icon_renderer = IconRenderer::new(&device, config.format);
         let text_renderer = TextRenderer::new(&device, config.format);
-        let retained_scene = RetainedSceneRenderer::new(&device, &queue, config.format, size);
+        let retained_scene = RetainedSceneRenderer::new(
+            &device,
+            &queue,
+            config.format,
+            size,
+            alpha_mode,
+            window_opacity,
+        );
 
         Ok(Self {
             quad_renderer,
@@ -159,6 +185,10 @@ impl WgpuState {
 
     fn resize(&mut self, size: PhysicalSize<u32>) {
         self.configure_surface(size, false);
+    }
+
+    fn set_window_opacity(&mut self, opacity: f32) {
+        self.retained_scene.set_opacity(&self.queue, opacity);
     }
 
     fn force_reconfigure(&mut self, size: PhysicalSize<u32>) {

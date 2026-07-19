@@ -78,6 +78,7 @@ impl ApplicationHandler for FikaWgpuApp {
 
         let attrs = WindowAttributes::default()
             .with_title(window_title(&self.scene))
+            .with_transparent(true)
             .with_surface_size(PhysicalSize::new(1100, 720));
         let attrs = apply_window_platform_semantics(event_loop, attrs, ShellWindowRole::Main);
 
@@ -91,7 +92,8 @@ impl ApplicationHandler for FikaWgpuApp {
         };
 
         let window: Arc<dyn Window> = window.into();
-        let mut renderer = match WgpuState::new(window.clone()) {
+        window.set_blur(self.scene.background_blur);
+        let mut renderer = match WgpuState::new(window.clone(), self.scene.window_opacity) {
             Ok(renderer) => renderer,
             Err(error) => {
                 fika_log!("[fika-wgpu] renderer init failed: {error}");

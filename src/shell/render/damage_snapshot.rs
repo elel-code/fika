@@ -338,7 +338,7 @@ fn overflow_menu_damage_state(
     let rect = overflow_menu_rect(menu, size, scale);
     let menu_damage = context_menu_shadow_damage_rect(rect, size, scale);
     let overlay_rect = union_rect(menu_damage, menu.anchor);
-    let row_rects = (0..overflow_menu_items(false, false, false).len())
+    let row_rects = (0..overflow_menu_items(false, false, false, false, 1.0).len())
         .filter_map(|row| overflow_menu_row_rect(menu, size, scale, row).map(|rect| (row, rect)))
         .collect();
     DropMenuDamageState {
