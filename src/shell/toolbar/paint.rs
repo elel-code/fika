@@ -23,6 +23,17 @@ impl ShellScene {
             vertices,
             ViewRect {
                 x: toolbar.x,
+                y: toolbar.y,
+                width: toolbar.width,
+                height: self.scale_metric(1.0).max(1.0),
+            },
+            theme.glass_highlight(),
+            size,
+        );
+        push_rect(
+            vertices,
+            ViewRect {
+                x: toolbar.x,
                 y: toolbar.bottom() - self.scale_metric(1.0).max(1.0),
                 width: toolbar.width,
                 height: self.scale_metric(1.0).max(1.0),
@@ -156,7 +167,7 @@ impl ShellScene {
         let overflow_hovered = self
             .pointer
             .is_some_and(|point| overflow_button.contains(point));
-        let overflow_active = self.overflow_menu.is_some() || overflow_hovered;
+        let overflow_active = overflow_hovered;
         let overflow_colors = theme.toolbar_button(overflow_active);
         if overflow_active {
             push_clipped_rounded_rect(

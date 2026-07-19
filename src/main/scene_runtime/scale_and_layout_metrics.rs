@@ -260,6 +260,7 @@ impl ShellScene {
         self.places_toggle_rect(size).contains(point)
     }
 
+    #[cfg(test)]
     fn toggle_places_at_screen_point(
         &mut self,
         point: ViewPoint,

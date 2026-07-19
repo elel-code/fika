@@ -6,7 +6,7 @@ use winit::cursor::{Cursor as WinitCursor, CursorIcon};
 use winit::dpi::PhysicalSize;
 use winit::event::{Modifiers, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Theme, Window, WindowAttributes, WindowId};
+use winit::window::{Theme, UserAttentionType, Window, WindowAttributes, WindowId};
 
 use crate::WgpuState;
 use crate::shell::window_semantics::{
@@ -19,6 +19,7 @@ pub(crate) enum ShellDialogWindowKind {
     OpenWith,
     Properties,
     Rename,
+    Settings,
     TaskDetail,
     TrashConflict,
 }
@@ -30,6 +31,7 @@ impl ShellDialogWindowKind {
             Self::OpenWith => "open-with",
             Self::Properties => "properties",
             Self::Rename => "rename",
+            Self::Settings => "settings",
             Self::TaskDetail => "task-detail",
             Self::TrashConflict => "trash-conflict",
         }
@@ -41,6 +43,7 @@ impl ShellDialogWindowKind {
             Self::OpenWith => ShellDialogWindowRole::OpenWith,
             Self::Properties => ShellDialogWindowRole::Properties,
             Self::Rename => ShellDialogWindowRole::Rename,
+            Self::Settings => ShellDialogWindowRole::Settings,
             Self::TaskDetail => ShellDialogWindowRole::TaskDetail,
             Self::TrashConflict => ShellDialogWindowRole::TrashConflict,
         }
@@ -114,7 +117,7 @@ impl ShellDetachedDialogWindow {
         let window: Arc<dyn Window> = window.into();
         let renderer = match shared_renderer {
             Some(renderer) => WgpuState::new_with_shared_device(window.clone(), renderer),
-            None => WgpuState::new(window.clone(), 1.0),
+            None => WgpuState::new(window.clone()),
         }
         .map_err(|error| format!("{} dialog renderer init failed: {error}", kind.as_str()))?;
         fika_dialog_trace!(
@@ -180,6 +183,13 @@ impl ShellDetachedDialogWindow {
         self.window.request_redraw();
     }
 
+    pub(crate) fn focus(&self) {
+        self.window.focus_window();
+        self.window
+            .request_user_attention(Some(UserAttentionType::Informational));
+        self.window.request_redraw();
+    }
+
     pub(crate) fn set_cursor(&mut self, cursor_icon: CursorIcon) {
         if self.cursor_icon == cursor_icon {
             return;
@@ -226,6 +236,7 @@ pub(crate) struct ShellDialogWindows {
     open_with: Option<ShellDetachedDialogWindow>,
     properties: Option<ShellDetachedDialogWindow>,
     rename: Option<ShellDetachedDialogWindow>,
+    settings: Option<ShellDetachedDialogWindow>,
     task_detail: Option<ShellDetachedDialogWindow>,
     trash_conflict: Option<ShellDetachedDialogWindow>,
     deferred_closes: VecDeque<ShellDeferredDialogClose>,
@@ -239,6 +250,7 @@ impl ShellDialogWindows {
             || self.open_with.is_some()
             || self.properties.is_some()
             || self.rename.is_some()
+            || self.settings.is_some()
             || self.task_detail.is_some()
             || self.trash_conflict.is_some()
     }
@@ -253,6 +265,7 @@ impl ShellDialogWindows {
             ShellDialogWindowKind::OpenWith => self.open_with.as_ref(),
             ShellDialogWindowKind::Properties => self.properties.as_ref(),
             ShellDialogWindowKind::Rename => self.rename.as_ref(),
+            ShellDialogWindowKind::Settings => self.settings.as_ref(),
             ShellDialogWindowKind::TaskDetail => self.task_detail.as_ref(),
             ShellDialogWindowKind::TrashConflict => self.trash_conflict.as_ref(),
         }
@@ -267,6 +280,7 @@ impl ShellDialogWindows {
             ShellDialogWindowKind::OpenWith => self.open_with.as_mut(),
             ShellDialogWindowKind::Properties => self.properties.as_mut(),
             ShellDialogWindowKind::Rename => self.rename.as_mut(),
+            ShellDialogWindowKind::Settings => self.settings.as_mut(),
             ShellDialogWindowKind::TaskDetail => self.task_detail.as_mut(),
             ShellDialogWindowKind::TrashConflict => self.trash_conflict.as_mut(),
         }
@@ -339,6 +353,7 @@ impl ShellDialogWindows {
             ShellDialogWindowKind::OpenWith => self.open_with = Some(window),
             ShellDialogWindowKind::Properties => self.properties = Some(window),
             ShellDialogWindowKind::Rename => self.rename = Some(window),
+            ShellDialogWindowKind::Settings => self.settings = Some(window),
             ShellDialogWindowKind::TaskDetail => self.task_detail = Some(window),
             ShellDialogWindowKind::TrashConflict => self.trash_conflict = Some(window),
         }
@@ -350,6 +365,7 @@ impl ShellDialogWindows {
             ShellDialogWindowKind::OpenWith => self.open_with.take(),
             ShellDialogWindowKind::Properties => self.properties.take(),
             ShellDialogWindowKind::Rename => self.rename.take(),
+            ShellDialogWindowKind::Settings => self.settings.take(),
             ShellDialogWindowKind::TaskDetail => self.task_detail.take(),
             ShellDialogWindowKind::TrashConflict => self.trash_conflict.take(),
         };
@@ -407,6 +423,7 @@ impl ShellDialogWindows {
             self.open_with.take(),
             self.properties.take(),
             self.rename.take(),
+            self.settings.take(),
             self.task_detail.take(),
             self.trash_conflict.take(),
         ]
@@ -436,6 +453,7 @@ impl ShellDialogWindows {
             self.open_with.as_ref(),
             self.properties.as_ref(),
             self.rename.as_ref(),
+            self.settings.as_ref(),
             self.task_detail.as_ref(),
             self.trash_conflict.as_ref(),
         ]

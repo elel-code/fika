@@ -12,6 +12,7 @@ pub(crate) enum ShellDialogWindowRole {
     OpenWith,
     Properties,
     Rename,
+    Settings,
     TaskDetail,
     TrashConflict,
 }
@@ -23,6 +24,7 @@ impl ShellDialogWindowRole {
             Self::OpenWith => "fika-open-with-dialog",
             Self::Properties => "fika-properties-dialog",
             Self::Rename => "fika-rename-dialog",
+            Self::Settings => "fika-settings-dialog",
             Self::TaskDetail => "fika-task-detail-dialog",
             Self::TrashConflict => "fika-trash-conflict-dialog",
         }
@@ -99,6 +101,10 @@ mod tests {
         assert_eq!(
             ShellDialogWindowRole::Properties.wayland_instance(),
             "fika-properties-dialog"
+        );
+        assert_eq!(
+            ShellDialogWindowRole::Settings.wayland_instance(),
+            "fika-settings-dialog"
         );
         assert_eq!(
             ShellDialogWindowRole::TaskDetail.wayland_instance(),

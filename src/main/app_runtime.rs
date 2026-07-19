@@ -17,6 +17,7 @@ struct FikaWgpuApp {
     // Drop order matters: renderer owns a surface tied to the window handle.
     renderer: Option<WgpuState>,
     dialog_windows: ShellDialogWindows,
+    settings_dialog: ShellSettingsDialogState,
     clipboard: Option<ShellClipboard>,
     window: Option<Arc<dyn Window>>,
     cursor_icon: CursorIcon,
@@ -63,6 +64,7 @@ struct OutgoingDndTransfer {
 include!("app_controller/window_lifecycle.rs");
 include!("app_controller/dialog_windows.rs");
 include!("app_controller/async_tasks.rs");
+include!("app_controller/settings_window.rs");
 impl ApplicationHandler for FikaWgpuApp {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.drive_directory_watchers(event_loop);
@@ -93,7 +95,7 @@ impl ApplicationHandler for FikaWgpuApp {
 
         let window: Arc<dyn Window> = window.into();
         window.set_blur(self.scene.background_blur);
-        let mut renderer = match WgpuState::new(window.clone(), self.scene.window_opacity) {
+        let mut renderer = match WgpuState::new(window.clone()) {
             Ok(renderer) => renderer,
             Err(error) => {
                 fika_log!("[fika-wgpu] renderer init failed: {error}");
@@ -268,6 +270,10 @@ impl ApplicationHandler for FikaWgpuApp {
                 }
                 ShellDialogWindowKind::Rename => {
                     self.rename_dialog_window_event(event_loop, event);
+                    return;
+                }
+                ShellDialogWindowKind::Settings => {
+                    self.settings_dialog_window_event(event_loop, event);
                     return;
                 }
                 ShellDialogWindowKind::TaskDetail => {

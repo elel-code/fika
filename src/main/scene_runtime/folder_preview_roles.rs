@@ -287,6 +287,18 @@ impl ShellScene {
                 theme.sidebar(),
                 size,
             );
+            push_clipped_rect(
+                vertices,
+                ViewRect {
+                    x: inner_panel.x + panel_radius,
+                    y: inner_panel.y,
+                    width: (inner_panel.width - panel_radius * 2.0).max(1.0),
+                    height: self.scale_metric(1.0).max(1.0),
+                },
+                inner_panel,
+                theme.glass_highlight(),
+                size,
+            );
         }
         push_rect(
             vertices,

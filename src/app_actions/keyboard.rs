@@ -44,10 +44,6 @@ impl FikaWgpuApp {
             let changed = self.scene.close_context_menu();
             return ShellActionOutcome::redraw_if(changed).into();
         }
-        if self.scene.is_overflow_menu_open() && escape_requested_for_key_event(event) {
-            let changed = self.scene.close_overflow_menu();
-            return ShellActionOutcome::redraw_if(changed).into();
-        }
         if dark_mode_toggle_requested_for_key_event(
             event,
             shortcut,

@@ -205,9 +205,6 @@ fn view_point_from_physical_position(position: PhysicalPosition<f64>) -> ViewPoi
 fn point_distance(left: ViewPoint, right: ViewPoint) -> f32 {
     ((left.x - right.x).powi(2) + (left.y - right.y).powi(2)).sqrt()
 }
-fn view_mode_clear_color(view_mode: ShellViewMode, dark_mode: bool) -> wgpu::Color {
-    ShellTheme::for_dark_mode(dark_mode).view_mode_clear(view_mode)
-}
 fn details_size_label(entry: &Entry) -> String {
     if entry.is_dir {
         "Folder".to_string()

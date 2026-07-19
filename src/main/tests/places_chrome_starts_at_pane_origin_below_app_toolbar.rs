@@ -114,68 +114,40 @@
     }
 
     #[test]
-    fn overflow_menu_routes_actions_and_is_mutually_exclusive_with_context_menu() {
+    fn settings_dialog_routes_actions_and_updates_glass_opacity() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
-        let size = PhysicalSize::new(700, 320);
-
-        assert!(scene.toggle_overflow_menu(size));
-        assert!(scene.is_overflow_menu_open());
-        let menu = scene.overflow_menu.unwrap();
-        let row = overflow_menu_row_rect(&menu, size, scene.ui_scale(), 0).unwrap();
-        assert_eq!(
-            scene.activate_or_close_overflow_menu(
-                ViewPoint {
-                    x: row.x + 8.0,
-                    y: row.y + row.height / 2.0,
-                },
-                size,
-            ),
-            Some(ShellOverflowMenuAction::ToggleHiddenFiles)
-        );
-        assert!(!scene.is_overflow_menu_open());
-        assert_eq!(scene.overflow_menu_actions, 1);
-
-        assert!(scene.toggle_overflow_menu(size));
-        let menu = scene.overflow_menu.unwrap();
-        let blur_row = overflow_menu_row_rect(&menu, size, scene.ui_scale(), 3).unwrap();
-        assert_eq!(
-            scene.activate_or_close_overflow_menu(
-                ViewPoint {
-                    x: blur_row.x + 8.0,
-                    y: blur_row.y + blur_row.height / 2.0,
-                },
-                size,
-            ),
-            Some(ShellOverflowMenuAction::ToggleBackgroundBlur)
-        );
-        assert!(!scene.is_overflow_menu_open());
-
-        assert!(scene.toggle_overflow_menu(size));
-        let menu = scene.overflow_menu.unwrap();
-        let track = shell::overflow_menu::overflow_opacity_track_rect(
-            &menu,
+        let size = shell::settings::settings_dialog_window_size_scaled(scene.ui_scale());
+        let hidden_row = shell::settings::settings_dialog_row_rect(
             size,
             scene.ui_scale(),
-        );
+            0,
+        )
+        .unwrap();
         assert_eq!(
-            scene.activate_or_close_overflow_menu(
+            settings_action_at_screen_point(
+                ViewPoint {
+                    x: hidden_row.x + 8.0,
+                    y: hidden_row.y + hidden_row.height / 2.0,
+                },
+                size,
+                scene.ui_scale(),
+            ),
+            Some(ShellSettingsAction::ToggleHiddenFiles)
+        );
+        let track = shell::settings::settings_dialog_opacity_track_rect(size, scene.ui_scale());
+        assert_eq!(
+            settings_action_at_screen_point(
                 ViewPoint {
                     x: track.x + track.width / 2.0,
                     y: track.y,
                 },
                 size,
+                scene.ui_scale(),
             ),
-            Some(ShellOverflowMenuAction::SetWindowOpacity(60))
+            Some(ShellSettingsAction::SetBackgroundOpacity(60))
         );
-        assert!(scene.is_overflow_menu_open());
-        assert!(scene.set_window_opacity_percent(60));
-        assert_eq!(scene.window_opacity, 0.6);
-
-        assert!(scene.close_overflow_menu());
-        assert!(scene.toggle_overflow_menu(size));
-        assert!(scene.open_context_menu(ViewPoint { x: 500.0, y: 200.0 }, size));
-        assert!(scene.is_context_menu_open());
-        assert!(!scene.is_overflow_menu_open());
+        assert!(scene.set_background_opacity_percent(60));
+        assert_eq!(scene.background_opacity, 0.6);
     }
 
     #[test]

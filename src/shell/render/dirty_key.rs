@@ -7,7 +7,6 @@ use crate::shell::context_menu::ShellContextMenu;
 use crate::shell::drop_menu::{ShellDropMenu, ShellDropTarget};
 use crate::shell::location::ShellLocationDraft;
 use crate::shell::options::ShellViewMode;
-use crate::shell::overflow_menu::ShellOverflowMenu;
 use crate::shell::pane::{ShellPaneId, ShellPaneProjection, ShellPaneState};
 use crate::{
     FolderPreviewRoleKey, ItemPixmapLayout, RubberBand, ShellFolderPreviewRoleRuntime,
@@ -144,7 +143,7 @@ impl ShellRenderDirtyKey {
         push_bool(&mut values, scene.show_hidden);
         push_bool(&mut values, scene.dark_mode);
         push_bool(&mut values, scene.background_blur);
-        push_f32(&mut values, scene.window_opacity);
+        push_f32(&mut values, scene.background_opacity);
         push_f32(&mut values, scene.split_pane_left_fraction);
         push_u64(
             &mut values,
@@ -251,15 +250,6 @@ impl ShellRenderDirtyKey {
             },
             options.include_drop_menu_hover,
         );
-        push_overflow_menu(
-            &mut values,
-            if options.include_overflow_menu {
-                scene.overflow_menu.as_ref()
-            } else {
-                None
-            },
-            options.include_overflow_menu_hover,
-        );
         push_u64(&mut values, scene.task_statuses.len() as u64);
 
         for value in [
@@ -330,8 +320,6 @@ struct ShellRenderDirtyKeyOptions {
     include_context_menu_hover: bool,
     include_drop_menu: bool,
     include_drop_menu_hover: bool,
-    include_overflow_menu: bool,
-    include_overflow_menu_hover: bool,
     include_dnd_hover: bool,
     include_internal_drag: bool,
     include_places_scroll: bool,
@@ -351,8 +339,6 @@ impl Default for ShellRenderDirtyKeyOptions {
             include_context_menu_hover: true,
             include_drop_menu: true,
             include_drop_menu_hover: true,
-            include_overflow_menu: true,
-            include_overflow_menu_hover: true,
             include_dnd_hover: true,
             include_internal_drag: true,
             include_places_scroll: true,
@@ -374,8 +360,6 @@ impl ShellRenderDirtyKeyOptions {
             include_context_menu_hover: false,
             include_drop_menu: false,
             include_drop_menu_hover: false,
-            include_overflow_menu: false,
-            include_overflow_menu_hover: false,
             include_dnd_hover: false,
             include_internal_drag: false,
             include_places_scroll: false,
@@ -731,26 +715,6 @@ fn push_drop_menu(values: &mut Vec<u64>, menu: Option<&ShellDropMenu>, include_h
             }
             push_hash(values, &menu.target_dir);
             push_drop_target(values, Some(&menu.target));
-        }
-        None => push_bool(values, false),
-    }
-}
-
-fn push_overflow_menu(
-    values: &mut Vec<u64>,
-    menu: Option<&ShellOverflowMenu>,
-    include_hover: bool,
-) {
-    match menu {
-        Some(menu) => {
-            push_bool(values, true);
-            push_f32(values, menu.anchor.x);
-            push_f32(values, menu.anchor.y);
-            push_f32(values, menu.anchor.width);
-            push_f32(values, menu.anchor.height);
-            if include_hover {
-                push_option_usize(values, menu.hovered_row);
-            }
         }
         None => push_bool(values, false),
     }

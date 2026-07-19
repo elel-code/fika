@@ -28,6 +28,7 @@ impl FikaWgpuApp {
             outgoing_dnd_start_failed: false,
             renderer: None,
             dialog_windows: ShellDialogWindows::default(),
+            settings_dialog: ShellSettingsDialogState::default(),
             clipboard: None,
             window: None,
             cursor_icon: CursorIcon::Default,
@@ -210,6 +211,10 @@ impl FikaWgpuApp {
             ShellDialogWindowKind::OpenWith => self.scene.close_open_with_chooser(),
             ShellDialogWindowKind::Properties => self.scene.close_properties_overlay(),
             ShellDialogWindowKind::Rename => self.scene.close_rename_dialog(),
+            ShellDialogWindowKind::Settings => {
+                self.settings_dialog.reset();
+                true
+            }
             ShellDialogWindowKind::TaskDetail => self.scene.close_task_detail_dialog(),
             ShellDialogWindowKind::TrashConflict => self.scene.close_trash_conflict_dialog(),
         };
@@ -243,6 +248,7 @@ impl FikaWgpuApp {
             ShellDialogWindowKind::OpenWith => self.sync_open_with_dialog_window(),
             ShellDialogWindowKind::Properties => self.sync_properties_dialog_window(),
             ShellDialogWindowKind::Rename => self.sync_rename_dialog_window(),
+            ShellDialogWindowKind::Settings => self.sync_settings_dialog_window(),
             ShellDialogWindowKind::TaskDetail => self.sync_task_detail_dialog_window(),
             ShellDialogWindowKind::TrashConflict => self.sync_trash_conflict_dialog_window(),
         }

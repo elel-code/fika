@@ -129,6 +129,9 @@ impl FikaWgpuApp {
         if self.dialog_windows.is_open(ShellDialogWindowKind::Properties) {
             self.sync_properties_dialog_window();
         }
+        if self.dialog_windows.is_open(ShellDialogWindowKind::Settings) {
+            self.sync_settings_dialog_window();
+        }
         if self.dialog_windows.is_open(ShellDialogWindowKind::TaskDetail) {
             self.sync_task_detail_dialog_window();
         }
@@ -360,6 +363,7 @@ impl FikaWgpuApp {
                 .scene
                 .open_open_with_chooser_for_autosmoke(&self.mime_applications),
             ShellDialogWindowKind::Rename => self.scene.open_rename_dialog_for_autosmoke(),
+            ShellDialogWindowKind::Settings => true,
             ShellDialogWindowKind::Properties
             | ShellDialogWindowKind::TaskDetail
             | ShellDialogWindowKind::TrashConflict => false,
@@ -378,6 +382,7 @@ impl FikaWgpuApp {
             ShellDialogWindowKind::Properties => {
                 self.ensure_properties_dialog_window(event_loop)
             }
+            ShellDialogWindowKind::Settings => self.ensure_settings_dialog_window(event_loop),
             ShellDialogWindowKind::TaskDetail => {
                 self.ensure_task_detail_dialog_window(event_loop)
             }

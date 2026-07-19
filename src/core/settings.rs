@@ -12,7 +12,7 @@ const VIEW_MODE_KEY: &str = "view.mode";
 const VIEW_SHOW_HIDDEN_KEY: &str = "view.show_hidden";
 const APPEARANCE_DARK_MODE_KEY: &str = "appearance.dark_mode";
 const APPEARANCE_BACKGROUND_BLUR_KEY: &str = "appearance.background_blur";
-const APPEARANCE_WINDOW_OPACITY_KEY: &str = "appearance.window_opacity";
+const APPEARANCE_BACKGROUND_OPACITY_KEY: &str = "appearance.background_opacity";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppSettings {
@@ -37,7 +37,7 @@ pub struct ViewSettings {
 pub struct AppearanceSettings {
     pub dark_mode: Option<bool>,
     pub background_blur: Option<bool>,
-    pub window_opacity: Option<f32>,
+    pub background_opacity: Option<f32>,
 }
 
 pub fn default_app_settings_path() -> PathBuf {
@@ -116,9 +116,9 @@ pub fn parse_app_settings(contents: &str) -> AppSettings {
                     settings.appearance.background_blur = Some(background_blur);
                 }
             }
-            APPEARANCE_WINDOW_OPACITY_KEY => {
-                if let Some(window_opacity) = parse_finite_f32(value) {
-                    settings.appearance.window_opacity = Some(window_opacity);
+            APPEARANCE_BACKGROUND_OPACITY_KEY => {
+                if let Some(background_opacity) = parse_finite_f32(value) {
+                    settings.appearance.background_opacity = Some(background_opacity);
                 }
             }
             _ => {}
@@ -149,9 +149,9 @@ pub fn app_settings_tsv(settings: &AppSettings) -> String {
             "{APPEARANCE_BACKGROUND_BLUR_KEY}\t{background_blur}"
         ));
     }
-    if let Some(window_opacity) = settings.appearance.window_opacity {
+    if let Some(background_opacity) = settings.appearance.background_opacity {
         lines.push(format!(
-            "{APPEARANCE_WINDOW_OPACITY_KEY}\t{window_opacity:.3}"
+            "{APPEARANCE_BACKGROUND_OPACITY_KEY}\t{background_opacity:.3}"
         ));
     }
     if lines.is_empty() {
@@ -197,7 +197,7 @@ view.mode\tdetails
 view.show_hidden\ttrue
 appearance.dark_mode\ttrue
 appearance.background_blur\ttrue
-appearance.window_opacity\t0.825
+appearance.background_opacity\t0.825
 ignored.key\tvalue
 places.sidebar.width\tnan
 places.sidebar.visible\tmaybe
@@ -205,7 +205,7 @@ view.mode\tunknown
 view.show_hidden\tmaybe
 appearance.dark_mode\tmaybe
 appearance.background_blur\tmaybe
-appearance.window_opacity\tnan
+appearance.background_opacity\tnan
 ",
         );
 
@@ -215,7 +215,15 @@ appearance.window_opacity\tnan
         assert_eq!(settings.view.show_hidden, Some(true));
         assert_eq!(settings.appearance.dark_mode, Some(true));
         assert_eq!(settings.appearance.background_blur, Some(true));
-        assert_eq!(settings.appearance.window_opacity, Some(0.825));
+        assert_eq!(settings.appearance.background_opacity, Some(0.825));
+    }
+
+    #[test]
+    fn legacy_window_opacity_is_not_migrated() {
+        let settings = parse_app_settings("appearance.window_opacity\t0.7\n");
+
+        assert_eq!(settings.appearance.background_opacity, None);
+        assert!(!app_settings_tsv(&settings).contains("window_opacity"));
     }
 
     #[test]
@@ -240,7 +248,7 @@ appearance.window_opacity\tnan
             appearance: AppearanceSettings {
                 dark_mode: Some(true),
                 background_blur: Some(true),
-                window_opacity: Some(0.8),
+                background_opacity: Some(0.8),
             },
         };
 

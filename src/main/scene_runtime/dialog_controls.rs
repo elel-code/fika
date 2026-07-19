@@ -364,9 +364,6 @@ impl ShellScene {
         if self.context_menu.is_some() {
             return self.update_context_menu_hover(point, size);
         }
-        if self.overflow_menu.is_some() {
-            return self.update_overflow_menu_hover(point, size);
-        }
         if self.internal_drag.is_some() {
             return self.update_internal_drag(point, size);
         }
@@ -379,12 +376,7 @@ impl ShellScene {
     fn clear_pointer(&mut self) -> bool {
         self.pointer = None;
         self.context_menu_safe_triangle.reset();
-        let overflow_hover_cleared = self
-            .overflow_menu
-            .as_mut()
-            .is_some_and(|menu| menu.hovered_row.take().is_some());
-        let changed = overflow_hover_cleared
-            || self.hovered_item.take().is_some()
+        let changed = self.hovered_item.take().is_some()
             || self.hovered_place.take().is_some()
             || self.internal_drag.take().is_some()
             || self.external_drag.take().is_some()

@@ -150,59 +150,6 @@
     }
 
     #[test]
-    fn render_damage_bounds_overflow_menu_open_and_hover_are_bounded() {
-        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
-        let size = PhysicalSize::new(700, 320);
-        let projections = ShellPaneId::ALL
-            .into_iter()
-            .filter_map(|kind| scene.pane_projection(kind, size))
-            .collect::<Vec<_>>();
-        let closed = ShellRenderDamageSnapshot::from_scene(
-            &scene,
-            size,
-            &projections,
-            ShellRenderDirtyKey::from_scene(&scene, size),
-        );
-
-        assert!(scene.toggle_overflow_menu(size));
-        let projections = ShellPaneId::ALL
-            .into_iter()
-            .filter_map(|kind| scene.pane_projection(kind, size))
-            .collect::<Vec<_>>();
-        let opened = ShellRenderDamageSnapshot::from_scene(
-            &scene,
-            size,
-            &projections,
-            ShellRenderDirtyKey::from_scene(&scene, size),
-        );
-        let open_damage = ShellRenderDamage::between(Some(&closed), &opened, false);
-        assert_eq!(open_damage.kind, ShellRenderDamageKind::Bounded);
-        assert_eq!(
-            open_damage.bounds,
-            opened
-                .overflow_menu
-                .as_ref()
-                .map(|state| state.overlay_rect)
-        );
-
-        scene.overflow_menu.as_mut().unwrap().hovered_row = Some(1);
-        let projections = ShellPaneId::ALL
-            .into_iter()
-            .filter_map(|kind| scene.pane_projection(kind, size))
-            .collect::<Vec<_>>();
-        let hovered = ShellRenderDamageSnapshot::from_scene(
-            &scene,
-            size,
-            &projections,
-            ShellRenderDirtyKey::from_scene(&scene, size),
-        );
-        let hover_damage = ShellRenderDamage::between(Some(&opened), &hovered, false);
-        assert_eq!(hover_damage.kind, ShellRenderDamageKind::Bounded);
-        assert_eq!(hover_damage.rect_count, 1);
-        assert!(hover_damage.area_px < rect_area(full_surface_rect(size)));
-    }
-
-    #[test]
     fn render_damage_bounds_dnd_hover_pane_item_transition() {
         let mut scene = test_scene(vec![test_entry("alpha", true)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
@@ -441,28 +388,9 @@
     }
 
     #[test]
-    fn retained_scene_opacity_matches_surface_alpha_mode() {
-        let premultiplied = retained_scene_vertices_for_opacity(
-            0.75,
-            wgpu::CompositeAlphaMode::PreMultiplied,
-        );
-        assert!(premultiplied.iter().all(|vertex| vertex.color == [0.75; 4]));
-
-        let postmultiplied = retained_scene_vertices_for_opacity(
-            0.75,
-            wgpu::CompositeAlphaMode::PostMultiplied,
-        );
-        assert!(
-            postmultiplied
-                .iter()
-                .all(|vertex| vertex.color == [1.0, 1.0, 1.0, 0.75])
-        );
-
-        let opaque = retained_scene_vertices_for_opacity(
-            0.75,
-            wgpu::CompositeAlphaMode::Opaque,
-        );
-        assert!(opaque.iter().all(|vertex| vertex.color == [1.0; 4]));
+    fn retained_scene_present_pass_preserves_per_pixel_alpha() {
+        let vertices = retained_scene_vertices();
+        assert!(vertices.iter().all(|vertex| vertex.color == [1.0; 4]));
     }
 
     #[test]

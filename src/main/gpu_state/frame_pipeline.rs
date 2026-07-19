@@ -147,6 +147,40 @@ impl WgpuState {
         )
     }
 
+    fn render_settings_dialog(
+        &mut self,
+        window: &dyn Window,
+        state: ShellSettingsDialogState,
+        snapshot: ShellSettingsSnapshot,
+        viewport: DialogRenderViewport,
+        reason: &'static str,
+    ) -> ShellRenderOutcome {
+        let DialogRenderViewport {
+            popup_theme,
+            scale,
+            layout_size: _,
+        } = viewport;
+        self.render_detached_dialog(
+            DetachedDialogRenderRequest {
+                window,
+                viewport,
+                reason,
+                dialog_label: ShellDialogWindowKind::Settings.as_str(),
+            },
+            |vertices, text_builder, _icon_builder, size| {
+                shell::settings::paint::push_settings_dialog(
+                    &state,
+                    snapshot,
+                    popup_theme,
+                    scale,
+                    vertices,
+                    text_builder,
+                    size,
+                );
+            },
+        )
+    }
+
     fn render_create_dialog(
         &mut self,
         window: &dyn Window,
@@ -539,7 +573,6 @@ impl WgpuState {
             &mut encoder,
             render_damage,
             render_damage_scissor,
-            view_mode_clear_color(scene.panes[ShellPaneId::SLOT_0].view_mode, scene.dark_mode),
             overlay_text_active,
         );
         self.retained_scene.mark_valid();

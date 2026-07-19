@@ -133,12 +133,6 @@ use shell::open_with::{
     open_with_applications_for_mime,
 };
 use shell::options::{ShellViewMode, parse_start_options};
-use shell::overflow_menu::{
-    ShellOverflowMenu, ShellOverflowMenuAction, opacity_percent_at_screen_point,
-    overflow_menu_items, overflow_menu_row_at_screen_point, window_opacity_percent,
-};
-#[cfg(test)]
-use shell::overflow_menu::overflow_menu_row_rect;
 use shell::paint::ShellPaintPalettes;
 use shell::pane::{
     ShellPaneGeometry, ShellPaneId, ShellPaneProjection, ShellPaneScrollMetrics,
@@ -193,9 +187,7 @@ use shell::render::quad::{
 };
 use shell::render::retained::RetainedSceneRenderer;
 #[cfg(test)]
-use shell::render::retained::{
-    retained_scene_vertices, retained_scene_vertices_for_opacity,
-};
+use shell::render::retained::retained_scene_vertices;
 use shell::render::shaders::{TEXT_SHADER, TEXTURE_SHADER};
 use shell::render::texture::{AtlasRect, TextVertex, push_textured_rect};
 use shell::role_worker_queue::{PriorityWorkerQueue, PriorityWorkerRequest, WorkerRequestPriority};
@@ -203,6 +195,12 @@ use shell::selection::{
     NavigationAction, RubberBand, RubberBandMode, SelectionClick, ShellSelection,
 };
 use shell::service_menu::ServiceMenuLaunchRequest;
+use shell::settings::{
+    ShellSettingsAction, ShellSettingsDialogState, ShellSettingsSnapshot,
+    background_opacity_percent, opacity_percent_at_settings_point,
+    settings_action_at_screen_point, settings_dialog_row_at_screen_point,
+    settings_dialog_window_size_scaled,
+};
 use shell::shortcuts::{
     CreateCommand, FilterCommand, LocationCommand, OpenWithCommand, PathNavigationAction,
     RenameCommand, SelectionCommand, ZoomAction, create_command_for_key_event,
@@ -267,14 +265,18 @@ fn startup_view_mode(
 fn startup_show_hidden(settings: &AppSettings) -> bool {
     settings.view.show_hidden.unwrap_or(false)
 }
+fn startup_places_visible(settings: &AppSettings) -> bool {
+    settings.places_sidebar.visible.unwrap_or(true)
+}
 fn startup_dark_mode(settings: &AppSettings) -> bool {
     settings.appearance.dark_mode.unwrap_or(false)
 }
 fn startup_background_blur(settings: &AppSettings) -> bool {
     settings.appearance.background_blur.unwrap_or(false)
 }
-fn startup_window_opacity(settings: &AppSettings) -> f32 {
-    window_opacity_percent(settings.appearance.window_opacity.unwrap_or(1.0)) as f32 / 100.0
+fn startup_background_opacity(settings: &AppSettings) -> f32 {
+    background_opacity_percent(settings.appearance.background_opacity.unwrap_or(1.0)) as f32
+        / 100.0
 }
 fn load_startup_app_settings(settings_path: &Path) -> AppSettings {
     match load_app_settings(settings_path) {
@@ -302,6 +304,13 @@ fn save_show_hidden_setting(settings_path: &Path, show_hidden: bool) -> Result<(
     save_app_settings(settings_path, &settings)
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
 }
+fn save_places_visible_setting(settings_path: &Path, visible: bool) -> Result<(), String> {
+    let mut settings = load_app_settings(settings_path)
+        .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
+    settings.places_sidebar.visible = Some(visible);
+    save_app_settings(settings_path, &settings)
+        .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
+}
 fn save_dark_mode_setting(settings_path: &Path, dark_mode: bool) -> Result<(), String> {
     let mut settings = load_app_settings(settings_path)
         .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
@@ -309,15 +318,15 @@ fn save_dark_mode_setting(settings_path: &Path, dark_mode: bool) -> Result<(), S
     save_app_settings(settings_path, &settings)
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
 }
-fn save_window_effect_settings(
+fn save_background_effect_settings(
     settings_path: &Path,
     background_blur: bool,
-    window_opacity: f32,
+    background_opacity: f32,
 ) -> Result<(), String> {
     let mut settings = load_app_settings(settings_path)
         .map_err(|error| format!("load settings {}: {error}", settings_path.display()))?;
     settings.appearance.background_blur = Some(background_blur);
-    settings.appearance.window_opacity = Some(window_opacity);
+    settings.appearance.background_opacity = Some(background_opacity);
     save_app_settings(settings_path, &settings)
         .map_err(|error| format!("save settings {}: {error}", settings_path.display()))
 }
@@ -352,9 +361,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let view_mode = startup_view_mode(options.view_mode, options.view_mode_explicit, &settings);
     let show_hidden = startup_show_hidden(&settings);
     let mut scene = ShellScene::load_with_hidden_visibility(options.path, view_mode, show_hidden)?;
+    scene.places_visible = startup_places_visible(&settings);
     scene.dark_mode = startup_dark_mode(&settings);
     scene.background_blur = startup_background_blur(&settings);
-    scene.window_opacity = startup_window_opacity(&settings);
+    scene.background_opacity = startup_background_opacity(&settings);
 
     let event_loop = EventLoop::new()?;
     let event_loop_proxy = event_loop.create_proxy();
@@ -438,6 +448,7 @@ fn dialog_lifecycle_autosmoke_kind_from_env() -> ShellDialogWindowKind {
     match value.to_string_lossy().trim().to_ascii_lowercase().as_str() {
         "open-with" | "open_with" | "openwith" => ShellDialogWindowKind::OpenWith,
         "rename" => ShellDialogWindowKind::Rename,
+        "settings" => ShellDialogWindowKind::Settings,
         _ => ShellDialogWindowKind::Create,
     }
 }

@@ -41,7 +41,7 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
   `CloseRequested` / `Destroyed` / resize / redraw 等 window event 路由和 event-loop exit
   reason；高频 pointer move 默认折叠，需要时可加
   `FIKA_WGPU_DIALOG_TRACE_VERBOSE=1`。`scripts/dialog-lifecycle-smoke.sh` 提供
-  open-with/create/rename dialog 打开、关闭、主窗口继续渲染的 lifecycle smoke，用来排查 compositor
+  open-with/create/rename/settings dialog 打开、关闭、主窗口继续渲染的 lifecycle smoke，用来排查 compositor
   尾随事件是否仍误关主窗口。Wayland 下 `Window::set_visible(false)` 是 no-op，隐藏停放
   会留下仍可获焦/吃输入的 zombie dialog；因此 dialog 关闭改为两阶段销毁：当前
   `window_event` 回调只移除 active dialog，随后在 `about_to_wait` 安全点先等待 dialog

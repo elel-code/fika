@@ -36,6 +36,7 @@ impl ShellThemeMode {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ShellTheme {
     mode: ShellThemeMode,
+    background_opacity: Option<f32>,
     view_surface: UiColor,
     view_content: UiColor,
     chrome: UiColor,
@@ -94,6 +95,12 @@ impl ShellTheme {
         }
     }
 
+    pub(crate) fn for_glass_background(dark_mode: bool, background_opacity: f32) -> Self {
+        let mut theme = Self::for_dark_mode(dark_mode);
+        theme.background_opacity = Some(background_opacity.clamp(0.0, 1.0));
+        theme
+    }
+
     #[cfg(test)]
     pub(crate) fn mode(self) -> ShellThemeMode {
         self.mode
@@ -104,29 +111,22 @@ impl ShellTheme {
     }
 
     pub(crate) fn view_mode_surface(self, _view_mode: ShellViewMode) -> UiColor {
-        self.view_surface
-    }
-
-    pub(crate) fn view_mode_content(self, _view_mode: ShellViewMode) -> UiColor {
-        self.view_content
-    }
-
-    pub(crate) fn view_mode_clear(self, view_mode: ShellViewMode) -> wgpu::Color {
-        let [r, g, b, a] = self.view_mode_surface(view_mode);
-        wgpu::Color {
-            r: r as f64,
-            g: g as f64,
-            b: b as f64,
-            a: a as f64,
+        match self.background_opacity {
+            Some(opacity) => with_alpha(self.view_surface, opacity),
+            None => self.view_surface,
         }
     }
 
+    pub(crate) fn view_mode_content(self, _view_mode: ShellViewMode) -> UiColor {
+        self.glass_tint(self.view_content, 0.12, 0.18)
+    }
+
     pub(crate) fn chrome(self) -> UiColor {
-        self.chrome
+        self.glass_tint(self.chrome, 0.24, 0.32)
     }
 
     pub(crate) fn sidebar(self) -> UiColor {
-        self.sidebar
+        self.glass_tint(self.sidebar, 0.18, 0.26)
     }
 
     pub(crate) fn divider(self) -> UiColor {
@@ -134,7 +134,7 @@ impl ShellTheme {
     }
 
     pub(crate) fn field(self) -> UiColor {
-        self.field
+        self.glass_tint(self.field, 0.56, 0.64)
     }
 
     pub(crate) fn field_separator(self) -> UiColor {
@@ -142,7 +142,15 @@ impl ShellTheme {
     }
 
     pub(crate) fn details_header(self) -> UiColor {
-        self.details_header
+        self.glass_tint(self.details_header, 0.28, 0.38)
+    }
+
+    pub(crate) fn glass_highlight(self) -> UiColor {
+        match (self.background_opacity, self.mode) {
+            (Some(_), ShellThemeMode::Light) => [1.0, 1.0, 1.0, 0.42],
+            (Some(_), ShellThemeMode::Dark) => [1.0, 1.0, 1.0, 0.12],
+            (None, _) => [1.0, 1.0, 1.0, 0.0],
+        }
     }
 
     pub(crate) fn primary_text(self) -> TextColor {
@@ -251,9 +259,22 @@ impl ShellTheme {
         }
     }
 
+    fn glass_tint(self, color: UiColor, light_alpha: f32, dark_alpha: f32) -> UiColor {
+        if self.background_opacity.is_none() {
+            return color;
+        }
+        let alpha = if self.is_dark() {
+            dark_alpha
+        } else {
+            light_alpha
+        };
+        with_alpha(color, alpha)
+    }
+
     fn light() -> Self {
         Self {
             mode: ShellThemeMode::Light,
+            background_opacity: None,
             view_surface: [0.973, 0.976, 0.984, 1.0],
             view_content: [0.973, 0.976, 0.984, 1.0],
             chrome: [0.973, 0.976, 0.984, 1.0],
@@ -277,6 +298,7 @@ impl ShellTheme {
     fn dark() -> Self {
         Self {
             mode: ShellThemeMode::Dark,
+            background_opacity: None,
             view_surface: [0.102, 0.112, 0.126, 1.0],
             view_content: [0.078, 0.086, 0.098, 1.0],
             chrome: [0.125, 0.137, 0.153, 1.0],
@@ -296,6 +318,11 @@ impl ShellTheme {
             task_cancelled: [0.475, 0.514, 0.565, 1.0],
         }
     }
+}
+
+fn with_alpha(mut color: UiColor, alpha: f32) -> UiColor {
+    color[3] = alpha.clamp(0.0, 1.0);
+    color
 }
 
 #[cfg(test)]
@@ -327,5 +354,21 @@ mod tests {
         assert_eq!(light.rubber_band().fill, [0.280, 0.580, 0.920, 0.18]);
         assert_eq!(dark.drop_target().marker, [0.953, 0.612, 0.071, 1.0]);
         assert_eq!(dark.drag_preview().badge, [0.957, 0.290, 0.290, 1.0]);
+    }
+
+    #[test]
+    fn glass_theme_only_reduces_background_material_alpha() {
+        let theme = ShellTheme::for_glass_background(true, 0.65);
+
+        assert_eq!(
+            theme.view_mode_surface(ShellViewMode::Icons),
+            [0.102, 0.112, 0.126, 0.65]
+        );
+        assert_eq!(theme.view_mode_content(ShellViewMode::Icons)[3], 0.18);
+        assert_eq!(theme.chrome()[3], 0.32);
+        assert_eq!(theme.field()[3], 0.64);
+        assert_eq!(theme.primary_text(), TextColor::rgb(226, 232, 240));
+        assert_eq!(theme.toolbar_button(false).icon[3], 1.0);
+        assert_eq!(theme.glass_highlight()[3], 0.12);
     }
 }

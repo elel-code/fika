@@ -231,7 +231,7 @@ impl ShellScene {
     }
 
     fn theme(&self) -> ShellTheme {
-        ShellTheme::for_dark_mode(self.dark_mode)
+        ShellTheme::for_glass_background(self.dark_mode, self.background_opacity)
     }
 
     fn toggle_dark_mode(&mut self) {
@@ -447,7 +447,6 @@ impl ShellScene {
         if (self.scale_factor - next).abs() <= 0.01 {
             self.scale_factor = next;
             self.clamp_scroll(size);
-            self.sync_overflow_menu_anchor(size);
             return false;
         }
 
@@ -469,7 +468,6 @@ impl ShellScene {
             self.places_scroll_y *= ratio;
         }
         self.clamp_scroll(size);
-        self.sync_overflow_menu_anchor(size);
         fika_log!(
             "[fika-wgpu] scale-factor={:.2} ui_scale={:.2} scroll_x={:.1} scroll_y={:.1}",
             self.scale_factor,

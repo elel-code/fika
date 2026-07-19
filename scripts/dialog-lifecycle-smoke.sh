@@ -19,7 +19,7 @@ Options:
   --path DIR
       Directory to open. Default: isolated temp fixture.
 
-  --kind create|open-with|rename
+  --kind create|open-with|rename|settings
       Dialog kind to exercise. Default: open-with.
 
   --out-dir DIR
@@ -88,7 +88,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --kind)
             if [[ $# -lt 2 || "$2" == --* ]]; then
-                echo "--kind requires create, open-with, or rename" >&2
+                echo "--kind requires create, open-with, rename, or settings" >&2
                 usage >&2
                 exit 2
             fi
@@ -136,10 +136,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$dialog_kind" in
-    create|open-with|rename)
+    create|open-with|rename|settings)
         ;;
     *)
-        echo "--kind must be create, open-with, or rename" >&2
+        echo "--kind must be create, open-with, rename, or settings" >&2
         usage >&2
         exit 2
         ;;

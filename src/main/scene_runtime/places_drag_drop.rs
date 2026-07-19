@@ -134,7 +134,6 @@ impl ShellScene {
         self.internal_drag.as_ref().is_some_and(|drag| drag.active)
             || self.drop_menu.is_some()
             || self.context_menu.is_some()
-            || self.overflow_menu.is_some()
     }
 
     fn close_drop_menu(&mut self) -> bool {
@@ -312,7 +311,6 @@ impl ShellScene {
         let changed = self.open_context_target(point, size);
         let old_menu = self.context_menu.clone();
         self.drop_menu = None;
-        self.overflow_menu = None;
         self.context_menu_safe_triangle.reset();
         self.context_menu = self.context_target.clone().map(|target| {
             let (open_with_apps, service_actions) = self.context_menu_dynamic_data(&target, cache);

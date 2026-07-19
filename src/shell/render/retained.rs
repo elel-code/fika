@@ -17,7 +17,6 @@ pub(crate) struct RetainedSceneRenderer {
     vertex_buffer: wgpu::Buffer,
     format: wgpu::TextureFormat,
     size: PhysicalSize<u32>,
-    alpha_mode: wgpu::CompositeAlphaMode,
     valid: bool,
 }
 
@@ -27,8 +26,6 @@ impl RetainedSceneRenderer {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         size: PhysicalSize<u32>,
-        alpha_mode: wgpu::CompositeAlphaMode,
-        opacity: f32,
     ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("fika-wgpu-retained-scene-bind-group-layout"),
@@ -101,7 +98,7 @@ impl RetainedSceneRenderer {
         queue.write_buffer(
             &vertex_buffer,
             0,
-            bytemuck::cast_slice(&retained_scene_vertices_for_opacity(opacity, alpha_mode)),
+            bytemuck::cast_slice(&retained_scene_vertices()),
         );
         Self {
             pipeline,
@@ -113,7 +110,6 @@ impl RetainedSceneRenderer {
             vertex_buffer,
             format,
             size,
-            alpha_mode,
             valid: false,
         }
     }
@@ -147,17 +143,6 @@ impl RetainedSceneRenderer {
 
     pub(crate) fn mark_valid(&mut self) {
         self.valid = true;
-    }
-
-    pub(crate) fn set_opacity(&mut self, queue: &wgpu::Queue, opacity: f32) {
-        queue.write_buffer(
-            &self.vertex_buffer,
-            0,
-            bytemuck::cast_slice(&retained_scene_vertices_for_opacity(
-                opacity,
-                self.alpha_mode,
-            )),
-        );
     }
 
     pub(crate) fn draw<'pass>(&'pass self, pass: &mut wgpu::RenderPass<'pass>) {
@@ -216,21 +201,8 @@ fn create_retained_scene_bind_group(
     })
 }
 
-#[cfg(test)]
 pub(crate) fn retained_scene_vertices() -> [TextVertex; 6] {
-    retained_scene_vertices_for_opacity(1.0, wgpu::CompositeAlphaMode::PreMultiplied)
-}
-
-pub(crate) fn retained_scene_vertices_for_opacity(
-    opacity: f32,
-    alpha_mode: wgpu::CompositeAlphaMode,
-) -> [TextVertex; 6] {
-    let opacity = opacity.clamp(0.0, 1.0);
-    let color = match alpha_mode {
-        wgpu::CompositeAlphaMode::PreMultiplied => [opacity; 4],
-        wgpu::CompositeAlphaMode::PostMultiplied => [1.0, 1.0, 1.0, opacity],
-        _ => [1.0; 4],
-    };
+    let color = [1.0; 4];
     [
         TextVertex {
             position: [-1.0, 1.0],

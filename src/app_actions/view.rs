@@ -3,7 +3,9 @@ use winit::event_loop::ActiveEventLoop;
 
 use super::outcome::ShellActionOutcome;
 use crate::shell::options::ShellViewMode;
-use crate::{FikaWgpuApp, save_show_hidden_setting, save_view_mode_setting};
+use crate::{
+    FikaWgpuApp, save_places_visible_setting, save_show_hidden_setting, save_view_mode_setting,
+};
 
 impl FikaWgpuApp {
     pub(crate) fn set_user_view_mode(
@@ -27,6 +29,20 @@ impl FikaWgpuApp {
         if let Err(error) = save_show_hidden_setting(&self.settings_path, self.scene.show_hidden) {
             fika_log!("[fika-wgpu] settings-save-error {error}");
         }
+        self.request_settings_dialog_redraw();
+        true
+    }
+
+    pub(crate) fn toggle_user_places_visibility(&mut self, size: PhysicalSize<u32>) -> bool {
+        if !self.scene.toggle_places_visibility(size) {
+            return false;
+        }
+        if let Err(error) =
+            save_places_visible_setting(&self.settings_path, self.scene.places_visible)
+        {
+            fika_log!("[fika-wgpu] settings-save-error {error}");
+        }
+        self.request_settings_dialog_redraw();
         true
     }
 

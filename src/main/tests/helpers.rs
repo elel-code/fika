@@ -96,7 +96,7 @@
         save_view_mode_setting(&settings_path, ShellViewMode::Details).unwrap();
         save_show_hidden_setting(&settings_path, true).unwrap();
         save_dark_mode_setting(&settings_path, true).unwrap();
-        save_window_effect_settings(&settings_path, true, 0.78).unwrap();
+        save_background_effect_settings(&settings_path, true, 0.78).unwrap();
         let loaded = load_app_settings(&settings_path).unwrap();
         assert_eq!(loaded.places_sidebar.width, Some(288.0));
         assert_eq!(loaded.places_sidebar.visible, Some(true));
@@ -104,7 +104,7 @@
         assert_eq!(loaded.view.show_hidden, Some(true));
         assert_eq!(loaded.appearance.dark_mode, Some(true));
         assert_eq!(loaded.appearance.background_blur, Some(true));
-        assert_eq!(loaded.appearance.window_opacity, Some(0.78));
+        assert_eq!(loaded.appearance.background_opacity, Some(0.78));
         assert_eq!(
             startup_view_mode(ShellViewMode::Icons, false, &loaded),
             ShellViewMode::Details
@@ -114,9 +114,10 @@
             ShellViewMode::Compact
         );
         assert!(startup_show_hidden(&loaded));
+        assert!(startup_places_visible(&loaded));
         assert!(startup_dark_mode(&loaded));
         assert!(startup_background_blur(&loaded));
-        assert_eq!(startup_window_opacity(&loaded), 0.8);
+        assert_eq!(startup_background_opacity(&loaded), 0.8);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -344,7 +345,7 @@
             show_hidden: false,
             dark_mode: false,
             background_blur: false,
-            window_opacity: 1.0,
+            background_opacity: 1.0,
             places_visible: true,
             places_width: PLACES_SIDEBAR_WIDTH,
             places_scroll_y: 0.0,
@@ -358,7 +359,6 @@
             context_menu: None,
             context_menu_safe_triangle: ShellContextMenuSafeTriangleRuntime::default(),
             drop_menu: None,
-            overflow_menu: None,
             properties_overlay: None,
             create_dialog: None,
             rename_dialog: None,
@@ -386,7 +386,6 @@
             selection_changes: 0,
             context_target_changes: 0,
             context_menu_actions: 0,
-            overflow_menu_actions: 0,
             properties_changes: 0,
             create_changes: 0,
             rename_changes: 0,

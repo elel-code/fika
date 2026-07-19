@@ -181,6 +181,17 @@ impl ShellScene {
         }
 
         push_rect(vertices, top_bar, theme.chrome(), size);
+        push_rect(
+            vertices,
+            ViewRect {
+                x: top_bar.x + self.scale_metric(1.0),
+                y: top_bar.y,
+                width: (top_bar.width - self.scale_metric(2.0)).max(1.0),
+                height: self.scale_metric(1.0).max(1.0),
+            },
+            theme.glass_highlight(),
+            size,
+        );
         if let Some(path_rect) = self.pane_path_bar_rect(pane_id, size) {
             let location_active = self.location_bar_active_for_pane(pane_id);
             let path_label = self.location_label_for_pane(pane_id);
