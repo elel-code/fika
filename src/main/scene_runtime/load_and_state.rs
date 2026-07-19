@@ -62,6 +62,7 @@ impl ShellScene {
             context_menu: None,
             context_menu_safe_triangle: ShellContextMenuSafeTriangleRuntime::default(),
             drop_menu: None,
+            overflow_menu: None,
             properties_overlay: None,
             create_dialog: None,
             rename_dialog: None,
@@ -89,6 +90,7 @@ impl ShellScene {
             selection_changes: 0,
             context_target_changes: 0,
             context_menu_actions: 0,
+            overflow_menu_actions: 0,
             properties_changes: 0,
             create_changes: 0,
             rename_changes: 0,
@@ -273,7 +275,9 @@ impl ShellScene {
         previous_size: PhysicalSize<u32>,
         next_size: PhysicalSize<u32>,
     ) -> bool {
-        shell::item_reflow::reflow_pane_items_after_window_resize(self, previous_size, next_size)
+        let reflow_changed =
+            shell::item_reflow::reflow_pane_items_after_window_resize(self, previous_size, next_size);
+        self.sync_overflow_menu_anchor(next_size) || reflow_changed
     }
 
     fn start_item_reflow_transitions(

@@ -33,6 +33,7 @@ impl ShellScene {
 
         let button = layout.places_toggle;
         let split_button = layout.split_view;
+        let overflow_button = layout.overflow;
         let view_mode = layout.view_mode;
         let places_hovered = self.pointer.is_some_and(|point| button.contains(point));
         let places_active = self.places_visible || places_hovered;
@@ -148,6 +149,42 @@ impl ShellScene {
                 },
                 toolbar,
                 split_colors.icon,
+                size,
+            );
+        }
+
+        let overflow_hovered = self
+            .pointer
+            .is_some_and(|point| overflow_button.contains(point));
+        let overflow_active = self.overflow_menu.is_some() || overflow_hovered;
+        let overflow_colors = theme.toolbar_button(overflow_active);
+        if overflow_active {
+            push_clipped_rounded_rect(
+                vertices,
+                overflow_button,
+                toolbar,
+                self.scale_metric(6.0),
+                overflow_colors.fill,
+                size,
+            );
+        }
+        let dot_size = self.scale_metric(3.0);
+        let dot_gap = self.scale_metric(3.0);
+        let dots_width = dot_size * 3.0 + dot_gap * 2.0;
+        let dot_y = overflow_button.y + (overflow_button.height - dot_size) / 2.0;
+        let dot_x = overflow_button.x + (overflow_button.width - dots_width) / 2.0;
+        for index in 0..3 {
+            push_clipped_rounded_rect(
+                vertices,
+                ViewRect {
+                    x: dot_x + index as f32 * (dot_size + dot_gap),
+                    y: dot_y,
+                    width: dot_size,
+                    height: dot_size,
+                },
+                toolbar,
+                dot_size / 2.0,
+                overflow_colors.icon,
                 size,
             );
         }

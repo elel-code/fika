@@ -269,6 +269,7 @@ impl ShellScene {
         let old_menu = self.drop_menu.clone();
         self.drop_menu = Some(ShellDropMenu::new(sources, target_dir, target, point));
         self.context_menu = None;
+        self.overflow_menu = None;
         self.context_target = None;
         self.rubber_band = None;
         self.internal_drag = None;
@@ -496,6 +497,7 @@ impl ShellScene {
         let old_menu = self.drop_menu.clone();
         self.drop_menu = Some(ShellDropMenu::new(drag.paths, target_dir, target, point));
         self.context_menu = None;
+        self.overflow_menu = None;
         self.context_target = None;
         self.rubber_band = None;
         let _ = self.clear_dnd_hover_target();

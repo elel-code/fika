@@ -154,6 +154,11 @@ fn hover_damage_rects(
         previous.drop_menu.as_ref(),
         current.drop_menu.as_ref(),
     );
+    push_drop_menu_damage_rects(
+        &mut rects,
+        previous.overflow_menu.as_ref(),
+        current.overflow_menu.as_ref(),
+    );
     if (previous.places_scroll_y - current.places_scroll_y).abs() > f32::EPSILON {
         push_stable_or_changed_damage_rect(
             &mut rects,

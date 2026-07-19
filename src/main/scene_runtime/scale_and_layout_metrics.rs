@@ -221,6 +221,10 @@ impl ShellScene {
         self.app_toolbar_layout(size).split_view
     }
 
+    fn overflow_button_rect(&self, size: PhysicalSize<u32>) -> ViewRect {
+        self.app_toolbar_layout(size).overflow
+    }
+
     fn toolbar_view_mode_badge_rect(&self, size: PhysicalSize<u32>) -> Option<ViewRect> {
         self.app_toolbar_layout(size)
             .view_mode
@@ -238,6 +242,14 @@ impl ShellScene {
 
     fn split_view_button_at_screen_point(&self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
         self.split_view_button_rect(size).contains(point)
+    }
+
+    fn overflow_button_contains_screen_point(
+        &self,
+        point: ViewPoint,
+        size: PhysicalSize<u32>,
+    ) -> bool {
+        self.overflow_button_rect(size).contains(point)
     }
 
     fn places_toggle_contains_screen_point(
@@ -343,6 +355,7 @@ impl ShellScene {
         }
         if self.places_toggle_contains_screen_point(point, size)
             || self.split_view_button_at_screen_point(point, size)
+            || self.overflow_button_contains_screen_point(point, size)
             || self.status_zoom_contains_screen_point(point, size)
             || self
                 .toolbar_view_mode_badge_rect(size)

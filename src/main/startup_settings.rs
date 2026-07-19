@@ -133,6 +133,12 @@ use shell::open_with::{
     open_with_applications_for_mime,
 };
 use shell::options::{ShellViewMode, parse_start_options};
+use shell::overflow_menu::{
+    ShellOverflowMenu, ShellOverflowMenuAction, overflow_menu_items,
+    overflow_menu_row_at_screen_point,
+};
+#[cfg(test)]
+use shell::overflow_menu::overflow_menu_row_rect;
 use shell::paint::ShellPaintPalettes;
 use shell::pane::{
     ShellPaneGeometry, ShellPaneId, ShellPaneProjection, ShellPaneScrollMetrics,

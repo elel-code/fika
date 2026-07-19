@@ -23,6 +23,7 @@ struct ShellScene {
     context_menu: Option<ShellContextMenu>,
     context_menu_safe_triangle: ShellContextMenuSafeTriangleRuntime,
     drop_menu: Option<ShellDropMenu>,
+    overflow_menu: Option<ShellOverflowMenu>,
     properties_overlay: Option<ShellPropertiesOverlay>,
     create_dialog: Option<ShellCreateDialog>,
     rename_dialog: Option<ShellRenameDialog>,
@@ -50,6 +51,7 @@ struct ShellScene {
     selection_changes: u64,
     context_target_changes: u64,
     context_menu_actions: u64,
+    overflow_menu_actions: u64,
     properties_changes: u64,
     create_changes: u64,
     rename_changes: u64,
@@ -84,6 +86,7 @@ include!("scene_runtime/hit_testing.rs");
 include!("scene_runtime/drop_targeting.rs");
 include!("scene_runtime/places_drag_drop.rs");
 include!("scene_runtime/context_and_service_menu.rs");
+include!("scene_runtime/overflow_menu.rs");
 include!("scene_runtime/open_with.rs");
 include!("scene_runtime/task_status.rs");
 include!("scene_runtime/selection_and_paths.rs");

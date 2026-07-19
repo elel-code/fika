@@ -22,6 +22,7 @@ pub(crate) mod metrics;
 pub(crate) mod open_file;
 pub(crate) mod open_with;
 pub(crate) mod options;
+pub(crate) mod overflow_menu;
 pub(crate) mod paint;
 pub(crate) mod pane;
 pub(crate) mod pane_layout;

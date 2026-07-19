@@ -76,24 +76,34 @@
     }
 
     #[test]
-    fn split_view_button_is_right_aligned_in_app_toolbar() {
+    fn overflow_button_is_right_aligned_after_split_view_button() {
         let scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         let toolbar = scene.app_toolbar_rect(size);
         let button = scene.split_view_button_rect(size);
+        let overflow = scene.overflow_button_rect(size);
         let places = scene.places_toggle_rect(size);
         let point = ViewPoint {
             x: button.x + button.width / 2.0,
             y: button.y + button.height / 2.0,
         };
 
-        assert!(button.right() <= toolbar.right() - scene.scale_metric(8.0) + 0.5);
+        assert!(overflow.right() <= toolbar.right() - scene.scale_metric(8.0) + 0.5);
+        assert!(button.right() < overflow.x);
         assert!(button.x > toolbar.width / 2.0);
         assert!(button.x > places.right());
         let toolbar_center_y = toolbar.y + toolbar.height / 2.0;
         assert!((button.y + button.height / 2.0 - toolbar_center_y).abs() < 0.001);
+        assert!((overflow.y + overflow.height / 2.0 - toolbar_center_y).abs() < 0.001);
         assert!((places.y + places.height / 2.0 - toolbar_center_y).abs() < 0.001);
         assert!(scene.split_view_button_at_screen_point(point, size));
+        assert!(scene.overflow_button_contains_screen_point(
+            ViewPoint {
+                x: overflow.x + overflow.width / 2.0,
+                y: overflow.y + overflow.height / 2.0,
+            },
+            size,
+        ));
         assert!(!scene.split_view_button_at_screen_point(
             ViewPoint {
                 x: places.x + places.width / 2.0,
@@ -101,6 +111,34 @@
             },
             size,
         ));
+    }
+
+    #[test]
+    fn overflow_menu_routes_actions_and_is_mutually_exclusive_with_context_menu() {
+        let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
+        let size = PhysicalSize::new(700, 320);
+
+        assert!(scene.toggle_overflow_menu(size));
+        assert!(scene.is_overflow_menu_open());
+        let menu = scene.overflow_menu.unwrap();
+        let row = overflow_menu_row_rect(&menu, size, scene.ui_scale(), 0).unwrap();
+        assert_eq!(
+            scene.activate_or_close_overflow_menu(
+                ViewPoint {
+                    x: row.x + 8.0,
+                    y: row.y + row.height / 2.0,
+                },
+                size,
+            ),
+            Some(ShellOverflowMenuAction::ToggleHiddenFiles)
+        );
+        assert!(!scene.is_overflow_menu_open());
+        assert_eq!(scene.overflow_menu_actions, 1);
+
+        assert!(scene.toggle_overflow_menu(size));
+        assert!(scene.open_context_menu(ViewPoint { x: 500.0, y: 200.0 }, size));
+        assert!(scene.is_context_menu_open());
+        assert!(!scene.is_overflow_menu_open());
     }
 
     #[test]

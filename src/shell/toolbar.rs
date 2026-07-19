@@ -21,6 +21,7 @@ pub(crate) struct ShellToolbarLayout {
     pub(crate) toolbar: ViewRect,
     pub(crate) places_toggle: ViewRect,
     pub(crate) split_view: ViewRect,
+    pub(crate) overflow: ViewRect,
     pub(crate) view_mode: Option<ShellToolbarViewModeControl>,
 }
 
@@ -46,8 +47,15 @@ pub(crate) fn app_toolbar_layout(toolbar: ViewRect, scale: f32) -> ShellToolbarL
         width: button_size,
         height: button_size,
     };
-    let split_view = ViewRect {
+    let overflow = ViewRect {
         x: (toolbar.right() - margin - button_size).max(toolbar.x),
+        y: button_y,
+        width: button_size,
+        height: button_size,
+    };
+    let button_gap = scale_metric(6.0, scale);
+    let split_view = ViewRect {
+        x: (overflow.x - button_gap - button_size).max(toolbar.x),
         y: button_y,
         width: button_size,
         height: button_size,
@@ -57,6 +65,7 @@ pub(crate) fn app_toolbar_layout(toolbar: ViewRect, scale: f32) -> ShellToolbarL
         toolbar,
         places_toggle,
         split_view,
+        overflow,
         view_mode,
     }
 }

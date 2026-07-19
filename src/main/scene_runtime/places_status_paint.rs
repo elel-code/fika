@@ -250,6 +250,28 @@ impl ShellScene {
         }
     }
 
+    fn push_overflow_menu_overlay(
+        &self,
+        vertices: &mut Vec<QuadVertex>,
+        text: &mut TextFrameBuilder<'_>,
+        theme: ShellTheme,
+        size: PhysicalSize<u32>,
+    ) {
+        if let Some(menu) = self.overflow_menu.as_ref() {
+            shell::overflow_menu::paint::push_overflow_menu_overlay(
+                menu,
+                self.show_hidden,
+                self.places_visible,
+                self.dark_mode,
+                theme,
+                self.ui_scale(),
+                vertices,
+                text,
+                size,
+            );
+        }
+    }
+
     fn content_origin_x(&self, size: PhysicalSize<u32>) -> f32 {
         let sidebar_width = self.places_sidebar_width(size);
         if sidebar_width <= 0.0 {

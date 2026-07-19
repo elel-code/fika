@@ -78,7 +78,9 @@ pub(super) struct MainLeftPointerButtonRouteSnapshot {
     pub(super) scrollbar_dragging: bool,
     pub(super) context_menu_open: bool,
     pub(super) drop_menu_open: bool,
+    pub(super) overflow_menu_open: bool,
     pub(super) task_detail_area_hit: bool,
+    pub(super) overflow_button_hit: bool,
     pub(super) split_view_button_hit: bool,
     pub(super) places_toggle_hit: bool,
     pub(super) scrollbar_drag_hit: bool,
@@ -106,7 +108,9 @@ pub(super) enum MainLeftPointerButtonIntent {
     EndScrollbarDrag,
     ContextMenu,
     DropMenu,
+    OverflowMenu,
     OpenTaskDetail,
+    ToggleOverflowMenu,
     ToggleSplitView,
     TogglePlaces,
     BeginScrollbarDrag,
@@ -130,8 +134,12 @@ pub(super) fn main_left_pointer_button_route(
         MainLeftPointerButtonIntent::ContextMenu
     } else if state == ElementState::Pressed && snapshot.drop_menu_open {
         MainLeftPointerButtonIntent::DropMenu
+    } else if state == ElementState::Pressed && snapshot.overflow_menu_open {
+        MainLeftPointerButtonIntent::OverflowMenu
     } else if state == ElementState::Pressed && snapshot.task_detail_area_hit {
         MainLeftPointerButtonIntent::OpenTaskDetail
+    } else if state == ElementState::Pressed && snapshot.overflow_button_hit {
+        MainLeftPointerButtonIntent::ToggleOverflowMenu
     } else if state == ElementState::Pressed && snapshot.split_view_button_hit {
         MainLeftPointerButtonIntent::ToggleSplitView
     } else if state == ElementState::Pressed && snapshot.places_toggle_hit {
@@ -271,7 +279,9 @@ mod tests {
         let all_hits = MainLeftPointerButtonRouteSnapshot {
             context_menu_open: true,
             drop_menu_open: true,
+            overflow_menu_open: true,
             task_detail_area_hit: true,
+            overflow_button_hit: true,
             split_view_button_hit: true,
             places_toggle_hit: true,
             scrollbar_drag_hit: true,
@@ -295,18 +305,36 @@ mod tests {
             MainLeftPointerButtonIntent::DropMenu
         );
 
-        let task_hits = MainLeftPointerButtonRouteSnapshot {
+        let overflow_hits = MainLeftPointerButtonRouteSnapshot {
             drop_menu_open: false,
             ..drop_hits
+        };
+        assert_eq!(
+            left_route(ElementState::Pressed, overflow_hits),
+            MainLeftPointerButtonIntent::OverflowMenu
+        );
+
+        let task_hits = MainLeftPointerButtonRouteSnapshot {
+            overflow_menu_open: false,
+            ..overflow_hits
         };
         assert_eq!(
             left_route(ElementState::Pressed, task_hits),
             MainLeftPointerButtonIntent::OpenTaskDetail
         );
 
-        let split_hits = MainLeftPointerButtonRouteSnapshot {
+        let overflow_button_hits = MainLeftPointerButtonRouteSnapshot {
             task_detail_area_hit: false,
             ..task_hits
+        };
+        assert_eq!(
+            left_route(ElementState::Pressed, overflow_button_hits),
+            MainLeftPointerButtonIntent::ToggleOverflowMenu
+        );
+
+        let split_hits = MainLeftPointerButtonRouteSnapshot {
+            overflow_button_hit: false,
+            ..overflow_button_hits
         };
         assert_eq!(
             left_route(ElementState::Pressed, split_hits),

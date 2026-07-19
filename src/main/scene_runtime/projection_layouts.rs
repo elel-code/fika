@@ -448,6 +448,7 @@ impl ShellScene {
             self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
             self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, theme, size);
             self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
+            self.push_overflow_menu_overlay(&mut overlay_vertices, overlay_text, theme, size);
         }
 
         SceneFrame {

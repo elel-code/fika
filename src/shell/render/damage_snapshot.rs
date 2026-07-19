@@ -10,6 +10,9 @@ use crate::shell::menu_geometry::{
     scaled_context_menu_metric,
 };
 use crate::shell::metrics::*;
+use crate::shell::overflow_menu::{
+    ShellOverflowMenu, overflow_menu_items, overflow_menu_rect, overflow_menu_row_rect,
+};
 use crate::shell::pane::ShellPaneProjection;
 use crate::shell::render::dirty_key::{ShellRenderDirtyKey, ShellRenderDirtyKeyContext};
 use crate::{
@@ -32,6 +35,7 @@ pub(crate) struct ShellRenderDamageSnapshot {
     pub(super) places_scroll_y: f32,
     pub(crate) context_menu: Option<ContextMenuDamageState>,
     pub(crate) drop_menu: Option<DropMenuDamageState>,
+    pub(crate) overflow_menu: Option<DropMenuDamageState>,
     pub(crate) drag_preview_rect: Option<ViewRect>,
     pub(crate) rubber_band_rect: Option<ViewRect>,
     pub(crate) location_draft_rect: Option<ViewRect>,
@@ -123,6 +127,10 @@ impl ShellRenderDamageSnapshot {
             .drop_menu
             .as_ref()
             .map(|menu| drop_menu_damage_state(menu, size, scene.ui_scale()));
+        let overflow_menu = scene
+            .overflow_menu
+            .as_ref()
+            .map(|menu| overflow_menu_damage_state(menu, size, scene.ui_scale()));
         let drag_preview_rect = drag_preview_damage_rect(scene, size);
         let rubber_band_rect = rubber_band_damage_rect(scene, size, projections);
         let location_draft_rect = scene
@@ -154,6 +162,7 @@ impl ShellRenderDamageSnapshot {
             places_scroll_y: scene.places_scroll_y,
             context_menu,
             drop_menu,
+            overflow_menu,
             drag_preview_rect,
             rubber_band_rect,
             location_draft_rect,
@@ -313,6 +322,24 @@ fn drop_menu_damage_state(
     let overlay_rect = context_menu_shadow_damage_rect(rect, size, scale);
     let row_rects = (0..drop_menu_items().len())
         .map(|row| (row, context_menu_row_rect(rect, scale, row)))
+        .collect();
+    DropMenuDamageState {
+        hovered_row: menu.hovered_row,
+        overlay_rect,
+        row_rects,
+    }
+}
+
+fn overflow_menu_damage_state(
+    menu: &ShellOverflowMenu,
+    size: PhysicalSize<u32>,
+    scale: f32,
+) -> DropMenuDamageState {
+    let rect = overflow_menu_rect(menu, size, scale);
+    let menu_damage = context_menu_shadow_damage_rect(rect, size, scale);
+    let overlay_rect = union_rect(menu_damage, menu.anchor);
+    let row_rects = (0..overflow_menu_items(false, false, false).len())
+        .filter_map(|row| overflow_menu_row_rect(menu, size, scale, row).map(|rect| (row, rect)))
         .collect();
     DropMenuDamageState {
         hovered_row: menu.hovered_row,

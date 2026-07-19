@@ -12,6 +12,7 @@ use super::pointer_route::{
     MainPointerMoveSnapshot, main_left_pointer_button_route, main_pointer_button_intent,
     main_pointer_move_intent,
 };
+use crate::shell::overflow_menu::ShellOverflowMenuAction;
 use crate::shell::selection::SelectionClick;
 use crate::{
     FikaWgpuApp, ShellItemActivation, ShellPlaceActivation, view_point_from_physical_position,
@@ -130,9 +131,13 @@ impl FikaWgpuApp {
             scrollbar_dragging: self.scene.is_scrollbar_dragging(),
             context_menu_open: self.scene.is_context_menu_open(),
             drop_menu_open: self.scene.is_drop_menu_open(),
+            overflow_menu_open: self.scene.is_overflow_menu_open(),
             task_detail_area_hit: self
                 .scene
                 .task_detail_area_contains_screen_point(point, size),
+            overflow_button_hit: self
+                .scene
+                .overflow_button_contains_screen_point(point, size),
             split_view_button_hit: self.scene.split_view_button_at_screen_point(point, size),
             places_toggle_hit: self.scene.places_toggle_contains_screen_point(point, size),
             scrollbar_drag_hit: self.scene.scrollbar_drag_hit_at_screen_point(point, size),
@@ -170,6 +175,9 @@ impl FikaWgpuApp {
                 self.activate_or_close_context_menu(event_loop, point, size)
             }
             MainLeftPointerButtonIntent::DropMenu => self.activate_or_close_drop_menu(point, size),
+            MainLeftPointerButtonIntent::OverflowMenu => {
+                self.activate_or_close_overflow_menu(point, size, location_blur_changed)
+            }
             MainLeftPointerButtonIntent::OpenTaskDetail => {
                 let changed = self
                     .scene
@@ -185,6 +193,12 @@ impl FikaWgpuApp {
             MainLeftPointerButtonIntent::ToggleSplitView => {
                 self.toggle_split_view_from_toolbar(event_loop);
                 ShellActionOutcome::None.into()
+            }
+            MainLeftPointerButtonIntent::ToggleOverflowMenu => {
+                let changed = self.scene.toggle_overflow_menu(size);
+                ShellActionOutcome::redraw_if(changed)
+                    .with_redraw_if(location_blur_changed)
+                    .into()
             }
             MainLeftPointerButtonIntent::TogglePlaces => {
                 let changed = self
@@ -296,6 +310,30 @@ impl FikaWgpuApp {
         } else {
             ShellActionOutcome::Redraw.into()
         }
+    }
+
+    fn activate_or_close_overflow_menu(
+        &mut self,
+        point: crate::ViewPoint,
+        size: winit::dpi::PhysicalSize<u32>,
+        location_blur_changed: bool,
+    ) -> ShellActionEffect {
+        let action = self.scene.activate_or_close_overflow_menu(point, size);
+        let outcome = match action {
+            Some(ShellOverflowMenuAction::ToggleHiddenFiles) => ShellActionOutcome::present_if(
+                self.toggle_user_hidden_visibility(size),
+                "overflow-toggle-hidden",
+            ),
+            Some(ShellOverflowMenuAction::TogglePlaces) => {
+                ShellActionOutcome::redraw_if(self.scene.toggle_places_visibility(size))
+            }
+            Some(ShellOverflowMenuAction::ToggleDarkMode) => ShellActionOutcome::present_if(
+                self.toggle_user_dark_mode(),
+                "overflow-toggle-dark-mode",
+            ),
+            None => ShellActionOutcome::Redraw,
+        };
+        outcome.with_redraw_if(location_blur_changed).into()
     }
 
     fn end_place_pointer(
