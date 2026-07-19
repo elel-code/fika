@@ -7,7 +7,9 @@ dialog、render damage 和异步操作持续演进提供稳定边界。
 
 - 每一步只移动一个明确边界，避免把行为改动混进结构调整。
 - 保持测试先行的回归 gate：`cargo fmt`、`cargo check`、`cargo test`、
-  `git diff --check`。
+  `scripts/check-rust-file-lines.sh`、`git diff --check`。
+- 每个 Rust 源文件严格限制为最多 1000 行，不设历史文件豁免；达到上限前应按职责拆成
+  子模块，不能通过提高阈值或排除测试文件绕过。
 - 性能相关变更遵循 `docs/PERFORMANCE_ALIGNMENT.zh-CN.md`，需要 Dolphin
   reference 时必须写明本地源码路径和 Fika 映射。
 - 新抽象必须减少重复、收缩 `main.rs` 职责，或为动画/render/operation 后续扩展
@@ -422,5 +424,6 @@ operation dispatcher。
 cargo fmt
 cargo check
 cargo test
+scripts/check-rust-file-lines.sh
 git diff --check
 ```

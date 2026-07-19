@@ -43,7 +43,11 @@ src/
 ```bash
 cargo run --bin fika -- --view compact /etc
 cargo test --bin fika
+scripts/check-rust-file-lines.sh
 ```
+
+Every Rust source file has a strict 1000-line limit. The line gate has no legacy
+exceptions and must pass before changes are merged.
 
 Because `default-run` is `fika`, this also starts the current shell:
 

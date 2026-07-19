@@ -42,7 +42,10 @@ src/
 ```bash
 cargo run --bin fika -- --view compact /etc
 cargo test --bin fika
+scripts/check-rust-file-lines.sh
 ```
+
+每个 Rust 源文件严格限制为最多 1000 行。门禁不设历史豁免，合并变更前必须通过。
 
 因为 `default-run` 已经是 `fika`，也可以直接运行：
 
