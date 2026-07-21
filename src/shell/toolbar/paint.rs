@@ -18,18 +18,6 @@ impl ShellScene {
     ) {
         let layout = self.app_toolbar_layout(size);
         let toolbar = layout.toolbar;
-        push_rect(vertices, toolbar, theme.details_header(), size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x: toolbar.x,
-                y: toolbar.y,
-                width: toolbar.width,
-                height: self.scale_metric(1.0).max(1.0),
-            },
-            theme.glass_highlight(),
-            size,
-        );
         push_rect(
             vertices,
             ViewRect {

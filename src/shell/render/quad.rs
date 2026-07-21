@@ -41,6 +41,24 @@ pub(crate) struct QuadRenderer {
 
 impl QuadRenderer {
     pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::new_with_blend(device, format, wgpu::BlendState::ALPHA_BLENDING)
+    }
+
+    pub(crate) fn new_transparent_clear(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) -> Self {
+        let mut renderer = Self::new_with_blend(device, format, wgpu::BlendState::REPLACE);
+        renderer.upload(device, queue, &transparent_fullscreen_quad());
+        renderer
+    }
+
+    fn new_with_blend(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        blend: wgpu::BlendState,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("fika-wgpu-quad-shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(QUAD_SHADER)),
@@ -68,7 +86,7 @@ impl QuadRenderer {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: Some(blend),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -119,6 +137,36 @@ impl QuadRenderer {
     pub(crate) fn batch_count(&self) -> usize {
         usize::from(self.vertex_count > 0)
     }
+}
+
+fn transparent_fullscreen_quad() -> [QuadVertex; 6] {
+    let color = [0.0; 4];
+    [
+        QuadVertex {
+            position: [-1.0, 1.0],
+            color,
+        },
+        QuadVertex {
+            position: [-1.0, -1.0],
+            color,
+        },
+        QuadVertex {
+            position: [1.0, -1.0],
+            color,
+        },
+        QuadVertex {
+            position: [-1.0, 1.0],
+            color,
+        },
+        QuadVertex {
+            position: [1.0, -1.0],
+            color,
+        },
+        QuadVertex {
+            position: [1.0, 1.0],
+            color,
+        },
+    ]
 }
 
 pub(crate) fn push_clipped_rect(
@@ -456,6 +504,22 @@ fn intersect_rect(rect: ViewRect, clip: ViewRect) -> Option<ViewRect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transparent_clear_quad_covers_the_full_target_without_color() {
+        let vertices = transparent_fullscreen_quad();
+
+        assert!(vertices.iter().all(|vertex| vertex.color == [0.0; 4]));
+        assert_eq!(
+            quad_screen_rect(&vertices, PhysicalSize::new(120, 80)),
+            ViewRect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 80.0,
+            }
+        );
+    }
 
     #[test]
     fn rounded_highlight_with_transparent_fill_paints_only_outline() {

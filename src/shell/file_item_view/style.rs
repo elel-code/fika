@@ -30,6 +30,14 @@ impl DolphinItemPalette {
                 hover: [0.580, 0.639, 0.718, 0.10],
                 focus: theme.accent(),
             }
+        } else if theme.uses_transparent_background() {
+            Self {
+                view_base: theme.view_mode_content(crate::shell::options::ShellViewMode::Details),
+                view_alternate_base: theme.details_header(),
+                highlight: BREEZE_HIGHLIGHT,
+                hover: with_alpha(BREEZE_TEXT, 0.06),
+                focus: BREEZE_LIGHT_FOCUS,
+            }
         } else {
             Self::light()
         }
@@ -231,6 +239,25 @@ mod tests {
         assert_eq!(
             item_focus_color_for_palette(false, false, palette),
             [0.184, 0.435, 0.929, 0.8]
+        );
+    }
+
+    #[test]
+    fn transparent_background_does_not_add_idle_details_row_materials() {
+        let theme = ShellTheme::for_transparent_background(false, 0.65);
+        let palette = DolphinItemPalette::from_shell_theme(theme);
+
+        assert_eq!(
+            details_row_background_color_for_palette(false, false, false, palette)[3],
+            0.0
+        );
+        assert_eq!(
+            details_row_background_color_for_palette(false, false, true, palette)[3],
+            0.0
+        );
+        assert_eq!(
+            item_background_color_for_palette(true, false, palette),
+            [0.239, 0.502, 0.710, 0.32]
         );
     }
 }

@@ -112,6 +112,7 @@ impl TextLabelPrewarmStats {
     }
 }
 struct WgpuState {
+    damage_clear_renderer: QuadRenderer,
     quad_renderer: QuadRenderer,
     overlay_quad_renderer: QuadRenderer,
     icon_renderer: IconRenderer,

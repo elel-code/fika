@@ -112,7 +112,7 @@ pub(crate) fn settings_dialog_items(
             action: ShellSettingsAction::SetBackgroundOpacity(background_opacity_percent(
                 snapshot.background_opacity,
             )),
-            label: "Glass Opacity",
+            label: "Background Opacity",
             active: false,
         },
     ]

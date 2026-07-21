@@ -183,7 +183,8 @@ use shell::render::gpu::{
 };
 use shell::render::quad::{
     QuadRenderer, QuadVertex, RoundedHighlightStyle, push_clipped_rect,
-    push_clipped_rect_outline, push_clipped_rounded_highlight, push_clipped_rounded_rect, push_rect,
+    push_clipped_rect_outline, push_clipped_rounded_highlight, push_clipped_rounded_rect,
+    push_clipped_rounded_rect_outline, push_rect,
 };
 use shell::render::retained::RetainedSceneRenderer;
 #[cfg(test)]

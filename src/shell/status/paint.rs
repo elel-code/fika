@@ -7,7 +7,8 @@ use crate::shell::status::{ShellPaneStatus, ShellTaskStatusStore};
 use crate::shell::tasks::ShellTaskStatus;
 use crate::shell::theme::ShellTheme;
 use crate::{
-    LabelAlignment, QuadVertex, TextFrameBuilder, inset_rect, push_clipped_rounded_rect, push_rect,
+    LabelAlignment, QuadVertex, TextFrameBuilder, inset_rect, push_clipped_rounded_rect,
+    push_clipped_rounded_rect_outline, push_rect,
 };
 
 pub(crate) struct PaneStatusBarPaint<'a> {
@@ -95,7 +96,6 @@ pub(crate) fn push_pane_status_bar(
     text: &mut TextFrameBuilder<'_>,
     paint: PaneStatusBarPaint<'_>,
 ) {
-    push_rect(vertices, paint.rect, paint.theme.chrome(), paint.size);
     push_rect(
         vertices,
         ViewRect {
@@ -282,26 +282,18 @@ pub(crate) fn push_places_task_area(
     paint: PlacesTaskAreaPaint<'_>,
 ) {
     let radius = scale_metric(10.0, paint.scale);
-    push_clipped_rounded_rect(
+    push_clipped_rounded_rect_outline(
         vertices,
         paint.rect,
         paint.sidebar,
         radius,
+        scale_metric(1.0, paint.scale),
         paint.theme.divider(),
         paint.size,
     );
     let Some(inner) = inset_rect(paint.rect, scale_metric(1.0, paint.scale)) else {
         return;
     };
-    push_clipped_rounded_rect(
-        vertices,
-        inner,
-        paint.sidebar,
-        (radius - scale_metric(1.0, paint.scale)).max(1.0),
-        paint.theme.sidebar(),
-        paint.size,
-    );
-
     let padding = scale_metric(10.0, paint.scale);
     let row_height = scale_metric(PLACES_TASK_ROW_HEIGHT, paint.scale);
     let mut y = inner.y + scale_metric(18.0, paint.scale);

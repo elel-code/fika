@@ -154,7 +154,6 @@ impl ShellScene {
             width: projection.geometry.content.width,
             height: header_height,
         };
-        push_rect(vertices, header, theme.details_header(), size);
         push_rect(
             vertices,
             ViewRect {
@@ -270,36 +269,15 @@ impl ShellScene {
         }
         let panel = self.places_panel_rect(size);
         let panel_radius = self.scale_metric(12.0);
-        push_clipped_rounded_rect(
+        push_clipped_rounded_rect_outline(
             vertices,
             panel,
             sidebar,
             panel_radius,
+            self.scale_metric(1.0),
             theme.divider(),
             size,
         );
-        if let Some(inner_panel) = inset_rect(panel, self.scale_metric(1.0)) {
-            push_clipped_rounded_rect(
-                vertices,
-                inner_panel,
-                sidebar,
-                (panel_radius - self.scale_metric(1.0)).max(1.0),
-                theme.sidebar(),
-                size,
-            );
-            push_clipped_rect(
-                vertices,
-                ViewRect {
-                    x: inner_panel.x + panel_radius,
-                    y: inner_panel.y,
-                    width: (inner_panel.width - panel_radius * 2.0).max(1.0),
-                    height: self.scale_metric(1.0).max(1.0),
-                },
-                inner_panel,
-                theme.glass_highlight(),
-                size,
-            );
-        }
         push_rect(
             vertices,
             ViewRect {

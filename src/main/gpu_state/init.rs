@@ -111,6 +111,8 @@ impl WgpuState {
         };
         surface.configure(&device, &config);
 
+        let damage_clear_renderer =
+            QuadRenderer::new_transparent_clear(&device, &queue, config.format);
         let quad_renderer = QuadRenderer::new(&device, config.format);
         let overlay_quad_renderer = QuadRenderer::new(&device, config.format);
         let icon_renderer = IconRenderer::new(&device, config.format);
@@ -123,6 +125,7 @@ impl WgpuState {
         );
 
         Ok(Self {
+            damage_clear_renderer,
             quad_renderer,
             overlay_quad_renderer,
             icon_renderer,
@@ -356,6 +359,7 @@ impl WgpuState {
             && let Some(scissor) = scissor
         {
             pass.set_scissor_rect(scissor.x, scissor.y, scissor.width, scissor.height);
+            self.damage_clear_renderer.draw(&mut pass);
         }
         self.quad_renderer.draw(&mut pass);
         self.icon_renderer.draw(&mut pass);

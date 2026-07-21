@@ -114,7 +114,7 @@
     }
 
     #[test]
-    fn settings_dialog_routes_actions_and_updates_glass_opacity() {
+    fn settings_dialog_routes_actions_and_updates_background_opacity() {
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = shell::settings::settings_dialog_window_size_scaled(scene.ui_scale());
         let hidden_row = shell::settings::settings_dialog_row_rect(

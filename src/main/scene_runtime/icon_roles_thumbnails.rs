@@ -160,38 +160,13 @@ impl ShellScene {
         let pane_id = projection.geometry.kind;
         let pane = projection.geometry.pane;
         let top_bar = projection.geometry.top_bar;
-        let status_bar = projection.geometry.status_bar;
         let screen = ViewRect {
             x: 0.0,
             y: 0.0,
             width: size.width.max(1) as f32,
             height: size.height.max(1) as f32,
         };
-        let pane_radius = self.scale_metric(10.0);
-        push_clipped_rounded_rect(vertices, pane, screen, pane_radius, theme.divider(), size);
-        if let Some(inner) = inset_rect(pane, self.scale_metric(1.0)) {
-            push_clipped_rounded_rect(
-                vertices,
-                inner,
-                screen,
-                (pane_radius - self.scale_metric(1.0)).max(1.0),
-                theme.view_mode_content(projection.view.view_mode),
-                size,
-            );
-        }
 
-        push_rect(vertices, top_bar, theme.chrome(), size);
-        push_rect(
-            vertices,
-            ViewRect {
-                x: top_bar.x + self.scale_metric(1.0),
-                y: top_bar.y,
-                width: (top_bar.width - self.scale_metric(2.0)).max(1.0),
-                height: self.scale_metric(1.0).max(1.0),
-            },
-            theme.glass_highlight(),
-            size,
-        );
         if let Some(path_rect) = self.pane_path_bar_rect(pane_id, size) {
             let location_active = self.location_bar_active_for_pane(pane_id);
             let path_label = self.location_label_for_pane(pane_id);
@@ -213,17 +188,6 @@ impl ShellScene {
             );
         }
 
-        push_rect(
-            vertices,
-            ViewRect {
-                x: pane.x,
-                y: top_bar.bottom(),
-                width: pane.width,
-                height: (status_bar.y - top_bar.bottom()).max(1.0),
-            },
-            theme.view_mode_content(projection.view.view_mode),
-            size,
-        );
         self.push_pane_body_border(vertices, projection, theme, size);
         if pane_id == ShellPaneId::SLOT_0 {
             self.push_filter_bar(vertices, text, size, theme);

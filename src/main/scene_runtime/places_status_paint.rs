@@ -35,7 +35,6 @@ impl ShellScene {
         let Some(rect) = self.filter_bar_rect(size) else {
             return;
         };
-        push_rect(vertices, rect, theme.chrome(), size);
         push_rect(
             vertices,
             ViewRect {

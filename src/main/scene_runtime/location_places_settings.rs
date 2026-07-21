@@ -231,7 +231,7 @@ impl ShellScene {
     }
 
     fn theme(&self) -> ShellTheme {
-        ShellTheme::for_glass_background(self.dark_mode, self.background_opacity)
+        ShellTheme::for_transparent_background(self.dark_mode, self.background_opacity)
     }
 
     fn toggle_dark_mode(&mut self) {

@@ -128,7 +128,7 @@ fn push_opacity_slider(
     let text_height = scaled_dialog_metric(20.0, scale);
     let track = settings_dialog_opacity_track_rect(size, scale);
     text.push_label_aligned(
-        "Glass Opacity",
+        "Background Opacity",
         ViewRect {
             x: row.x + padding,
             y: row.y + (row.height - text_height) / 2.0,
