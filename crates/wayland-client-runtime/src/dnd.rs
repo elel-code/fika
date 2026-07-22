@@ -70,7 +70,8 @@ impl DndIcon {
         if buffer_scale < 1 {
             return Err("DnD icon buffer scale must be at least one");
         }
-        if width % buffer_scale as u32 != 0 || height % buffer_scale as u32 != 0 {
+        if !width.is_multiple_of(buffer_scale as u32) || !height.is_multiple_of(buffer_scale as u32)
+        {
             return Err("DnD icon dimensions must be divisible by its buffer scale");
         }
         let rgba = rgba.into();

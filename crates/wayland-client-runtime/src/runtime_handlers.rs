@@ -272,10 +272,9 @@ impl SeatHandler for RuntimeState {
         if let Some(objects) = self.seats.remove(&seat.id().protocol_id())
             && let Some(device) = objects.data_device.as_ref()
             && let Some(offer) = self.active_dnd_by_device.remove(&device.inner().id())
+            && let Some(record) = self.incoming_dnd.remove(&offer)
         {
-            if let Some(record) = self.incoming_dnd.remove(&offer) {
-                record.offer.destroy();
-            }
+            record.offer.destroy();
         }
     }
 }

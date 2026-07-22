@@ -734,10 +734,10 @@ impl RuntimeState {
         };
         self.surface_ids.remove(&shared.wl_surface().id());
         self.children.remove(&id);
-        if let Some(parent) = shared.parent.as_ref() {
-            if let Some(children) = self.children.get_mut(&parent.id) {
-                children.retain(|child| *child != id);
-            }
+        if let Some(parent) = shared.parent.as_ref()
+            && let Some(children) = self.children.get_mut(&parent.id)
+        {
+            children.retain(|child| *child != id);
         }
         self.keyboard_focus.retain(|_, focused| *focused != id);
         for objects in self.seats.values_mut() {
