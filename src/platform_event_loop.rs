@@ -143,18 +143,11 @@ impl EventLoop {
                         WindowEvent::PointerMoved { position }
                     }
                     PointerEventKind::Leave => WindowEvent::PointerLeft {},
-                    PointerEventKind::Press { button, serial, .. } => {
-                        window
-                            .state
-                            .lock()
-                            .expect("Wayland window state mutex poisoned")
-                            .latest_drag_serial = Some(serial);
-                        WindowEvent::PointerButton {
-                            state: ElementState::Pressed,
-                            position,
-                            button: linux_button(button),
-                        }
-                    }
+                    PointerEventKind::Press { button, .. } => WindowEvent::PointerButton {
+                        state: ElementState::Pressed,
+                        position,
+                        button: linux_button(button),
+                    },
                     PointerEventKind::Release { button, .. } => WindowEvent::PointerButton {
                         state: ElementState::Released,
                         position,
@@ -306,7 +299,8 @@ impl EventLoop {
                 }
                 self.finish_dnd_if_ready(id);
             }
-            DndEvent::SourceFinished { source, action } => {
+            DndEvent::SourceDropped { source, action }
+            | DndEvent::SourceFinished { source, action } => {
                 if let Some(window) = self.active.dnd_sources.borrow_mut().remove(&source) {
                     app.window_event(
                         &self.active,

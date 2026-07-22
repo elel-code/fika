@@ -26,6 +26,19 @@ crate does not reproduce its `CoreWindow` structure or cross-platform API.
 The PR was draft and contained popup history/TODO paths, so it was treated as
 a behavioral reference rather than an implementation source.
 
+## winit drag-and-drop work
+
+- PR: <https://github.com/rust-windowing/winit/pull/4571>
+- Reviewed merge commit: `156433eb912a62a1a07da0f9bbaa2d775270c788`
+- Behavior retained here: the Wayland layer owns button serial selection,
+  resolves the data device from the pointer-focused origin seat, starts the
+  protocol drag before committing the icon surface for KDE compatibility, and
+  reports drop acceptance without releasing the source or icon before
+  `dnd_finished`/cancellation.
+
+The public API remains Wayland-native and payload-oriented; it does not copy
+winit's cross-platform `DataTransfer` abstraction.
+
 ## SCTK dialog support
 
 - PR: <https://github.com/Smithay/client-toolkit/pull/532>

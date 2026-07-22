@@ -261,8 +261,9 @@ impl SeatHandler for RuntimeState {
                 }
             }
             Capability::Pointer => {
-                self.latest_popup_grabs.remove(&seat.id());
                 objects.pointer.take();
+                objects.pointer_focus = None;
+                objects.latest_button_serial = None;
             }
             Capability::Touch => {}
             _ => {}
@@ -276,7 +277,6 @@ impl SeatHandler for RuntimeState {
         {
             self.incoming_dnd.remove(&offer);
         }
-        self.latest_popup_grabs.remove(&seat.id());
     }
 }
 
@@ -298,26 +298,39 @@ impl PointerHandler for RuntimeState {
             return;
         };
         let seat = data.seat().clone();
+        let seat_id = seat.id().protocol_id();
         for event in events {
             let Some(surface) = self.surface_id(&event.surface) else {
                 continue;
             };
             let kind = match &event.kind {
-                SctkPointerEventKind::Enter { serial } => PointerEventKind::Enter {
-                    serial: InputSerial::new(
-                        seat.clone(),
-                        *serial,
-                        InputSerialSource::PointerEnter,
-                    ),
-                },
-                SctkPointerEventKind::Leave { .. } => PointerEventKind::Leave,
+                SctkPointerEventKind::Enter { serial } => {
+                    if let Some(objects) = self.seats.get_mut(&seat_id) {
+                        objects.pointer_focus = Some(surface);
+                    }
+                    PointerEventKind::Enter {
+                        serial: InputSerial::new(
+                            seat.clone(),
+                            *serial,
+                            InputSerialSource::PointerEnter,
+                        ),
+                    }
+                }
+                SctkPointerEventKind::Leave { .. } => {
+                    if let Some(objects) = self.seats.get_mut(&seat_id)
+                        && objects.pointer_focus == Some(surface)
+                    {
+                        objects.pointer_focus = None;
+                    }
+                    PointerEventKind::Leave
+                }
                 SctkPointerEventKind::Motion { time } => PointerEventKind::Motion { time: *time },
                 SctkPointerEventKind::Press {
                     time,
                     button,
                     serial,
                 } => {
-                    self.latest_popup_grabs.insert(seat.id(), *serial);
+                    self.record_button_serial(seat_id, surface, *serial);
                     PointerEventKind::Press {
                         time: *time,
                         button: *button,
@@ -332,15 +345,18 @@ impl PointerHandler for RuntimeState {
                     time,
                     button,
                     serial,
-                } => PointerEventKind::Release {
-                    time: *time,
-                    button: *button,
-                    serial: InputSerial::new(
-                        seat.clone(),
-                        *serial,
-                        InputSerialSource::PointerRelease,
-                    ),
-                },
+                } => {
+                    self.record_button_serial(seat_id, surface, *serial);
+                    PointerEventKind::Release {
+                        time: *time,
+                        button: *button,
+                        serial: InputSerial::new(
+                            seat.clone(),
+                            *serial,
+                            InputSerialSource::PointerRelease,
+                        ),
+                    }
+                }
                 SctkPointerEventKind::Axis {
                     time,
                     horizontal,
@@ -679,8 +695,14 @@ impl DataSourceHandler for RuntimeState {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_data_source::WlDataSource,
+        source: &wl_data_source::WlDataSource,
     ) {
+        if let Some(record) = self.outgoing_dnd.get(&source.id()) {
+            self.events.push_back(Event::Dnd(DndEvent::SourceDropped {
+                source: record.id,
+                action: record.selected_action,
+            }));
+        }
     }
 
     fn dnd_finished(

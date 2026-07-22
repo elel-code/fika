@@ -108,7 +108,7 @@ pub enum RuntimeError {
     InvalidPopupGrab,
     #[error("popup grab serial belongs to another Wayland connection or is no longer current")]
     ForeignOrStalePopupGrab,
-    #[error("drag start requires the current pointer-press or touch-down serial")]
+    #[error("drag origin has no focused pointer seat with a current button serial")]
     InvalidDragSerial,
     #[error("DnD content must contain at least one MIME payload")]
     EmptyDndContent,
@@ -199,13 +199,13 @@ impl Runtime {
             children: HashMap::new(),
             seats: HashMap::new(),
             keyboard_focus: HashMap::new(),
-            latest_popup_grabs: HashMap::new(),
             incoming_dnd: HashMap::new(),
             active_dnd_by_device: HashMap::new(),
             outgoing_dnd: HashMap::new(),
             events: VecDeque::with_capacity(options.event_capacity),
             next_surface_id: 1,
             next_dnd_id: 1,
+            next_button_order: 1,
         };
 
         WaylandSource::new(connection.clone(), event_queue)
@@ -325,9 +325,10 @@ impl Runtime {
                 serial.seat.backend().upgrade().as_ref() == Some(&self.connection.backend());
             let current = self
                 .state
-                .latest_popup_grabs
-                .get(&serial.seat.id())
-                .is_some_and(|value| *value == serial.serial);
+                .seats
+                .get(&serial.seat.id().protocol_id())
+                .and_then(|objects| objects.latest_button_serial)
+                .is_some_and(|value| value.serial == serial.serial);
             if !same_connection || !current {
                 return Err(RuntimeError::ForeignOrStalePopupGrab);
             }
@@ -559,11 +560,14 @@ impl Runtime {
         Ok(())
     }
 
-    /// Start an external drag from a recent pointer press or touch down.
+    /// Start an external drag using the origin's focused pointer seat.
+    ///
+    /// Call this while handling the pointer gesture which activated the drag.
+    /// The runtime owns the compositor serial and selects the newest matching
+    /// seat, so applications do not need to retain protocol serials.
     pub fn start_drag(
         &mut self,
         origin: SurfaceId,
-        serial: &InputSerial,
         payloads: Vec<DndMimePayload>,
         actions: DndActions,
         icon: Option<DndIcon>,
@@ -571,24 +575,20 @@ impl Runtime {
         if payloads.is_empty() {
             return Err(RuntimeError::EmptyDndContent);
         }
-        if !serial.is_popup_grab() {
-            return Err(RuntimeError::InvalidDragSerial);
-        }
-        let same_connection =
-            serial.seat.backend().upgrade().as_ref() == Some(&self.connection.backend());
-        let current = self
-            .state
-            .latest_popup_grabs
-            .get(&serial.seat.id())
-            .is_some_and(|value| *value == serial.serial);
-        if !same_connection || !current {
-            return Err(RuntimeError::InvalidDragSerial);
-        }
-        let origin = self.surface_shared(origin)?;
+        let origin_surface = self.surface_shared(origin)?;
+        let candidates = self.state.seats.iter().map(|(seat_id, objects)| {
+            (
+                *seat_id,
+                objects.pointer_focus,
+                objects.data_device.is_some(),
+                objects.latest_button_serial,
+            )
+        });
+        let (seat_id, serial) =
+            select_drag_seat(origin, candidates).ok_or(RuntimeError::InvalidDragSerial)?;
         let icon = icon
-            .map(|icon| create_dnd_icon_surface(&mut self.state, &self.queue_handle, icon))
+            .map(|icon| prepare_dnd_icon_surface(&mut self.state, &self.queue_handle, icon))
             .transpose()?;
-        let seat_id = serial.seat.id().protocol_id();
         let data_device = self
             .state
             .seats
@@ -604,10 +604,15 @@ impl Runtime {
         self.state.next_dnd_id += 1;
         source.start_drag(
             data_device,
-            origin.wl_surface(),
+            origin_surface.wl_surface(),
             icon.as_ref().map(|icon| &icon.surface),
-            serial.serial,
+            serial,
         );
+        // Match winit #4571: on KDE, committing the icon before start_drag can
+        // prevent its offset from taking effect.
+        if let Some(icon) = icon.as_ref() {
+            icon.surface.commit();
+        }
         self.state.outgoing_dnd.insert(
             source.inner().id(),
             OutgoingDndSource {
@@ -779,13 +784,13 @@ struct RuntimeState {
     children: HashMap<SurfaceId, Vec<SurfaceId>>,
     seats: HashMap<u32, SeatObjects>,
     keyboard_focus: HashMap<u32, SurfaceId>,
-    latest_popup_grabs: HashMap<ObjectId, u32>,
     incoming_dnd: HashMap<DndOfferId, IncomingDndOffer>,
     active_dnd_by_device: HashMap<ObjectId, DndOfferId>,
     outgoing_dnd: HashMap<ObjectId, OutgoingDndSource>,
     events: VecDeque<Event>,
     next_surface_id: u64,
     next_dnd_id: u64,
+    next_button_order: u64,
 }
 
 struct IncomingDndOffer {
@@ -805,6 +810,13 @@ struct OutgoingDndSource {
 struct DndIconSurface {
     surface: wl_surface::WlSurface,
     _buffer: ShmBuffer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ButtonSerial {
+    surface: SurfaceId,
+    serial: u32,
+    order: u64,
 }
 
 impl Drop for DndIconSurface {
@@ -832,6 +844,23 @@ impl RuntimeState {
             }
         }
         self.keyboard_focus.retain(|_, focused| *focused != id);
+        for objects in self.seats.values_mut() {
+            if objects.pointer_focus == Some(id) {
+                objects.pointer_focus = None;
+            }
+        }
+    }
+
+    fn record_button_serial(&mut self, seat_id: u32, surface: SurfaceId, serial: u32) {
+        let order = self.next_button_order;
+        self.next_button_order = self.next_button_order.saturating_add(1);
+        if let Some(objects) = self.seats.get_mut(&seat_id) {
+            objects.latest_button_serial = Some(ButtonSerial {
+                surface,
+                serial,
+                order,
+            });
+        }
     }
 
     fn push_key(
@@ -874,11 +903,28 @@ fn collect_post_order(
     order.push(id);
 }
 
+fn select_drag_seat(
+    origin: SurfaceId,
+    candidates: impl IntoIterator<Item = (u32, Option<SurfaceId>, bool, Option<ButtonSerial>)>,
+) -> Option<(u32, u32)> {
+    candidates
+        .into_iter()
+        .filter_map(|(seat_id, pointer_focus, has_data_device, button)| {
+            let button = button?;
+            (has_data_device && pointer_focus == Some(origin) && button.surface == origin)
+                .then_some((seat_id, button))
+        })
+        .max_by_key(|(_, button)| button.order)
+        .map(|(seat_id, button)| (seat_id, button.serial))
+}
+
 #[derive(Default)]
 struct SeatObjects {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<ThemedPointer>,
     data_device: Option<DataDevice>,
+    pointer_focus: Option<SurfaceId>,
+    latest_button_serial: Option<ButtonSerial>,
 }
 
 impl Drop for SeatObjects {

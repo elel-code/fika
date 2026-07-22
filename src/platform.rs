@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 use wayland_client_runtime::{
     BlurRegion, BlurState, CursorIcon as RuntimeCursorIcon, DecorationPreference, DialogAttributes,
     DndAction as RuntimeDndAction, DndActions as RuntimeDndActions, DndEvent,
-    DndIcon as RuntimeDndIcon, DndMimePayload, DndOfferId, DndSourceId, Event, InputSerial,
-    KeyState, KeyboardEvent, LogicalPosition, LogicalSize, PointerEventKind, Runtime, RuntimeError,
+    DndIcon as RuntimeDndIcon, DndMimePayload, DndOfferId, DndSourceId, Event, KeyState,
+    KeyboardEvent, LogicalPosition, LogicalSize, PointerEventKind, Runtime, RuntimeError,
     RuntimeOptions, SurfaceEvent, SurfaceHandle, SurfaceId, ToplevelAttributes, WakeHandle,
 };
 include!("platform_types.rs");
@@ -101,7 +101,6 @@ struct WindowState {
     configured: bool,
     redraw_requested: bool,
     frame_pending: bool,
-    latest_drag_serial: Option<InputSerial>,
 }
 
 enum RuntimeCommand {
@@ -357,7 +356,6 @@ impl ActiveEventLoop {
                 configured: false,
                 redraw_requested: true,
                 frame_pending: false,
-                latest_drag_serial: None,
             }),
             shared: self.shared.clone(),
         });
@@ -384,19 +382,11 @@ impl ActiveEventLoop {
         actions: &[DndAction],
         icon: Option<DragIcon>,
     ) -> Result<DataTransferId, String> {
-        let origin = self
-            .windows
+        self.windows
             .borrow()
             .get(&window)
             .and_then(Weak::upgrade)
             .ok_or_else(|| "drag origin surface no longer exists".to_string())?;
-        let serial = origin
-            .state
-            .lock()
-            .expect("Wayland window state mutex poisoned")
-            .latest_drag_serial
-            .clone()
-            .ok_or_else(|| "drag start has no pointer-press serial".to_string())?;
         let payloads = data
             .payloads
             .into_iter()
@@ -417,13 +407,7 @@ impl ActiveEventLoop {
         let source = self
             .runtime
             .borrow_mut()
-            .start_drag(
-                window,
-                &serial,
-                payloads,
-                runtime_dnd_actions(actions),
-                icon,
-            )
+            .start_drag(window, payloads, runtime_dnd_actions(actions), icon)
             .map_err(|error| error.to_string())?;
         self.dnd_sources.borrow_mut().insert(source, window);
         Ok(DataTransferId(source.get()))

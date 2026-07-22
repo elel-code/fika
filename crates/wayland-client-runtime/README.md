@@ -77,10 +77,15 @@ without the KDE-compatible extension return `RuntimeError::Unsupported`.
 
 ## Drag icons and cursors
 
-`Runtime::start_drag` accepts an optional `DndIcon`. The runtime validates its
-buffer scale, converts straight RGBA into the premultiplied native-endian
-ARGB8888 representation required by `wl_shm`, applies the logical hotspot
-offset, and retains the icon surface until the source finishes or is cancelled.
+`Runtime::start_drag` derives the serial and data device from the pointer seat
+focused on the origin surface; applications call it during the activating
+pointer gesture and do not retain protocol serials. It accepts an optional
+`DndIcon`, validates its buffer scale, converts straight RGBA into the
+premultiplied native-endian ARGB8888 representation required by `wl_shm`, and
+applies the logical hotspot offset. The icon is committed after `start_drag`
+for KDE compatibility and remains owned until the source finishes or is
+cancelled. `SourceDropped` reports acceptance immediately, while
+`SourceFinished` marks the point where source and icon resources are released.
 
 `Runtime::set_cursor` uses `wp_cursor_shape_manager_v1` when advertised. On
 older compositors, SCTK loads the same semantic cursor from the configured

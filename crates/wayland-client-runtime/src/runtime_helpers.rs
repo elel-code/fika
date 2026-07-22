@@ -101,7 +101,7 @@ fn map_cursor_icon(icon: CursorIcon) -> SctkCursorIcon {
     }
 }
 
-fn create_dnd_icon_surface(
+fn prepare_dnd_icon_surface(
     state: &mut RuntimeState,
     queue_handle: &QueueHandle<RuntimeState>,
     icon: DndIcon,
@@ -137,7 +137,6 @@ fn create_dnd_icon_surface(
         }
     }
     surface.damage(0, 0, i32::MAX, i32::MAX);
-    surface.commit();
     Ok(DndIconSurface {
         surface,
         _buffer: buffer,

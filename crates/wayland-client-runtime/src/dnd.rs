@@ -171,13 +171,19 @@ pub enum DndEvent {
         surface: SurfaceId,
         action: Option<DndAction>,
     },
+    /// The compositor accepted the drop. The source and drag icon remain alive
+    /// until [`DndEvent::SourceFinished`] or [`DndEvent::SourceCancelled`].
+    SourceDropped {
+        source: DndSourceId,
+        action: Option<DndAction>,
+    },
+    /// The destination completed the transfer and source resources were released.
     SourceFinished {
         source: DndSourceId,
         action: Option<DndAction>,
     },
-    SourceCancelled {
-        source: DndSourceId,
-    },
+    /// The drag was cancelled and source resources were released.
+    SourceCancelled { source: DndSourceId },
 }
 
 /// A readable pipe returned by a Wayland DnD offer.

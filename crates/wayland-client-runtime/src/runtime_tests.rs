@@ -81,4 +81,63 @@ mod tests {
         assert_eq!(u32::from_ne_bytes(encoded[..4].try_into().unwrap()), 0x8064_3219);
         assert_eq!(u32::from_ne_bytes(encoded[4..].try_into().unwrap()), 0);
     }
+
+    #[test]
+    fn drag_seat_requires_origin_focus_data_device_and_matching_button_surface() {
+        let origin = SurfaceId(7);
+        let other = SurfaceId(8);
+        let candidates = [
+            (
+                1,
+                Some(other),
+                true,
+                Some(ButtonSerial {
+                    surface: other,
+                    serial: 10,
+                    order: 1,
+                }),
+            ),
+            (
+                2,
+                Some(origin),
+                false,
+                Some(ButtonSerial {
+                    surface: origin,
+                    serial: 20,
+                    order: 2,
+                }),
+            ),
+            (
+                3,
+                Some(origin),
+                true,
+                Some(ButtonSerial {
+                    surface: other,
+                    serial: 30,
+                    order: 3,
+                }),
+            ),
+        ];
+
+        assert_eq!(select_drag_seat(origin, candidates), None);
+    }
+
+    #[test]
+    fn drag_seat_uses_newest_matching_button_across_multiple_seats() {
+        let origin = SurfaceId(7);
+        let button = |serial, order| {
+            Some(ButtonSerial {
+                surface: origin,
+                serial,
+                order,
+            })
+        };
+        let candidates = [
+            (11, Some(origin), true, button(110, 4)),
+            (12, Some(origin), true, button(120, 9)),
+            (13, Some(origin), true, None),
+        ];
+
+        assert_eq!(select_drag_seat(origin, candidates), Some((12, 120)));
+    }
 }

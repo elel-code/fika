@@ -333,7 +333,13 @@ impl<T> DataTransferSendBuilder<T> {
     {
         if let Some(data) = provider(&self.payload, &hint) {
             let bytes = match data.into() {
-                SendData::Uris(uris) => Arc::<[u8]>::from(uris.join("\r\n").into_bytes()),
+                SendData::Uris(uris) => {
+                    let mut encoded = uris.join("\r\n");
+                    if !encoded.is_empty() {
+                        encoded.push_str("\r\n");
+                    }
+                    Arc::<[u8]>::from(encoded.into_bytes())
+                }
                 SendData::Text(text) => Arc::<[u8]>::from(text.into_bytes()),
             };
             self.payloads.push((hint, bytes));
@@ -448,4 +454,27 @@ pub enum ControlFlow {
     #[default]
     Wait,
     WaitUntil(Instant),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_list_payload_uses_crlf_and_a_terminal_line_break() {
+        let transfer = DataTransferSendBuilder::new(())
+            .with_type(TypeHint::UriList, |_, _| {
+                Some(SendData::Uris(vec![
+                    "file:///tmp/a".to_string(),
+                    "file:///tmp/b".to_string(),
+                ]))
+            })
+            .build();
+
+        assert_eq!(transfer.payloads.len(), 1);
+        assert_eq!(
+            transfer.payloads[0].1.as_ref(),
+            b"file:///tmp/a\r\nfile:///tmp/b\r\n"
+        );
+    }
 }
