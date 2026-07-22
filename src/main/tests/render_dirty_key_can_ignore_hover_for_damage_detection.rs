@@ -393,6 +393,7 @@
 
         scene.external_drag = Some(ShellExternalDrag {
             sources: vec![PathBuf::from("/tmp/source.txt")],
+            local_source: None,
         });
         let projections = ShellPaneId::ALL
             .into_iter()

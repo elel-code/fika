@@ -42,15 +42,24 @@ struct IncomingDndTransfer {
     id: DataTransferId,
     fetch_serial: Option<AsyncRequestSerial>,
     paths: Option<Vec<PathBuf>>,
+    data_received: bool,
+    local_source: Option<ShellInternalDragSource>,
     last_position: Option<PhysicalPosition<f64>>,
     drop_pending: bool,
 }
 impl IncomingDndTransfer {
-    fn new(id: DataTransferId, position: Option<PhysicalPosition<f64>>) -> Self {
+    fn new(
+        id: DataTransferId,
+        position: Option<PhysicalPosition<f64>>,
+        paths: Option<Vec<PathBuf>>,
+        local_source: Option<ShellInternalDragSource>,
+    ) -> Self {
         Self {
             id,
             fetch_serial: None,
-            paths: None,
+            paths,
+            data_received: false,
+            local_source,
             last_position: position,
             drop_pending: false,
         }
@@ -60,6 +69,7 @@ impl IncomingDndTransfer {
 struct OutgoingDndTransfer {
     id: DataTransferId,
     paths: Vec<PathBuf>,
+    source: ShellInternalDragSource,
 }
 include!("app_controller/window_lifecycle.rs");
 include!("app_controller/dialog_windows.rs");

@@ -202,16 +202,16 @@ impl ShellScene {
             .find_map(|(index, rect)| rect.contains(point).then_some(index))
     }
 
-    fn place_gap_at_screen_point_for_drag(
+    fn place_gap_at_screen_point_for_drag_source(
         &self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
-        drag: &ShellInternalDrag,
+        source: &ShellInternalDragSource,
     ) -> Option<usize> {
         if let Some(index) = self.place_gap_at_screen_point(point, size) {
             return Some(index);
         }
-        if !matches!(drag.source, ShellInternalDragSource::Place { .. }) {
+        if !matches!(source, ShellInternalDragSource::Place { .. }) {
             return None;
         }
         self.place_row_gap_at_screen_point(point, size)

@@ -6,20 +6,27 @@ impl ShellScene {
         size: PhysicalSize<u32>,
         drag: &ShellInternalDrag,
     ) -> Option<ShellDropTarget> {
-        if let Some(index) = self.place_gap_at_screen_point_for_drag(point, size, drag) {
+        if let Some(index) =
+            self.place_gap_at_screen_point_for_drag_source(point, size, &drag.source)
+        {
             let target = ShellDropTarget::PlacesGap { index };
-            if self.drag_can_drop_on_target(drag, &target) {
+            if self.local_drag_can_drop_on_target(&drag.source, &drag.paths, &target) {
                 return Some(target);
             }
         }
         let target = self.drop_target_at_screen_point(point, size)?;
-        self.drag_can_drop_on_target(drag, &target)
+        self.local_drag_can_drop_on_target(&drag.source, &drag.paths, &target)
             .then_some(target)
     }
 
-    fn drag_can_drop_on_target(&self, drag: &ShellInternalDrag, target: &ShellDropTarget) -> bool {
+    fn local_drag_can_drop_on_target(
+        &self,
+        source: &ShellInternalDragSource,
+        paths: &[PathBuf],
+        target: &ShellDropTarget,
+    ) -> bool {
         match target {
-            ShellDropTarget::PlacesGap { index } => match &drag.source {
+            ShellDropTarget::PlacesGap { index } => match source {
                 ShellInternalDragSource::Place {
                     index: source_index,
                 } => {
@@ -32,18 +39,18 @@ impl ShellScene {
                     is_dir: true,
                     source_path,
                     ..
-                } => drag.pane_source_directory_path().is_some() && !is_network_path(source_path),
+                } => !is_network_path(source_path),
                 ShellInternalDragSource::PaneItem { is_dir: false, .. } => false,
             },
             ShellDropTarget::Place { index, .. } => {
                 self.place_participates_in_dnd(*index)
-                    && matches!(&drag.source, ShellInternalDragSource::PaneItem { .. })
+                    && matches!(source, ShellInternalDragSource::PaneItem { .. })
             }
             ShellDropTarget::PaneItem { is_dir, path, .. } if *is_dir => {
-                !drag.paths.iter().any(|source| source == path)
+                !paths.iter().any(|source| source == path)
             }
             ShellDropTarget::PaneBlank { path, .. } => {
-                !drag.paths.iter().any(|source| source == path)
+                !paths.iter().any(|source| source == path)
             }
             ShellDropTarget::PaneItem { .. } | ShellDropTarget::PlacesBlank => false,
         }
@@ -53,10 +60,24 @@ impl ShellScene {
         &self,
         point: ViewPoint,
         size: PhysicalSize<u32>,
-        sources: &[PathBuf],
+        drag: &ShellExternalDrag,
     ) -> Option<ShellDropTarget> {
+        if let Some(source) = drag.local_source.as_ref() {
+            if let Some(index) =
+                self.place_gap_at_screen_point_for_drag_source(point, size, source)
+            {
+                let target = ShellDropTarget::PlacesGap { index };
+                if self.local_drag_can_drop_on_target(source, &drag.sources, &target) {
+                    return Some(target);
+                }
+            }
+            let target = self.drop_target_at_screen_point(point, size)?;
+            return self
+                .local_drag_can_drop_on_target(source, &drag.sources, &target)
+                .then_some(target);
+        }
         let target = self.drop_target_at_screen_point(point, size)?;
-        self.external_drag_can_drop_on_target(sources, &target)
+        self.external_drag_can_drop_on_target(&drag.sources, &target)
             .then_some(target)
     }
 
@@ -102,9 +123,10 @@ impl ShellScene {
         changed
     }
 
-    fn begin_external_drag(
+    fn begin_data_transfer_drag(
         &mut self,
         sources: Vec<PathBuf>,
+        local_source: Option<ShellInternalDragSource>,
         point: ViewPoint,
         size: PhysicalSize<u32>,
     ) -> bool {
@@ -116,7 +138,7 @@ impl ShellScene {
         self.context_menu = None;
         self.drop_menu = None;
         let old_drag = self.external_drag.clone();
-        self.external_drag = ShellExternalDrag::new(sources);
+        self.external_drag = ShellExternalDrag::new(sources, local_source);
         let hover_changed = self.update_external_dnd_hover_target(point, size);
         old_drag != self.external_drag || hover_changed
     }
@@ -139,6 +161,13 @@ impl ShellScene {
             .filter(|drag| drag.active)
             .map(|drag| drag.paths.clone())
             .filter(|paths| !paths.is_empty())
+    }
+
+    fn active_internal_drag_source(&self) -> Option<ShellInternalDragSource> {
+        self.internal_drag
+            .as_ref()
+            .filter(|drag| drag.active)
+            .map(|drag| drag.source.clone())
     }
 
     fn active_internal_drag_preview_source(
@@ -255,19 +284,45 @@ impl ShellScene {
     ) -> Result<bool, String> {
         self.pointer = Some(point);
         let sources = normalized_external_drop_sources(sources);
+        let local_source = self
+            .external_drag
+            .as_ref()
+            .and_then(|drag| drag.local_source.clone());
         let drag_cleared = self.external_drag.take().is_some();
-        let Some(target) =
-            self.drop_target_at_screen_point_for_external_drag(point, size, &sources)
+        let Some(drag) = ShellExternalDrag::new(sources, local_source) else {
+            let hover_cleared = self.clear_dnd_hover_target();
+            return Ok(drag_cleared || hover_cleared);
+        };
+        let Some(target) = self.drop_target_at_screen_point_for_external_drag(point, size, &drag)
         else {
             let hover_cleared = self.clear_dnd_hover_target();
             return Ok(drag_cleared || hover_cleared);
         };
+        if let (
+            Some(source),
+            ShellDropTarget::PlacesGap { index },
+        ) = (drag.local_source, &target)
+        {
+            let changed = self.drop_local_drag_to_places_gap(
+                source,
+                *index,
+                &default_user_places_path(),
+                size,
+            )?;
+            let hover_cleared = self.clear_dnd_hover_target();
+            return Ok(drag_cleared || changed || hover_cleared);
+        }
         let Some(target_dir) = self.target_dir_for_drop_target(&target) else {
             let hover_cleared = self.clear_dnd_hover_target();
             return Ok(drag_cleared || hover_cleared);
         };
         let old_menu = self.drop_menu.clone();
-        self.drop_menu = Some(ShellDropMenu::new(sources, target_dir, target, point));
+        self.drop_menu = Some(ShellDropMenu::new(
+            drag.sources,
+            target_dir,
+            target,
+            point,
+        ));
         self.context_menu = None;
         self.context_target = None;
         self.rubber_band = None;
@@ -297,7 +352,7 @@ impl ShellScene {
         size: PhysicalSize<u32>,
     ) -> bool {
         let next = self.external_drag.as_ref().and_then(|drag| {
-            self.drop_target_at_screen_point_for_external_drag(point, size, &drag.sources)
+            self.drop_target_at_screen_point_for_external_drag(point, size, drag)
         });
         let changed = self.dnd_hover_target != next;
         if changed {
@@ -481,7 +536,7 @@ impl ShellScene {
         };
         if let ShellDropTarget::PlacesGap { index } = target {
             let changed =
-                self.drop_internal_drag_to_places_gap(drag, index, user_places_path, size)?;
+                self.drop_local_drag_to_places_gap(drag.source, index, user_places_path, size)?;
             let _ = self.clear_dnd_hover_target();
             return Ok(changed);
         }
@@ -516,14 +571,14 @@ impl ShellScene {
         Ok(changed)
     }
 
-    fn drop_internal_drag_to_places_gap(
+    fn drop_local_drag_to_places_gap(
         &mut self,
-        drag: ShellInternalDrag,
+        source: ShellInternalDragSource,
         index: usize,
         user_places_path: &Path,
         size: PhysicalSize<u32>,
     ) -> Result<bool, String> {
-        match drag.source {
+        match source {
             ShellInternalDragSource::Place {
                 index: source_index,
             } => self.move_place_to_gap(source_index, index, user_places_path, size),

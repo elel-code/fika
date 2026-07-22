@@ -119,8 +119,9 @@
         };
         let source = PathBuf::from("/external/source.txt");
 
-        assert!(scene.begin_external_drag(
+        assert!(scene.begin_data_transfer_drag(
             vec![source.clone(), source.clone(), PathBuf::new()],
+            None,
             blank,
             size,
         ));
@@ -170,7 +171,7 @@
         };
         let source = PathBuf::from("/external/source.txt");
 
-        assert!(scene.begin_external_drag(vec![source.clone()], target, size));
+        assert!(scene.begin_data_transfer_drag(vec![source.clone()], None, target, size));
         assert_eq!(
             scene.dnd_hover_target,
             Some(ShellDropTarget::PaneItem {
@@ -239,7 +240,7 @@
         };
         let source = PathBuf::from("/external/source.txt");
 
-        assert!(scene.begin_external_drag(vec![source.clone()], target, size));
+        assert!(scene.begin_data_transfer_drag(vec![source.clone()], None, target, size));
         assert_eq!(scene.dnd_hover_target, None);
         assert!(
             scene

@@ -20,6 +20,9 @@ runtime; the previous UI runtimes have been removed from the source tree.
   consumed by wgpu or direct Vulkan, and KDE blur keeps full region semantics.
 - Parented dialogs, popup positioning/repositioning, cursor-shape fallback and
   drag icons are owned by the reusable Wayland layer.
+- Local and inter-application drag-and-drop share the same Wayland
+  source/offer, MIME-pipe and drop lifecycle after the local press threshold;
+  scene state only owns the pre-protocol gesture, preview and target policy.
 - Portal and privileged-helper binaries remain separate integration pieces.
 
 ## Source Layout

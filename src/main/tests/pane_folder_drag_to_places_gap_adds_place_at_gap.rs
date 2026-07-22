@@ -65,6 +65,47 @@
     }
 
     #[test]
+    fn local_wayland_offer_keeps_internal_places_gap_semantics() {
+        let beta = PathBuf::from("/tmp/dnd-existing-beta");
+        let mut scene = test_scene(vec![test_entry("project", true)], ShellViewMode::Icons);
+        scene.places = vec![ShellPlace::new("", "B", "Beta", beta, true)];
+        let size = PhysicalSize::new(900, 760);
+        let gap = scene
+            .place_gap_rect_for_index(0, size)
+            .expect("gap before beta should be visible");
+        let gap_point = ViewPoint {
+            x: gap.x + gap.width / 2.0,
+            y: gap.y + gap.height / 2.0,
+        };
+        let path = PathBuf::from("/tmp/project");
+        let source = ShellInternalDragSource::PaneItem {
+            pane: ShellPaneId::SLOT_0,
+            index: 0,
+            source_path: path.clone(),
+            is_dir: true,
+        };
+
+        assert!(scene.begin_data_transfer_drag(
+            vec![path],
+            Some(source.clone()),
+            gap_point,
+            size,
+        ));
+        assert_eq!(
+            scene.dnd_hover_target,
+            Some(ShellDropTarget::PlacesGap { index: 0 })
+        );
+        assert_eq!(
+            scene
+                .external_drag
+                .as_ref()
+                .and_then(|drag| drag.local_source.as_ref()),
+            Some(&source)
+        );
+        assert!(scene.internal_drag.is_none());
+    }
+
+    #[test]
     fn device_and_network_places_do_not_participate_in_internal_dnd() {
         let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
         scene.places = vec![

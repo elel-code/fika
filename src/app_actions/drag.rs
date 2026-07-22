@@ -63,6 +63,9 @@ impl FikaWgpuApp {
         let Some(paths) = self.scene.active_internal_drag_paths() else {
             return;
         };
+        let Some(source) = self.scene.active_internal_drag_source() else {
+            return;
+        };
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
@@ -91,11 +94,16 @@ impl FikaWgpuApp {
                     id.into_raw(),
                     paths.len()
                 );
-                self.outgoing_dnd_transfer = Some(OutgoingDndTransfer { id, paths });
+                self.outgoing_dnd_transfer = Some(OutgoingDndTransfer { id, paths, source });
             }
             Err(error) => {
                 self.outgoing_dnd_start_failed = true;
                 fika_log!("[fika-wgpu] outgoing-dnd-unavailable {error}");
+                if self.scene.clear_internal_drag()
+                    && let Some(window) = self.window.as_ref()
+                {
+                    window.request_redraw();
+                }
             }
         }
     }
@@ -170,7 +178,16 @@ impl FikaWgpuApp {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return ShellActionOutcome::None;
         };
-        let mut transfer = IncomingDndTransfer::new(id, position);
+        let local_drag = self
+            .outgoing_dnd_transfer
+            .as_ref()
+            .map(|transfer| (transfer.paths.clone(), transfer.source.clone()));
+        let mut transfer = IncomingDndTransfer::new(
+            id,
+            position,
+            local_drag.as_ref().map(|(paths, _)| paths.clone()),
+            local_drag.as_ref().map(|(_, source)| source.clone()),
+        );
         let supports_uri_list = event_loop
             .data_transfer(id)
             .map(|data| data.has_type(&TypeHint::UriList))
@@ -212,7 +229,15 @@ impl FikaWgpuApp {
         let changed = position
             .map(|position| {
                 let point = view_point_from_physical_position(position);
-                self.scene.begin_external_drag(Vec::new(), point, size)
+                self.scene.begin_data_transfer_drag(
+                    local_drag
+                        .as_ref()
+                        .map(|(paths, _)| paths.clone())
+                        .unwrap_or_default(),
+                    local_drag.map(|(_, source)| source),
+                    point,
+                    size,
+                )
             })
             .unwrap_or(false);
         self.incoming_dnd_transfer = Some(transfer);
@@ -251,7 +276,12 @@ impl FikaWgpuApp {
             if self.scene.external_drag.is_some() {
                 self.scene.update_external_drag(point, size)
             } else {
-                self.scene.begin_external_drag(paths, point, size)
+                self.scene.begin_data_transfer_drag(
+                    paths,
+                    transfer.local_source.clone(),
+                    point,
+                    size,
+                )
             }
         } else {
             false
@@ -323,13 +353,23 @@ impl FikaWgpuApp {
             return ShellActionOutcome::redraw_if(changed);
         }
 
+        if transfer
+            .paths
+            .as_ref()
+            .is_some_and(|provisional| provisional != &paths)
+        {
+            transfer.local_source = None;
+        }
         transfer.paths = Some(paths.clone());
+        transfer.data_received = true;
+        let local_source = transfer.local_source.clone();
         let changed = if let (Some(position), Some(size)) = (
             transfer.last_position,
             self.renderer.as_ref().map(|renderer| renderer.size),
         ) {
             let point = view_point_from_physical_position(position);
-            self.scene.begin_external_drag(paths, point, size)
+            self.scene
+                .begin_data_transfer_drag(paths, local_source, point, size)
         } else {
             false
         };
@@ -412,6 +452,9 @@ impl FikaWgpuApp {
             return ShellActionOutcome::None;
         };
         transfer.drop_pending = true;
+        if !transfer.data_received {
+            return ShellActionOutcome::None;
+        }
         let Some(paths) = transfer.paths.clone() else {
             return ShellActionOutcome::None;
         };

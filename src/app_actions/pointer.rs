@@ -265,6 +265,7 @@ impl FikaWgpuApp {
                 };
                 self.scene.begin_pane_pointer(selection, size)
             }
+            ElementState::Released if self.outgoing_dnd_transfer.is_some() => false,
             ElementState::Released => self.scene.end_pane_pointer(point, size),
         };
         self.update_window_cursor_for_scene(size);
@@ -307,6 +308,9 @@ impl FikaWgpuApp {
         size: PhysicalSize<u32>,
         location_blur_changed: bool,
     ) -> ShellActionEffect {
+        if self.outgoing_dnd_transfer.is_some() {
+            return ShellActionOutcome::redraw_if(location_blur_changed).into();
+        }
         let (changed, activation) = self.scene.end_place_pointer(point, size);
         if let Some(activation) = activation {
             return match activation {

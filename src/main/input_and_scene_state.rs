@@ -391,6 +391,7 @@ enum ShellInternalDragSource {
     },
 }
 #[derive(Clone, Debug, PartialEq)]
+/// Local press/threshold/preview state before Wayland owns the transfer.
 struct ShellInternalDrag {
     source: ShellInternalDragSource,
     paths: Vec<PathBuf>,
@@ -433,18 +434,6 @@ impl ShellInternalDrag {
         }
     }
 
-    fn pane_source_directory_path(&self) -> Option<&Path> {
-        match &self.source {
-            ShellInternalDragSource::PaneItem {
-                source_path,
-                is_dir: true,
-                ..
-            } => Some(source_path.as_path()),
-            ShellInternalDragSource::PaneItem { .. } | ShellInternalDragSource::Place { .. } => {
-                None
-            }
-        }
-    }
 }
 #[derive(Clone, Debug)]
 enum ShellInternalDragPreviewSource {
@@ -460,13 +449,21 @@ enum ShellInternalDragPreviewSource {
     },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// One active incoming Wayland offer, including offers from this client.
 struct ShellExternalDrag {
     sources: Vec<PathBuf>,
+    local_source: Option<ShellInternalDragSource>,
 }
 impl ShellExternalDrag {
-    fn new(sources: Vec<PathBuf>) -> Option<Self> {
+    fn new(
+        sources: Vec<PathBuf>,
+        local_source: Option<ShellInternalDragSource>,
+    ) -> Option<Self> {
         let sources = normalized_external_drop_sources(sources);
-        (!sources.is_empty()).then_some(Self { sources })
+        (!sources.is_empty()).then_some(Self {
+            sources,
+            local_source,
+        })
     }
 }
 struct ShellPreparedPaneVisibleItem {

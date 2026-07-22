@@ -286,6 +286,7 @@
 
         scene.external_drag = Some(ShellExternalDrag {
             sources: vec![PathBuf::from("/tmp/source.txt")],
+            local_source: None,
         });
         let dragging = ShellRenderDirtyKey::from_scene(&scene, size);
 
