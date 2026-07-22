@@ -7,7 +7,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read};
 use std::os::fd::OwnedFd;
 use std::sync::{Arc, mpsc};
 use std::thread;
@@ -43,23 +43,10 @@ use smithay_client_toolkit::seat::pointer::{
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
 
-pub const MIME_TEXT_PLAIN_UTF8: &str = "text/plain;charset=utf-8";
-pub const MIME_UTF8_STRING: &str = "UTF8_STRING";
-pub const MIME_TEXT_PLAIN: &str = "text/plain";
-pub const MIME_STRING: &str = "STRING";
-pub const MIME_TEXT: &str = "TEXT";
-
-const TEXT_MIME_TYPES: [&str; 5] = [
-    MIME_TEXT_PLAIN_UTF8,
-    MIME_TEXT_PLAIN,
-    MIME_UTF8_STRING,
-    MIME_STRING,
-    MIME_TEXT,
-];
-
-pub fn text_mime_types() -> &'static [&'static str] {
-    &TEXT_MIME_TYPES
-}
+pub use crate::data_transfer::{
+    MIME_STRING, MIME_TEXT, MIME_TEXT_PLAIN, MIME_TEXT_PLAIN_UTF8, MIME_UTF8_STRING,
+    MimePayload as ClipboardMimePayload, TransferContent as ClipboardContent, text_mime_types,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClipboardError {
@@ -69,92 +56,6 @@ pub enum ClipboardError {
     WorkerStart(String),
     #[error("the Wayland clipboard worker has stopped")]
     WorkerStopped,
-    #[error("clipboard content must contain at least one MIME payload")]
-    EmptyContent,
-    #[error("clipboard MIME type must not be empty")]
-    EmptyMime,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClipboardMimePayload {
-    mime: String,
-    bytes: Arc<[u8]>,
-}
-
-impl ClipboardMimePayload {
-    pub fn new(
-        mime: impl Into<String>,
-        bytes: impl Into<Arc<[u8]>>,
-    ) -> Result<Self, ClipboardError> {
-        let mime = mime.into();
-        if mime.is_empty() {
-            return Err(ClipboardError::EmptyMime);
-        }
-        Ok(Self {
-            mime,
-            bytes: bytes.into(),
-        })
-    }
-
-    pub fn mime(&self) -> &str {
-        &self.mime
-    }
-
-    pub fn bytes(&self) -> &Arc<[u8]> {
-        &self.bytes
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClipboardContent {
-    payloads: Vec<ClipboardMimePayload>,
-}
-
-impl ClipboardContent {
-    pub fn new(
-        payloads: impl IntoIterator<Item = ClipboardMimePayload>,
-    ) -> Result<Self, ClipboardError> {
-        let mut unique = Vec::<ClipboardMimePayload>::new();
-        for payload in payloads {
-            if let Some(existing) = unique.iter_mut().find(|item| item.mime == payload.mime) {
-                *existing = payload;
-            } else {
-                unique.push(payload);
-            }
-        }
-        if unique.is_empty() {
-            return Err(ClipboardError::EmptyContent);
-        }
-        Ok(Self { payloads: unique })
-    }
-
-    pub fn text(text: impl AsRef<str>) -> Self {
-        let bytes = Arc::<[u8]>::from(text.as_ref().as_bytes());
-        Self {
-            payloads: TEXT_MIME_TYPES
-                .iter()
-                .map(|mime| ClipboardMimePayload {
-                    mime: (*mime).to_string(),
-                    bytes: bytes.clone(),
-                })
-                .collect(),
-        }
-    }
-
-    pub fn payloads(&self) -> &[ClipboardMimePayload] {
-        &self.payloads
-    }
-
-    fn mime_types(&self) -> impl Iterator<Item = &str> {
-        self.payloads.iter().map(|payload| payload.mime.as_str())
-    }
-
-    fn bytes_for_mime(&self, mime: &str) -> Option<Arc<[u8]>> {
-        self.payloads
-            .iter()
-            .find(|payload| payload.mime == mime)
-            .map(|payload| payload.bytes.clone())
-    }
 }
 
 /// A clipboard event loop running on its own thread and Wayland event queue.
@@ -226,7 +127,7 @@ impl Clipboard {
     }
 
     pub fn load_text_async(&self) -> Result<mpsc::Receiver<io::Result<String>>, ClipboardError> {
-        self.load_async(TEXT_MIME_TYPES.iter().copied())
+        self.load_async(text_mime_types().iter().copied())
     }
 
     pub fn load_async(
@@ -451,13 +352,7 @@ fn spawn_read_pipe(mime: String, read_pipe: ReadPipe, reply_tx: mpsc::Sender<io:
 }
 
 fn spawn_write_pipe(write_pipe: WritePipe, bytes: Arc<[u8]>) {
-    let _ = thread::Builder::new()
-        .name("wayland-clipboard-write".to_string())
-        .spawn(move || {
-            let owned_fd: OwnedFd = write_pipe.into();
-            let mut pipe = File::from(owned_fd);
-            let _ = pipe.write_all(&bytes);
-        });
+    crate::data_transfer::spawn_write_pipe("wayland-clipboard-write", write_pipe, bytes);
 }
 
 fn read_pipe_text(mime: &str, read_pipe: ReadPipe) -> io::Result<String> {
@@ -804,6 +699,6 @@ mod tests {
     fn text_content_offers_common_wayland_text_mimes() {
         let content = ClipboardContent::text("hello");
         let mimes = content.mime_types().collect::<Vec<_>>();
-        assert_eq!(mimes, TEXT_MIME_TYPES);
+        assert_eq!(mimes, text_mime_types());
     }
 }

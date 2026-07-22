@@ -1,10 +1,10 @@
-use std::io::{self, Read};
 use std::sync::Arc;
 
 use bitflags::bitflags;
-use smithay_client_toolkit::data_device_manager::ReadPipe;
 
 use crate::{LogicalPosition, SurfaceId};
+
+pub use crate::data_transfer::{MimePayload as DndMimePayload, TransferReadPipe as DndReadPipe};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DndOfferId(pub(crate) u64);
@@ -121,33 +121,6 @@ impl DndIcon {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DndMimePayload {
-    mime: String,
-    bytes: Arc<[u8]>,
-}
-
-impl DndMimePayload {
-    pub fn new(mime: impl Into<String>, bytes: impl Into<Arc<[u8]>>) -> Result<Self, &'static str> {
-        let mime = mime.into();
-        if mime.is_empty() {
-            return Err("DnD MIME type must not be empty");
-        }
-        Ok(Self {
-            mime,
-            bytes: bytes.into(),
-        })
-    }
-
-    pub fn mime(&self) -> &str {
-        &self.mime
-    }
-
-    pub fn bytes(&self) -> &Arc<[u8]> {
-        &self.bytes
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum DndEvent {
     Enter {
@@ -186,26 +159,13 @@ pub enum DndEvent {
     SourceCancelled { source: DndSourceId },
 }
 
-/// A readable pipe returned by a Wayland DnD offer.
-#[derive(Debug)]
-pub struct DndReadPipe(pub(crate) ReadPipe);
-
-impl Read for DndReadPipe {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buffer)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn mime_payload_rejects_empty_type_and_keeps_owned_bytes() {
-        assert_eq!(
-            DndMimePayload::new("", b"value".as_slice()),
-            Err("DnD MIME type must not be empty")
-        );
+        assert!(DndMimePayload::new("", b"value".as_slice()).is_err());
 
         let payload = DndMimePayload::new("text/uri-list", b"file:///tmp/a".as_slice())
             .expect("valid MIME payload");

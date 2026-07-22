@@ -390,7 +390,9 @@ impl ActiveEventLoop {
         let payloads = data
             .payloads
             .into_iter()
-            .map(|(hint, bytes)| DndMimePayload::new(hint.mime(), bytes).map_err(str::to_string))
+            .map(|(hint, bytes)| {
+                DndMimePayload::new(hint.mime(), bytes).map_err(|error| error.to_string())
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let icon = icon
             .map(|icon| {

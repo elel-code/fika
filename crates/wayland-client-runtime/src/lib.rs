@@ -7,6 +7,7 @@
 
 mod blur;
 pub mod clipboard;
+pub mod data_transfer;
 mod dnd;
 mod event;
 mod geometry;
@@ -15,6 +16,7 @@ mod runtime;
 mod surface;
 
 pub use blur::{BlurRegion, BlurState};
+pub use data_transfer::{MimePayload, TransferContent, TransferError, TransferReadPipe};
 pub use dnd::{
     DndAction, DndActions, DndEvent, DndIcon, DndMimePayload, DndOfferId, DndReadPipe, DndSourceId,
 };

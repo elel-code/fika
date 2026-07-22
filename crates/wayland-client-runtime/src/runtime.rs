@@ -660,10 +660,11 @@ impl Runtime {
             .incoming_dnd
             .get(&offer)
             .ok_or(RuntimeError::DndOfferNotFound(offer))?;
+        let mime = mime.into();
         offer
             .offer
-            .receive(mime.into())
-            .map(DndReadPipe)
+            .receive(mime.clone())
+            .map(|pipe| DndReadPipe::new(mime, pipe))
             .map_err(|error| RuntimeError::Protocol(error.to_string()))
     }
 
