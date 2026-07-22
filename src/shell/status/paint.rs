@@ -1,6 +1,6 @@
+use crate::platform::PhysicalSize;
 use cosmic_text::Color as TextColor;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::PLACES_TASK_ROW_HEIGHT;
 use crate::shell::status::{ShellPaneStatus, ShellTaskStatusStore};

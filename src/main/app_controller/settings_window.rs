@@ -17,7 +17,7 @@ impl FikaWgpuApp {
         )
     }
 
-    fn ensure_settings_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+    fn ensure_settings_dialog_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         if let Some(dialog) = self.dialog_windows.get(ShellDialogWindowKind::Settings) {
             dialog.focus();
             return true;
@@ -72,7 +72,7 @@ impl FikaWgpuApp {
 
     fn apply_settings_action(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         action: ShellSettingsAction,
     ) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
@@ -127,7 +127,7 @@ impl FikaWgpuApp {
 
     fn settings_dialog_window_event(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         event: WindowEvent,
     ) {
         if self.handle_common_dialog_window_event(ShellDialogWindowKind::Settings, &event) {

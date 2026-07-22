@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::platform::PhysicalSize;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::animation::item_reflow_rect_moved;
 use crate::shell::metrics::ITEM_REFLOW_ANIMATION_DELAY;

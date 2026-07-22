@@ -1,6 +1,6 @@
+use crate::platform::PhysicalSize;
 use cosmic_text::Color as TextColor;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::context_menu::{
     ShellContextMenu, ShellContextMenuAction, ShellContextMenuCommand, ShellContextMenuIcon,

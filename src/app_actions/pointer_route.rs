@@ -1,4 +1,4 @@
-use winit::event::{ElementState, MouseButton};
+use crate::platform::{ElementState, MouseButton};
 
 use crate::shell::options::ShellViewMode;
 use crate::shell::shortcuts::{PathNavigationAction, path_navigation_action_for_mouse_button};

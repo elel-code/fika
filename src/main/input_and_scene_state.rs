@@ -11,7 +11,7 @@ impl FikaWgpuApp {
         }
     }
 
-    fn present_scene_change(&mut self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
+    fn present_scene_change(&mut self, event_loop: &ActiveEventLoop, reason: &'static str) {
         self.pending_redraw_frames = VIEW_SWITCH_REDRAW_FRAMES;
         self.pending_render_reason = None;
         if let Some(window) = self.window.as_ref() {
@@ -186,7 +186,7 @@ impl FikaWgpuApp {
 
     fn render_now(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         reason: &'static str,
         force_log: bool,
     ) {
@@ -233,9 +233,8 @@ impl FikaWgpuApp {
         }
     }
 }
-fn scroll_delta_y(delta: MouseScrollDelta, scale_factor: f32) -> f32 {
+fn scroll_delta_y(delta: MouseScrollDelta, _scale_factor: f32) -> f32 {
     match delta {
-        MouseScrollDelta::LineDelta(_, y) => -y * SCROLL_LINE_PX * scale_factor,
         MouseScrollDelta::PixelDelta(position) => -position.y as f32,
     }
 }

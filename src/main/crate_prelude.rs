@@ -38,15 +38,14 @@ use fika_core::{
     save_user_places, thumbnail_request_may_have_preview, trash_view_operation_result,
     trash_view_operation_result_async,
 };
-use winit::application::ApplicationHandler;
-use winit::cursor::{Cursor as WinitCursor, CursorIcon};
-use winit::data_transfer::DataTransferId;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial, ControlFlow, EventLoop, EventLoopProxy};
+use platform::{
+    ActiveEventLoop, ApplicationHandler, AsyncRequestSerial, ControlFlow, CursorIcon,
+    DataTransferId, ElementState, EventLoop, EventLoopProxy, Modifiers, MouseButton,
+    MouseScrollDelta, PhysicalPosition, PhysicalSize, Theme, WaylandWindow, WindowAttributes,
+    WindowEvent, WindowId,
+};
 #[cfg(test)]
-use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
-use winit::window::{Theme, Window, WindowAttributes, WindowId};
+use platform::{Key, KeyCode, NamedKey, NativeKey, NativeKeyCode, PhysicalKey};
 macro_rules! fika_log {
     ($($arg:tt)*) => {{
         if crate::fika_log_enabled() {
@@ -94,11 +93,8 @@ fn dialog_lifecycle_autosmoke_enabled() -> bool {
 }
 fn window_event_label(event: &WindowEvent) -> &'static str {
     match event {
-        WindowEvent::ActivationTokenDone { .. } => "ActivationTokenDone",
         WindowEvent::SurfaceResized(_) => "SurfaceResized",
-        WindowEvent::Moved(_) => "Moved",
         WindowEvent::CloseRequested => "CloseRequested",
-        WindowEvent::Destroyed => "Destroyed",
         WindowEvent::DragEntered { .. } => "DragEntered",
         WindowEvent::DragPosition { .. } => "DragPosition",
         WindowEvent::DragDropped { .. } => "DragDropped",
@@ -106,24 +102,13 @@ fn window_event_label(event: &WindowEvent) -> &'static str {
         WindowEvent::DataTransferReceived { .. } => "DataTransferReceived",
         WindowEvent::OutgoingDragDropped { .. } => "OutgoingDragDropped",
         WindowEvent::OutgoingDragCanceled { .. } => "OutgoingDragCanceled",
-        WindowEvent::Focused(_) => "Focused",
         WindowEvent::KeyboardInput { .. } => "KeyboardInput",
         WindowEvent::ModifiersChanged(_) => "ModifiersChanged",
-        WindowEvent::Ime(_) => "Ime",
         WindowEvent::PointerMoved { .. } => "PointerMoved",
-        WindowEvent::PointerEntered { .. } => "PointerEntered",
         WindowEvent::PointerLeft { .. } => "PointerLeft",
         WindowEvent::MouseWheel { .. } => "MouseWheel",
         WindowEvent::PointerButton { .. } => "PointerButton",
-        WindowEvent::HoldGesture { .. } => "HoldGesture",
-        WindowEvent::PinchGesture { .. } => "PinchGesture",
-        WindowEvent::PanGesture { .. } => "PanGesture",
-        WindowEvent::DoubleTapGesture { .. } => "DoubleTapGesture",
-        WindowEvent::RotationGesture { .. } => "RotationGesture",
-        WindowEvent::TouchpadPressure { .. } => "TouchpadPressure",
         WindowEvent::ScaleFactorChanged { .. } => "ScaleFactorChanged",
-        WindowEvent::ThemeChanged(_) => "ThemeChanged",
-        WindowEvent::Occluded(_) => "Occluded",
         WindowEvent::RedrawRequested => "RedrawRequested",
     }
 }

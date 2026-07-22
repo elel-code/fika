@@ -1,7 +1,7 @@
 pub(crate) mod paint;
 
+use crate::platform::PhysicalSize;
 use fika_core::{ViewPoint, ViewRect};
-use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::scaled_dialog_metric;
 

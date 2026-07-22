@@ -1,5 +1,5 @@
+use crate::platform::PhysicalSize;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::ShellPaneItemTarget;
 use crate::shell::drop_menu::ShellDropTarget;

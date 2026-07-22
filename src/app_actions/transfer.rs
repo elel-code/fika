@@ -1,4 +1,4 @@
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
 
 use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
@@ -8,24 +8,17 @@ use crate::shell::transfer::ShellAsyncTransferSource;
 use fika_core::{FileClipboardRole, FileTransferMode, decode_file_clipboard_text, is_network_path};
 
 impl FikaWgpuApp {
-    pub(crate) fn paste_from_clipboard(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-        privileged: bool,
-    ) {
+    pub(crate) fn paste_from_clipboard(&mut self, event_loop: &ActiveEventLoop, privileged: bool) {
         self.paste_from_clipboard_with_target(event_loop, true, privileged);
     }
 
-    pub(crate) fn paste_from_clipboard_into_active_pane(
-        &mut self,
-        event_loop: &dyn ActiveEventLoop,
-    ) {
+    pub(crate) fn paste_from_clipboard_into_active_pane(&mut self, event_loop: &ActiveEventLoop) {
         self.paste_from_clipboard_with_target(event_loop, false, false);
     }
 
     pub(crate) fn paste_from_clipboard_with_target(
         &mut self,
-        _event_loop: &dyn ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         use_context: bool,
         privileged: bool,
     ) {

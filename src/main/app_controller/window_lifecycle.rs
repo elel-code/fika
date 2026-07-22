@@ -56,7 +56,7 @@ impl FikaWgpuApp {
         }
         self.cursor_icon = cursor_icon;
         if let Some(window) = self.window.as_ref() {
-            window.set_cursor(WinitCursor::Icon(cursor_icon));
+            window.set_cursor(cursor_icon);
         }
     }
 
@@ -116,7 +116,7 @@ impl FikaWgpuApp {
         );
     }
 
-    fn exit_event_loop(&self, event_loop: &dyn ActiveEventLoop, reason: &'static str) {
+    fn exit_event_loop(&self, event_loop: &ActiveEventLoop, reason: &'static str) {
         fika_log!(
             "[fika-wgpu] event-loop-exit reason={} main_open={} dialogs_open={}",
             reason,
@@ -164,7 +164,7 @@ impl FikaWgpuApp {
 
     fn ensure_dialog_window(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         kind: ShellDialogWindowKind,
         spec: &ShellDialogWindowSpec,
     ) -> bool {
@@ -230,7 +230,7 @@ impl FikaWgpuApp {
 
     fn close_main_window_from_window_manager_request(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         reason: &'static str,
     ) {
         fika_dialog_trace!(
@@ -317,7 +317,7 @@ impl FikaWgpuApp {
         ))
     }
 
-    fn ensure_create_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+    fn ensure_create_dialog_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let Some(spec) = self.create_dialog_spec() else {
             self.close_create_dialog_window();
             return false;
@@ -381,7 +381,7 @@ impl FikaWgpuApp {
         ))
     }
 
-    fn ensure_rename_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+    fn ensure_rename_dialog_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let Some(spec) = self.rename_dialog_spec() else {
             self.close_rename_dialog_window();
             return false;
@@ -440,7 +440,7 @@ impl FikaWgpuApp {
         ))
     }
 
-    fn ensure_properties_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+    fn ensure_properties_dialog_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let Some(spec) = self.properties_dialog_spec() else {
             self.close_properties_dialog_window();
             return false;
@@ -477,7 +477,7 @@ impl FikaWgpuApp {
         ))
     }
 
-    fn ensure_task_detail_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+    fn ensure_task_detail_dialog_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let Some(spec) = self.task_detail_dialog_spec() else {
             self.close_task_detail_dialog_window();
             return false;
@@ -520,7 +520,7 @@ impl FikaWgpuApp {
         ))
     }
 
-    fn ensure_trash_conflict_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+    fn ensure_trash_conflict_dialog_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let Some(spec) = self.trash_conflict_dialog_spec() else {
             self.close_trash_conflict_dialog_window();
             return false;

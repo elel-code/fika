@@ -1,6 +1,5 @@
-use winit::dpi::PhysicalSize;
-use winit::event::{ElementState, KeyEvent};
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::PhysicalSize;
+use crate::platform::{ActiveEventLoop, ElementState, KeyEvent};
 
 use super::outcome::{ShellActionEffect, ShellActionOutcome};
 use crate::shell::shortcuts::{
@@ -15,7 +14,7 @@ use crate::{FikaWgpuApp, ZOOM_REDRAW_FRAMES};
 impl FikaWgpuApp {
     pub(crate) fn handle_main_keyboard_input(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         event: &KeyEvent,
     ) {
         if event.state != ElementState::Pressed {
@@ -31,7 +30,7 @@ impl FikaWgpuApp {
 
     fn dispatch_main_keyboard_input(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         event: &KeyEvent,
         size: PhysicalSize<u32>,
         shortcut: bool,

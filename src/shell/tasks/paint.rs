@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
+use crate::platform::PhysicalSize;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::{TASK_DETAIL_TITLE_HEIGHT, scaled_dialog_metric};
 use crate::shell::popup::style::PopupTheme;
@@ -25,7 +25,7 @@ pub(crate) fn push_task_detail_dialog(
     size: PhysicalSize<u32>,
 ) {
     let screen = task_detail_dialog_window_rect(size);
-    push_task_detail_dialog_contents(statuses, theme, scale, vertices, text, size, screen, screen);
+    push_task_detail_dialog_contents(statuses, theme, scale, vertices, text, size, screen);
 }
 
 fn push_task_detail_dialog_contents(
@@ -35,9 +35,9 @@ fn push_task_detail_dialog_contents(
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
-    screen: ViewRect,
     rect: ViewRect,
 ) {
+    let screen = rect;
     let title_height = scaled_dialog_metric(TASK_DETAIL_TITLE_HEIGHT, scale);
     let margin = scaled_dialog_metric(18.0, scale);
     push_clipped_rounded_rect(

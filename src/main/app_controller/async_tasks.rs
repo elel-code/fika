@@ -48,7 +48,7 @@ impl FikaWgpuApp {
         Ok(())
     }
 
-    fn create_dialog_window_event(&mut self, event_loop: &dyn ActiveEventLoop, event: WindowEvent) {
+    fn create_dialog_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         if self.handle_common_dialog_window_event(ShellDialogWindowKind::Create, &event) {
             return;
         }
@@ -131,7 +131,7 @@ impl FikaWgpuApp {
         }
     }
 
-    fn rename_dialog_window_event(&mut self, event_loop: &dyn ActiveEventLoop, event: WindowEvent) {
+    fn rename_dialog_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
         if self.handle_common_dialog_window_event(ShellDialogWindowKind::Rename, &event) {
             return;
         }
@@ -204,7 +204,7 @@ impl FikaWgpuApp {
 
     fn open_with_dialog_window_event(
         &mut self,
-        _event_loop: &dyn ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         event: WindowEvent,
     ) {
         if self.handle_common_dialog_window_event(ShellDialogWindowKind::OpenWith, &event) {
@@ -333,7 +333,7 @@ impl FikaWgpuApp {
 
     fn properties_dialog_window_event(
         &mut self,
-        _event_loop: &dyn ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         event: WindowEvent,
     ) {
         if self.handle_common_dialog_window_event(ShellDialogWindowKind::Properties, &event) {
@@ -360,7 +360,7 @@ impl FikaWgpuApp {
 
     fn task_detail_dialog_window_event(
         &mut self,
-        _event_loop: &dyn ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         event: WindowEvent,
     ) {
         if self.handle_common_dialog_window_event(ShellDialogWindowKind::TaskDetail, &event) {
@@ -430,7 +430,7 @@ impl FikaWgpuApp {
 
     fn trash_conflict_dialog_window_event(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         event: WindowEvent,
     ) {
         if self.handle_common_dialog_window_event(ShellDialogWindowKind::TrashConflict, &event) {

@@ -1,5 +1,5 @@
+use crate::platform::PhysicalSize;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::create_rename::{CreateEntryKind, ShellCreateDialog, ShellRenameDialog};
 use crate::shell::metrics::{

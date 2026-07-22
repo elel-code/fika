@@ -1,5 +1,5 @@
+use crate::platform::PhysicalSize;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 #[cfg(test)]
 use crate::shell::metrics::TASK_DETAIL_DIALOG_MARGIN;

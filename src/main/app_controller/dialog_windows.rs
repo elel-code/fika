@@ -1,6 +1,6 @@
 impl FikaWgpuApp {
 
-    fn ensure_open_with_dialog_window(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+    fn ensure_open_with_dialog_window(&mut self, event_loop: &ActiveEventLoop) -> bool {
         let Some(spec) = self.open_with_dialog_spec() else {
             self.close_open_with_dialog_window();
             return false;
@@ -79,7 +79,7 @@ impl FikaWgpuApp {
         self.reconcile_open_with_dialog_lifecycle();
     }
 
-    fn drive_directory_watchers(&mut self, event_loop: &dyn ActiveEventLoop) {
+    fn drive_directory_watchers(&mut self, event_loop: &ActiveEventLoop) {
         self.directory_watchers.sync_with_scene(&self.scene);
         self.directory_watchers.drain_events(&self.scene);
 
@@ -147,7 +147,7 @@ impl FikaWgpuApp {
         task_id
     }
 
-    fn drain_async_task_results(&mut self, event_loop: &dyn ActiveEventLoop) {
+    fn drain_async_task_results(&mut self, event_loop: &ActiveEventLoop) {
         let mut changed = false;
         while let Ok(result) = self.async_task_rx.try_recv() {
             match result {
@@ -273,7 +273,7 @@ impl FikaWgpuApp {
         }
     }
 
-    fn drive_dialog_lifecycle_autosmoke(&mut self, event_loop: &dyn ActiveEventLoop) {
+    fn drive_dialog_lifecycle_autosmoke(&mut self, event_loop: &ActiveEventLoop) {
         let Some(smoke_state) = self.dialog_lifecycle_smoke else {
             return;
         };
@@ -373,7 +373,7 @@ impl FikaWgpuApp {
     fn ensure_dialog_window_for_autosmoke_kind(
         &mut self,
         kind: ShellDialogWindowKind,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
     ) -> bool {
         match kind {
             ShellDialogWindowKind::Create => self.ensure_create_dialog_window(event_loop),
@@ -395,7 +395,7 @@ impl FikaWgpuApp {
     fn finish_dialog_lifecycle_autosmoke(
         &mut self,
         success: bool,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
     ) {
         let Some(()) = self.dialog_lifecycle_smoke.as_mut().map(|smoke| {
             smoke.step = if success {

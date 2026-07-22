@@ -1,7 +1,7 @@
 use std::time::Instant;
 
+use crate::platform::PhysicalSize;
 use fika_core::{ViewRect, ViewSize};
-use winit::dpi::PhysicalSize;
 
 use crate::shell::pane::ShellPaneProjection;
 use crate::shell::prewarm::icon_raster_miss_budget_for_frame;

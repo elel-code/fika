@@ -276,9 +276,7 @@ impl ShellScene {
         previous_size: PhysicalSize<u32>,
         next_size: PhysicalSize<u32>,
     ) -> bool {
-        let reflow_changed =
-            shell::item_reflow::reflow_pane_items_after_window_resize(self, previous_size, next_size);
-        reflow_changed
+        shell::item_reflow::reflow_pane_items_after_window_resize(self, previous_size, next_size)
     }
 
     fn start_item_reflow_transitions(

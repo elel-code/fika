@@ -1,5 +1,5 @@
+use crate::platform::PhysicalSize;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::create_rename::geometry::{
     create_dialog_cancel_button_rect_scaled, create_dialog_commit_button_rect_scaled,

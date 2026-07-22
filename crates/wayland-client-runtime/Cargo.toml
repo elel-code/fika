@@ -1,0 +1,25 @@
+[package]
+name = "wayland-client-runtime"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+license = "MIT OR Apache-2.0"
+description = "A Wayland-native client protocol, surface, and event runtime built on SCTK"
+readme = "README.md"
+repository = "https://github.com/elel-code/fika"
+documentation = "https://docs.rs/wayland-client-runtime"
+keywords = ["wayland", "sctk", "windowing", "wgpu", "vulkan"]
+categories = ["gui", "os::linux-apis"]
+
+[dependencies]
+bitflags = "2"
+raw-window-handle = "0.6"
+smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "system", "xkbcommon"] }
+thiserror = "2"
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

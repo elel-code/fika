@@ -1,5 +1,5 @@
+use crate::platform::PhysicalSize;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::{PROPERTIES_ROW_HEIGHT, PROPERTIES_TITLE_HEIGHT, scaled_dialog_metric};
 use crate::shell::popup::style::PopupTheme;
@@ -18,7 +18,7 @@ pub(crate) fn push_properties_dialog(
     size: PhysicalSize<u32>,
 ) {
     let screen = properties_dialog_window_rect(size);
-    push_properties_contents(overlay, theme, scale, vertices, text, size, screen, screen);
+    push_properties_contents(overlay, theme, scale, vertices, text, size, screen);
 }
 
 fn push_properties_contents(
@@ -28,9 +28,9 @@ fn push_properties_contents(
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     size: PhysicalSize<u32>,
-    screen: ViewRect,
     rect: ViewRect,
 ) {
+    let screen = rect;
     let title_height = scaled_dialog_metric(PROPERTIES_TITLE_HEIGHT, scale);
     let row_height = scaled_dialog_metric(PROPERTIES_ROW_HEIGHT, scale);
     let margin = scaled_dialog_metric(16.0, scale);

@@ -1,0 +1,84 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ConstraintAdjustments, LogicalRect};
+
+    #[test]
+    fn positioner_rejects_zero_sized_geometry() {
+        let positioner = PopupPositioner {
+            size: LogicalSize::new(0, 20),
+            ..PopupPositioner::default()
+        };
+        assert!(matches!(
+            validate_positioner(&positioner),
+            Err(RuntimeError::InvalidPositioner(_))
+        ));
+    }
+
+    #[test]
+    fn positioner_preserves_all_constraint_bits() {
+        let all = ConstraintAdjustments::all();
+        let mapped = map_constraints(all);
+        assert!(mapped.contains(xdg_positioner::ConstraintAdjustment::SlideX));
+        assert!(mapped.contains(xdg_positioner::ConstraintAdjustment::SlideY));
+        assert!(mapped.contains(xdg_positioner::ConstraintAdjustment::FlipX));
+        assert!(mapped.contains(xdg_positioner::ConstraintAdjustment::FlipY));
+        assert!(mapped.contains(xdg_positioner::ConstraintAdjustment::ResizeX));
+        assert!(mapped.contains(xdg_positioner::ConstraintAdjustment::ResizeY));
+    }
+
+    #[test]
+    fn blur_region_keeps_surface_local_rectangles() {
+        let region = BlurRegion::Rectangles(vec![LogicalRect::new(4, 8, 120, 40)]);
+        assert_eq!(
+            region,
+            BlurRegion::Rectangles(vec![LogicalRect::new(4, 8, 120, 40)])
+        );
+    }
+
+    #[test]
+    fn nested_popups_are_removed_before_their_parents() {
+        let root = SurfaceId(1);
+        let popup = SurfaceId(2);
+        let nested_popup = SurfaceId(3);
+        let dialog = SurfaceId(4);
+        let children = HashMap::from([(root, vec![popup, dialog]), (popup, vec![nested_popup])]);
+        let mut order = Vec::new();
+
+        collect_post_order(&children, root, &mut order);
+
+        assert_eq!(order, vec![nested_popup, popup, dialog, root]);
+    }
+
+    #[test]
+    fn dnd_actions_round_trip_all_protocol_bits() {
+        let actions = DndActions::COPY | DndActions::MOVE | DndActions::ASK;
+        assert_eq!(dnd_actions(map_dnd_actions(actions)), actions);
+        assert_eq!(dnd_action(map_dnd_action(DndAction::Copy)), Some(DndAction::Copy));
+        assert_eq!(dnd_action(map_dnd_action(DndAction::Move)), Some(DndAction::Move));
+        assert_eq!(dnd_action(map_dnd_action(DndAction::Ask)), Some(DndAction::Ask));
+    }
+
+    #[test]
+    fn cursor_icons_cover_fika_runtime_vocabulary() {
+        assert_eq!(map_cursor_icon(CursorIcon::Default), SctkCursorIcon::Default);
+        assert_eq!(map_cursor_icon(CursorIcon::Pointer), SctkCursorIcon::Pointer);
+        assert_eq!(map_cursor_icon(CursorIcon::Text), SctkCursorIcon::Text);
+        assert_eq!(
+            map_cursor_icon(CursorIcon::ColResize),
+            SctkCursorIcon::ColResize
+        );
+    }
+
+    #[test]
+    fn drag_icon_rgba_is_premultiplied_and_encoded_as_native_argb() {
+        let mut encoded = [0; 8];
+        copy_rgba_to_premultiplied_argb8888(
+            &[200, 100, 50, 128, 255, 200, 100, 0],
+            &mut encoded,
+        );
+
+        assert_eq!(u32::from_ne_bytes(encoded[..4].try_into().unwrap()), 0x8064_3219);
+        assert_eq!(u32::from_ne_bytes(encoded[4..].try_into().unwrap()), 0);
+    }
+}

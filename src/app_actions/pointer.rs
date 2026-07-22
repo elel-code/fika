@@ -1,9 +1,8 @@
 use std::time::Instant;
 
-use winit::cursor::CursorIcon;
-use winit::dpi::PhysicalPosition;
-use winit::event::{ButtonSource, ElementState};
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::{
+    ActiveEventLoop, ButtonSource, CursorIcon, ElementState, PhysicalPosition, PhysicalSize,
+};
 
 use super::outcome::{ShellActionEffect, ShellActionOutcome};
 use super::pointer_route::{
@@ -20,7 +19,7 @@ use crate::{
 impl FikaWgpuApp {
     pub(crate) fn handle_main_pointer_moved(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         position: PhysicalPosition<f64>,
     ) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
@@ -41,7 +40,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn handle_main_pointer_button(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         state: ElementState,
         position: PhysicalPosition<f64>,
         button: ButtonSource,
@@ -73,7 +72,7 @@ impl FikaWgpuApp {
         &mut self,
         intent: MainPointerMoveIntent,
         point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
     ) -> ShellActionOutcome {
         match intent {
             MainPointerMoveIntent::TaskDetailModal => {
@@ -90,11 +89,11 @@ impl FikaWgpuApp {
 
     fn dispatch_main_pointer_button_intent(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         intent: MainPointerButtonIntent,
         state: ElementState,
         point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
     ) -> ShellActionEffect {
         match intent {
             MainPointerButtonIntent::TrashConflict
@@ -124,7 +123,7 @@ impl FikaWgpuApp {
     fn main_left_pointer_button_snapshot(
         &self,
         point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
     ) -> MainLeftPointerButtonRouteSnapshot {
         MainLeftPointerButtonRouteSnapshot {
             scrollbar_dragging: self.scene.is_scrollbar_dragging(),
@@ -151,10 +150,10 @@ impl FikaWgpuApp {
 
     fn apply_main_left_pointer_button_route(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         state: ElementState,
         point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
         route: MainLeftPointerButtonRoute,
     ) -> ShellActionEffect {
         let location_blur_changed = if route.should_blur_location(state) {
@@ -252,7 +251,7 @@ impl FikaWgpuApp {
         &mut self,
         state: ElementState,
         point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
         location_blur_changed: bool,
     ) -> ShellActionOutcome {
         let changed = match state {
@@ -274,9 +273,9 @@ impl FikaWgpuApp {
 
     fn activate_or_close_context_menu(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
     ) -> ShellActionEffect {
         let action = self
             .scene
@@ -292,7 +291,7 @@ impl FikaWgpuApp {
     fn activate_or_close_drop_menu(
         &mut self,
         point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
     ) -> ShellActionEffect {
         let request = self.scene.activate_or_close_drop_menu_request(point, size);
         if let Some(request) = request {
@@ -305,7 +304,7 @@ impl FikaWgpuApp {
     fn end_place_pointer(
         &mut self,
         point: crate::ViewPoint,
-        size: winit::dpi::PhysicalSize<u32>,
+        size: PhysicalSize<u32>,
         location_blur_changed: bool,
     ) -> ShellActionEffect {
         let (changed, activation) = self.scene.end_place_pointer(point, size);

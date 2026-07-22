@@ -19,7 +19,7 @@ struct FikaWgpuApp {
     dialog_windows: ShellDialogWindows,
     settings_dialog: ShellSettingsDialogState,
     clipboard: Option<ShellClipboard>,
-    window: Option<Arc<dyn Window>>,
+    window: Option<Arc<WaylandWindow>>,
     cursor_icon: CursorIcon,
     pending_redraw_frames: u8,
     pending_render_reason: Option<&'static str>,
@@ -66,14 +66,14 @@ include!("app_controller/dialog_windows.rs");
 include!("app_controller/async_tasks.rs");
 include!("app_controller/settings_window.rs");
 impl ApplicationHandler for FikaWgpuApp {
-    fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+    fn proxy_wake_up(&mut self, event_loop: &ActiveEventLoop) {
         self.drive_directory_watchers(event_loop);
         if let Some(deadline) = self.directory_watchers.next_reload_deadline() {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         }
     }
 
-    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+    fn can_create_surfaces(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
@@ -93,7 +93,6 @@ impl ApplicationHandler for FikaWgpuApp {
             }
         };
 
-        let window: Arc<dyn Window> = window.into();
         window.set_blur(self.scene.background_blur);
         let mut renderer = match WgpuState::new(window.clone()) {
             Ok(renderer) => renderer,
@@ -103,7 +102,7 @@ impl ApplicationHandler for FikaWgpuApp {
                 return;
             }
         };
-        let clipboard = match ShellClipboard::from_window(window.as_ref()) {
+        let clipboard = match ShellClipboard::from_window(window.clone()) {
             Ok(Some(clipboard)) => {
                 fika_log!(
                     "[fika-wgpu] clipboard-ready backend={}",
@@ -142,7 +141,7 @@ impl ApplicationHandler for FikaWgpuApp {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.drive_directory_watchers(event_loop);
         self.drain_async_task_results(event_loop);
         let progress_changed = self.refresh_active_task_progress();
@@ -249,7 +248,7 @@ impl ApplicationHandler for FikaWgpuApp {
 
     fn window_event(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -310,7 +309,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     window.request_redraw();
                 }
             }
-            WindowEvent::ScaleFactorChanged { .. } => {
+            WindowEvent::ScaleFactorChanged { scale_factor } => {
                 if let (Some(renderer), Some(window)) =
                     (self.renderer.as_mut(), self.window.as_ref())
                 {
@@ -322,7 +321,7 @@ impl ApplicationHandler for FikaWgpuApp {
                     let next_size = renderer.size;
                     let scale_changed = self
                         .scene
-                        .set_scale_factor(window.scale_factor() as f32, next_size);
+                        .set_scale_factor(scale_factor as f32, next_size);
                     if scale_changed || previous_size != next_size {
                         self.scene
                             .start_item_reflow_transitions_for_panes(previous_rects, next_size);

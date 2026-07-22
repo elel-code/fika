@@ -304,8 +304,8 @@
 
     #[test]
     fn selection_shortcuts_accept_ctrl_a_and_escape() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert_eq!(
             selection_command_for_key_parts(
@@ -347,8 +347,8 @@
 
     #[test]
     fn filter_shortcuts_activate_and_capture_text_when_active() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert_eq!(
             filter_command_for_key_parts(
@@ -404,8 +404,8 @@
 
     #[test]
     fn create_dialog_key_input_captures_text_and_commit_controls() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert_eq!(
             create_command_for_key_parts(

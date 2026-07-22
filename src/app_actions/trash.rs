@@ -1,4 +1,4 @@
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
 
 use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
@@ -8,7 +8,7 @@ use crate::shell::tasks::ShellTaskStatus;
 impl FikaWgpuApp {
     pub(crate) fn perform_trash_view_context_action(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         action: ShellContextMenuAction,
     ) {
         if action == ShellContextMenuAction::EmptyTrash {
@@ -50,7 +50,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn move_context_target_to_trash(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         privileged: bool,
     ) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
@@ -77,7 +77,7 @@ impl FikaWgpuApp {
         }
     }
 
-    pub(crate) fn replace_trash_restore_conflicts(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn replace_trash_restore_conflicts(&mut self, event_loop: &ActiveEventLoop) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };

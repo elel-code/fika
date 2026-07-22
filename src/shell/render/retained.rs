@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use winit::dpi::PhysicalSize;
+use crate::platform::PhysicalSize;
 
 use crate::nonzero_size;
 use crate::shell::render::gpu::create_text_vertex_buffer;

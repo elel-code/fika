@@ -1,8 +1,8 @@
 
     #[test]
     fn rename_dialog_key_input_captures_text_and_commit_controls() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert_eq!(
             rename_command_for_key_parts(

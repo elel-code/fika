@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 
+use crate::platform::PhysicalSize;
 use fika_core::{ViewPoint, is_network_path};
-use winit::dpi::PhysicalSize;
 
 use crate::shell::context_menu::ShellContextMenu;
 use crate::shell::drop_menu::{ShellDropMenu, ShellDropTarget};

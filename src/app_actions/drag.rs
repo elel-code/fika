@@ -5,12 +5,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use winit::data_transfer::{
-    DataTransferId, DataTransferSendBuilder, SendData, TypeHint, TypedData,
+use crate::platform::{
+    ActiveEventLoop, AsyncRequestSerial, DataTransferId, DataTransferSendBuilder, DndAction,
+    DragIcon, PhysicalPosition, RgbaIcon, SendData, TypeHint, TypedData,
 };
-use winit::dpi::PhysicalPosition;
-use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial, DndAction, DragIcon};
-use winit::icon::RgbaIcon;
 
 use super::outcome::ShellActionOutcome;
 use crate::shell::drop_menu::ShellDropTarget;
@@ -52,7 +50,7 @@ impl FikaWgpuApp {
         self.outgoing_dnd_start_failed = false;
     }
 
-    pub(crate) fn start_outgoing_drag_if_needed(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn start_outgoing_drag_if_needed(&mut self, event_loop: &ActiveEventLoop) {
         if self.outgoing_dnd_transfer.is_some()
             || self.outgoing_dnd_start_failed
             || !self.scene.internal_drag_active()
@@ -165,7 +163,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn external_drag_entered(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         id: DataTransferId,
         position: Option<PhysicalPosition<f64>>,
     ) -> ShellActionOutcome {
@@ -233,7 +231,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn external_drag_position(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         id: DataTransferId,
         position: PhysicalPosition<f64>,
     ) -> ShellActionOutcome {
@@ -282,7 +280,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn external_drag_data_received(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         id: DataTransferId,
         serial: AsyncRequestSerial,
         value: Arc<dyn TypedData>,
@@ -456,7 +454,7 @@ impl FikaWgpuApp {
         }
     }
 
-    fn sync_external_dnd_actions(&self, event_loop: &dyn ActiveEventLoop, id: DataTransferId) {
+    fn sync_external_dnd_actions(&self, event_loop: &ActiveEventLoop, id: DataTransferId) {
         let accepted = self
             .incoming_dnd_transfer
             .as_ref()
@@ -472,7 +470,7 @@ impl FikaWgpuApp {
 
     fn set_valid_dnd_actions(
         &self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         id: DataTransferId,
         accepted: bool,
     ) {
@@ -663,13 +661,14 @@ fn outgoing_dnd_drag_icon(
 ) -> Option<DragIcon> {
     let metrics = outgoing_dnd_preview_metrics(icon_size, scale);
     let pixels = outgoing_dnd_preview_pixels(paths, metrics, raster);
-    let icon = RgbaIcon::new(pixels, metrics.canvas_size, metrics.canvas_size)
-        .ok()?
-        .into();
+    let icon = RgbaIcon::new(pixels, metrics.canvas_size, metrics.canvas_size).ok()?;
+    let buffer_scale = metrics.unit.round().max(1.0) as i32;
+    let logical_size = metrics.canvas_size as i32 / buffer_scale;
     Some(DragIcon {
         icon,
-        offset_x: -(metrics.canvas_size as i32) / 2,
-        offset_y: -(metrics.canvas_size as i32) / 2,
+        buffer_scale,
+        offset_x: -logical_size / 2,
+        offset_y: -logical_size / 2,
     })
 }
 

@@ -1,6 +1,4 @@
-use winit::event::KeyEvent;
-use winit::event::MouseButton;
-use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+use crate::platform::{Key, KeyCode, KeyEvent, MouseButton, NamedKey, PhysicalKey};
 
 use crate::shell::create_rename::CreateEntryKind;
 use crate::shell::options::ShellViewMode;

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
 
 use crate::FikaWgpuApp;
 use crate::shell::pane::ShellPaneId;
@@ -81,7 +81,7 @@ impl From<ShellActionOutcome> for ShellActionEffect {
 impl FikaWgpuApp {
     pub(crate) fn apply_action_effect(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         effect: ShellActionEffect,
     ) {
         match effect {
@@ -94,7 +94,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn apply_action_outcome(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         outcome: ShellActionOutcome,
     ) {
         match outcome {

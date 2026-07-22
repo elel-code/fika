@@ -15,7 +15,7 @@ mod transfer;
 mod trash;
 mod view;
 
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
 
 use self::outcome::ShellActionOutcome;
 use crate::shell::action::{
@@ -30,7 +30,7 @@ use crate::{FikaWgpuApp, file_clipboard_role_as_str};
 impl FikaWgpuApp {
     pub(crate) fn perform_context_menu_action(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         command: ShellContextMenuCommand,
     ) {
         let (action, dispatch) = match context_menu_command_dispatch(command) {
@@ -197,7 +197,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn perform_file_keyboard_command(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         command: FileKeyboardCommand,
     ) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {

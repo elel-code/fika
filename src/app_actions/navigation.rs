@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::thread;
 
-use winit::dpi::PhysicalSize;
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
+use crate::platform::PhysicalSize;
 
 use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
@@ -19,7 +19,7 @@ use fika_core::default_user_places_path;
 impl FikaWgpuApp {
     pub(crate) fn perform_path_navigation(
         &mut self,
-        _event_loop: &dyn ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         action: PathNavigationAction,
     ) {
         let pane = self.scene.active_pane();
@@ -48,7 +48,7 @@ impl FikaWgpuApp {
         }
     }
 
-    pub(crate) fn reload_scene_path(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn reload_scene_path(&mut self, event_loop: &ActiveEventLoop) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
@@ -84,7 +84,7 @@ impl FikaWgpuApp {
         }
     }
 
-    pub(crate) fn commit_location_draft(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn commit_location_draft(&mut self, event_loop: &ActiveEventLoop) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
@@ -111,7 +111,7 @@ impl FikaWgpuApp {
 
     fn commit_add_network_folder_draft(
         &mut self,
-        _event_loop: &dyn ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         size: PhysicalSize<u32>,
     ) {
         let input = self.scene.location_draft_value().unwrap_or("").to_string();
@@ -158,7 +158,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn load_path_into_pane(
         &mut self,
-        _event_loop: &dyn ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         pane: ShellPaneId,
         path: PathBuf,
         reason: &'static str,

@@ -3,21 +3,23 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust Edition](https://img.shields.io/badge/rust-2024-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/index.html)
 
-Fika is a Linux-focused Rust file manager. The UI mainline is now the default
-`fika` binary, a Fika-specific `winit + wgpu` shell; the previous UI runtimes
-have been removed from the source tree.
+Fika is a Wayland-focused Rust file manager. The UI mainline is the default
+`fika` binary, with a Fika-specific wgpu shell over a reusable native Wayland
+runtime; the previous UI runtimes have been removed from the source tree.
 
 > [中文版 / Chinese](README.zh-CN.md)
 
 ## Current Runtime
 
 - `fika` is the default run target and the only in-tree file-manager UI.
-- `winit` tracks the official upstream `master` branch for its cross-platform
-  DnD API.
+- `wayland-client-runtime` is the reusable SCTK-based protocol, surface and
+  event layer. Fika itself has no direct winit or SCTK dependency.
 - `wgpu` comes from the official crates.io release.
 - `fika-core` stays UI-neutral and owns filesystem/domain behavior.
-- Clipboard integration uses Wayland `wl_data_device` directly; paste does not
-  shell out to `wl-paste`, `wl-copy`, or `xclip`.
+- Clipboard and DnD use Wayland `wl_data_device`; rendering handles can be
+  consumed by wgpu or direct Vulkan, and KDE blur keeps full region semantics.
+- Parented dialogs, popup positioning/repositioning, cursor-shape fallback and
+  drag icons are owned by the reusable Wayland layer.
 - Portal and privileged-helper binaries remain separate integration pieces.
 
 ## Source Layout
@@ -25,7 +27,10 @@ have been removed from the source tree.
 ```text
 src/
   lib.rs                         UI-neutral core exports
-  main.rs                        winit/wgpu shell entry point
+  main.rs                        Wayland/wgpu shell entry point
+  platform.rs                    Fika adapter over the reusable runtime
+  platform_event_loop.rs         Fika scheduling and event translation
+  platform_types.rs              Fika-owned platform vocabulary
   core.rs                        Core module re-exports
   cli.rs                         Shared CLI parsing entry point
   cli/
@@ -36,6 +41,8 @@ src/
   bin/
     fika-xdp-filechooser.rs      XDG Desktop Portal FileChooser backend
     fika-privileged-helper.rs    D-Bus helper for privileged operations
+crates/
+  wayland-client-runtime/        Reusable SCTK Wayland protocol/event crate
 ```
 
 ## Build And Run

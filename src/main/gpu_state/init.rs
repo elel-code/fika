@@ -1,5 +1,5 @@
 impl WgpuState {
-    fn new(window: Arc<dyn Window>) -> Result<Self, String> {
+    fn new(window: Arc<WaylandWindow>) -> Result<Self, String> {
         let size = nonzero_size(window.surface_size());
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
@@ -10,7 +10,7 @@ impl WgpuState {
         });
 
         let surface = instance
-            .create_surface(window)
+            .create_surface(window.surface_handle())
             .map_err(|error| format!("create surface: {error}"))?;
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -41,14 +41,14 @@ impl WgpuState {
         Self::from_surface_parts(size, instance, adapter, device, queue, surface)
     }
 
-    fn new_with_shared_device(window: Arc<dyn Window>, shared: &Self) -> Result<Self, String> {
+    fn new_with_shared_device(window: Arc<WaylandWindow>, shared: &Self) -> Result<Self, String> {
         let size = nonzero_size(window.surface_size());
         let instance = shared.instance.clone();
         let adapter = shared.adapter.clone();
         let device = shared.device.clone();
         let queue = shared.queue.clone();
         let surface = instance
-            .create_surface(window)
+            .create_surface(window.surface_handle())
             .map_err(|error| format!("create surface: {error}"))?;
         fika_dialog_trace!(
             "[fika-wgpu] renderer-shared-device adapter={:?}",
@@ -203,7 +203,7 @@ impl WgpuState {
 
     fn acquire_surface_frame(
         &mut self,
-        window: &dyn Window,
+        window: &WaylandWindow,
         reason: &'static str,
         context: ShellSurfaceFrameContext,
     ) -> Option<wgpu::SurfaceTexture> {
@@ -239,7 +239,7 @@ impl WgpuState {
 
     fn acquire_surface_frame_after_reconfigure(
         &mut self,
-        window: &dyn Window,
+        window: &WaylandWindow,
         reason: &'static str,
         context: ShellSurfaceFrameContext,
     ) -> Option<wgpu::SurfaceTexture> {
@@ -264,7 +264,7 @@ impl WgpuState {
 
     fn submit_surface_frame(
         &mut self,
-        window: &dyn Window,
+        window: &WaylandWindow,
         frame: wgpu::SurfaceTexture,
         encoder: wgpu::CommandEncoder,
     ) -> u64 {

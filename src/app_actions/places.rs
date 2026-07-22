@@ -1,4 +1,4 @@
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
 
 use super::outcome::ShellActionOutcome;
 use crate::FikaWgpuApp;
@@ -14,7 +14,7 @@ impl FikaWgpuApp {
         self.apply_window_action_outcome(ShellActionOutcome::redraw_if(changed));
     }
 
-    pub(crate) fn add_context_target_to_places(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn add_context_target_to_places(&mut self, event_loop: &ActiveEventLoop) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
@@ -38,7 +38,7 @@ impl FikaWgpuApp {
         }
     }
 
-    pub(crate) fn remove_context_place(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn remove_context_place(&mut self, event_loop: &ActiveEventLoop) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };

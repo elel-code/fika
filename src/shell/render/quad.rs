@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 
+use crate::platform::PhysicalSize;
 use bytemuck::{Pod, Zeroable};
 #[cfg(test)]
 use fika_core::ViewPoint;
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::render::gpu::{
     VertexBufferUploadStats, create_vertex_buffer, upload_vertex_buffer_if_dirty,

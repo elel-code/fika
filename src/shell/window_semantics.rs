@@ -1,8 +1,4 @@
-use winit::event_loop::ActiveEventLoop;
-use winit::window::WindowAttributes;
-
-#[cfg(target_os = "linux")]
-use winit::platform::wayland::{ActiveEventLoopExtWayland, WindowAttributesWayland};
+use crate::platform::{ActiveEventLoop, WindowAttributes};
 
 const FIKA_WAYLAND_APP_ID: &str = "fika";
 
@@ -18,6 +14,7 @@ pub(crate) enum ShellDialogWindowRole {
 }
 
 impl ShellDialogWindowRole {
+    #[cfg(test)]
     fn wayland_instance(self) -> &'static str {
         match self {
             Self::Create => "fika-create-dialog",
@@ -38,6 +35,7 @@ pub(crate) enum ShellWindowRole {
 }
 
 impl ShellWindowRole {
+    #[cfg(test)]
     fn wayland_instance(self) -> &'static str {
         match self {
             Self::Main => "fika-main",
@@ -47,37 +45,15 @@ impl ShellWindowRole {
 }
 
 pub(crate) fn apply_window_platform_semantics(
-    event_loop: &dyn ActiveEventLoop,
+    _event_loop: &ActiveEventLoop,
     attrs: WindowAttributes,
     role: ShellWindowRole,
 ) -> WindowAttributes {
-    apply_wayland_window_semantics(event_loop, attrs, role)
-}
-
-#[cfg(target_os = "linux")]
-fn apply_wayland_window_semantics(
-    event_loop: &dyn ActiveEventLoop,
-    attrs: WindowAttributes,
-    role: ShellWindowRole,
-) -> WindowAttributes {
-    if !event_loop.is_wayland() {
-        return attrs;
+    let attrs = attrs.with_app_id(FIKA_WAYLAND_APP_ID);
+    match role {
+        ShellWindowRole::Main => attrs,
+        ShellWindowRole::Dialog(_) => attrs.with_dialog(true),
     }
-
-    attrs.with_platform_attributes(Box::new(
-        WindowAttributesWayland::default()
-            .with_name(FIKA_WAYLAND_APP_ID, role.wayland_instance())
-            .with_prefer_csd(false),
-    ))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn apply_wayland_window_semantics(
-    _event_loop: &dyn ActiveEventLoop,
-    attrs: WindowAttributes,
-    _role: ShellWindowRole,
-) -> WindowAttributes {
-    attrs
 }
 
 #[cfg(test)]

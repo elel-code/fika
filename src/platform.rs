@@ -1,0 +1,671 @@
+//! Fika's Wayland-facing platform adapter.
+//!
+//! The reusable protocol and event machinery lives in `wayland-client-runtime`.
+//! This module only translates those Wayland-native events into Fika's input
+//! vocabulary and owns the application's scheduling policy.
+
+use std::any::Any;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::fmt;
+use std::io::Read;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, Weak};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use wayland_client_runtime::{
+    BlurRegion, BlurState, CursorIcon as RuntimeCursorIcon, DecorationPreference, DialogAttributes,
+    DndAction as RuntimeDndAction, DndActions as RuntimeDndActions, DndEvent,
+    DndIcon as RuntimeDndIcon, DndMimePayload, DndOfferId, DndSourceId, Event, InputSerial,
+    KeyState, KeyboardEvent, LogicalPosition, LogicalSize, PointerEventKind, Runtime, RuntimeError,
+    RuntimeOptions, SurfaceEvent, SurfaceHandle, SurfaceId, ToplevelAttributes, WakeHandle,
+};
+include!("platform_types.rs");
+#[derive(Clone, Debug)]
+pub struct WindowAttributes {
+    title: String,
+    app_id: String,
+    surface_size: PhysicalSize<u32>,
+    min_surface_size: Option<PhysicalSize<u32>>,
+    max_surface_size: Option<PhysicalSize<u32>>,
+    decorations: DecorationPreference,
+    dialog: bool,
+    modal: bool,
+}
+
+impl Default for WindowAttributes {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            app_id: "fika".to_string(),
+            surface_size: PhysicalSize::new(1, 1),
+            min_surface_size: None,
+            max_surface_size: None,
+            decorations: DecorationPreference::Server,
+            dialog: false,
+            modal: false,
+        }
+    }
+}
+
+impl WindowAttributes {
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    pub fn with_app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.app_id = app_id.into();
+        self
+    }
+
+    pub fn with_transparent(self, _transparent: bool) -> Self {
+        self
+    }
+
+    pub fn with_surface_size(mut self, size: PhysicalSize<u32>) -> Self {
+        self.surface_size = size;
+        self
+    }
+
+    pub fn with_min_surface_size(mut self, size: PhysicalSize<u32>) -> Self {
+        self.min_surface_size = Some(size);
+        self
+    }
+
+    pub fn with_max_surface_size(mut self, size: PhysicalSize<u32>) -> Self {
+        self.max_surface_size = Some(size);
+        self
+    }
+
+    pub fn with_resizable(self, _resizable: bool) -> Self {
+        self
+    }
+
+    pub fn with_theme(self, _theme: Option<Theme>) -> Self {
+        self
+    }
+
+    pub fn with_dialog(mut self, modal: bool) -> Self {
+        self.dialog = true;
+        self.modal = modal;
+        self
+    }
+}
+
+struct WindowState {
+    logical_size: LogicalSize,
+    physical_size: PhysicalSize<u32>,
+    scale_factor: i32,
+    configured: bool,
+    redraw_requested: bool,
+    frame_pending: bool,
+    latest_drag_serial: Option<InputSerial>,
+}
+
+enum RuntimeCommand {
+    SetTitle(SurfaceId, String),
+    SetMinSize(SurfaceId, Option<LogicalSize>),
+    SetMaxSize(SurfaceId, Option<LogicalSize>),
+    SetBlur(SurfaceId, BlurState),
+    SetCursor(CursorIcon),
+    ArmFrame(SurfaceId),
+    Destroy(SurfaceId),
+}
+
+struct LoopShared {
+    wake: WakeHandle,
+    commands: Mutex<Vec<RuntimeCommand>>,
+    synthetic_events: Mutex<Vec<SyntheticEvent>>,
+}
+
+struct SyntheticEvent {
+    window: WindowId,
+    event: WindowEvent,
+    completed_offer: Option<DndOfferId>,
+}
+
+struct ActiveDndTransfer {
+    offer: DndOfferId,
+    window: WindowId,
+    hints: Vec<TypeHint>,
+    dropped: bool,
+    read_complete: bool,
+}
+
+impl LoopShared {
+    fn push(&self, command: RuntimeCommand) {
+        self.commands
+            .lock()
+            .expect("Wayland command queue mutex poisoned")
+            .push(command);
+        self.wake.wake();
+    }
+}
+
+pub struct WaylandWindow {
+    id: SurfaceId,
+    handle: SurfaceHandle,
+    state: Mutex<WindowState>,
+    shared: Arc<LoopShared>,
+}
+
+impl fmt::Debug for WaylandWindow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WaylandWindow")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl WaylandWindow {
+    pub fn id(&self) -> WindowId {
+        self.id
+    }
+
+    pub fn surface_handle(&self) -> SurfaceHandle {
+        self.handle.clone()
+    }
+
+    pub fn surface_size(&self) -> PhysicalSize<u32> {
+        self.state
+            .lock()
+            .expect("Wayland window state mutex poisoned")
+            .physical_size
+    }
+
+    pub fn scale_factor(&self) -> f64 {
+        self.state
+            .lock()
+            .expect("Wayland window state mutex poisoned")
+            .scale_factor as f64
+    }
+
+    pub fn request_redraw(&self) {
+        self.state
+            .lock()
+            .expect("Wayland window state mutex poisoned")
+            .redraw_requested = true;
+        self.shared.wake.wake();
+    }
+
+    pub fn pre_present_notify(&self) {
+        let should_arm = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("Wayland window state mutex poisoned");
+            if state.frame_pending {
+                false
+            } else {
+                state.frame_pending = true;
+                true
+            }
+        };
+        if should_arm {
+            self.shared.push(RuntimeCommand::ArmFrame(self.id));
+        }
+    }
+
+    pub fn set_title(&self, title: &str) {
+        self.shared
+            .push(RuntimeCommand::SetTitle(self.id, title.to_string()));
+    }
+
+    pub fn set_blur(&self, enabled: bool) {
+        let state = if enabled {
+            BlurState::Enabled(BlurRegion::EntireSurface)
+        } else {
+            BlurState::Disabled
+        };
+        self.set_blur_state(state);
+    }
+
+    pub fn set_blur_state(&self, state: BlurState) {
+        self.shared.push(RuntimeCommand::SetBlur(self.id, state));
+    }
+
+    pub fn set_min_surface_size(&self, size: Option<PhysicalSize<u32>>) {
+        self.shared.push(RuntimeCommand::SetMinSize(
+            self.id,
+            size.map(physical_to_logical),
+        ));
+    }
+
+    pub fn set_max_surface_size(&self, size: Option<PhysicalSize<u32>>) {
+        self.shared.push(RuntimeCommand::SetMaxSize(
+            self.id,
+            size.map(physical_to_logical),
+        ));
+    }
+
+    pub fn request_surface_size(&self, size: PhysicalSize<u32>) -> Option<PhysicalSize<u32>> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("Wayland window state mutex poisoned");
+        let factor = state.scale_factor.max(1) as u32;
+        state.logical_size = LogicalSize::new(
+            size.width.saturating_add(factor - 1) / factor,
+            size.height.saturating_add(factor - 1) / factor,
+        );
+        state.physical_size = size;
+        Some(size)
+    }
+
+    pub fn set_resizable(&self, _resizable: bool) {}
+
+    pub fn set_theme(&self, _theme: Option<Theme>) {}
+
+    pub fn set_cursor(&self, cursor: CursorIcon) {
+        self.shared.push(RuntimeCommand::SetCursor(cursor));
+    }
+
+    pub fn focus_window(&self) {}
+
+    pub fn request_user_attention(&self) {}
+}
+
+impl Drop for WaylandWindow {
+    fn drop(&mut self) {
+        self.shared.push(RuntimeCommand::Destroy(self.id));
+    }
+}
+
+#[derive(Clone)]
+pub struct EventLoopProxy {
+    wake: WakeHandle,
+}
+
+impl EventLoopProxy {
+    pub fn wake_up(&self) {
+        self.wake.wake();
+    }
+}
+
+pub trait ApplicationHandler {
+    fn proxy_wake_up(&mut self, _event_loop: &ActiveEventLoop) {}
+    fn can_create_surfaces(&mut self, event_loop: &ActiveEventLoop);
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop);
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    );
+}
+
+pub struct ActiveEventLoop {
+    runtime: Rc<RefCell<Runtime>>,
+    shared: Arc<LoopShared>,
+    windows: Rc<RefCell<HashMap<SurfaceId, Weak<WaylandWindow>>>>,
+    primary_surface: Cell<Option<SurfaceId>>,
+    dnd_transfers: RefCell<HashMap<DataTransferId, ActiveDndTransfer>>,
+    dnd_sources: RefCell<HashMap<DndSourceId, WindowId>>,
+    next_async_serial: Cell<u64>,
+    control_flow: Cell<ControlFlow>,
+    exiting: Cell<bool>,
+}
+
+impl ActiveEventLoop {
+    pub fn create_window(
+        &self,
+        attributes: WindowAttributes,
+    ) -> Result<Arc<WaylandWindow>, RuntimeError> {
+        let logical_size = physical_to_logical(attributes.surface_size);
+        let min_size = attributes.min_surface_size.map(physical_to_logical);
+        let max_size = attributes.max_surface_size.map(physical_to_logical);
+        let toplevel = ToplevelAttributes {
+            title: attributes.title,
+            app_id: attributes.app_id,
+            min_size,
+            max_size,
+            decorations: attributes.decorations,
+        };
+        let id = if attributes.dialog {
+            let parent = self.primary_surface.get().ok_or_else(|| {
+                RuntimeError::Protocol("dialog has no parent surface".to_string())
+            })?;
+            self.runtime.borrow_mut().create_dialog(
+                parent,
+                DialogAttributes {
+                    toplevel,
+                    modal: attributes.modal,
+                },
+            )?
+        } else {
+            let id = self.runtime.borrow_mut().create_toplevel(toplevel)?;
+            if self.primary_surface.get().is_none() {
+                self.primary_surface.set(Some(id));
+            }
+            id
+        };
+        let handle = self
+            .runtime
+            .borrow()
+            .surface_handle(id)
+            .ok_or(RuntimeError::SurfaceNotFound(id))?;
+        let window = Arc::new(WaylandWindow {
+            id,
+            handle,
+            state: Mutex::new(WindowState {
+                logical_size,
+                physical_size: attributes.surface_size,
+                scale_factor: 1,
+                configured: false,
+                redraw_requested: true,
+                frame_pending: false,
+                latest_drag_serial: None,
+            }),
+            shared: self.shared.clone(),
+        });
+        self.windows
+            .borrow_mut()
+            .insert(id, Arc::downgrade(&window));
+        Ok(window)
+    }
+
+    pub fn set_control_flow(&self, control_flow: ControlFlow) {
+        self.control_flow.set(control_flow);
+        self.shared.wake.wake();
+    }
+
+    pub fn exit(&self) {
+        self.exiting.set(true);
+        self.shared.wake.wake();
+    }
+
+    pub fn start_drag(
+        &self,
+        window: WindowId,
+        data: DataTransferSend,
+        actions: &[DndAction],
+        icon: Option<DragIcon>,
+    ) -> Result<DataTransferId, String> {
+        let origin = self
+            .windows
+            .borrow()
+            .get(&window)
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| "drag origin surface no longer exists".to_string())?;
+        let serial = origin
+            .state
+            .lock()
+            .expect("Wayland window state mutex poisoned")
+            .latest_drag_serial
+            .clone()
+            .ok_or_else(|| "drag start has no pointer-press serial".to_string())?;
+        let payloads = data
+            .payloads
+            .into_iter()
+            .map(|(hint, bytes)| DndMimePayload::new(hint.mime(), bytes).map_err(str::to_string))
+            .collect::<Result<Vec<_>, _>>()?;
+        let icon = icon
+            .map(|icon| {
+                RuntimeDndIcon::new(
+                    icon.icon.rgba,
+                    icon.icon.width,
+                    icon.icon.height,
+                    icon.buffer_scale,
+                    LogicalPosition::new(icon.offset_x, icon.offset_y),
+                )
+                .map_err(str::to_string)
+            })
+            .transpose()?;
+        let source = self
+            .runtime
+            .borrow_mut()
+            .start_drag(
+                window,
+                &serial,
+                payloads,
+                runtime_dnd_actions(actions),
+                icon,
+            )
+            .map_err(|error| error.to_string())?;
+        self.dnd_sources.borrow_mut().insert(source, window);
+        Ok(DataTransferId(source.get()))
+    }
+
+    pub fn data_transfer(&self, id: DataTransferId) -> Result<DataTransfer, String> {
+        self.dnd_transfers
+            .borrow()
+            .get(&id)
+            .map(|transfer| DataTransfer {
+                hints: transfer.hints.clone(),
+            })
+            .ok_or_else(|| format!("DnD transfer {} does not exist", id.into_raw()))
+    }
+
+    pub fn fetch_data_transfer(
+        &self,
+        id: DataTransferId,
+        hint: &TypeHint,
+    ) -> Result<AsyncRequestSerial, String> {
+        let (offer, window) = self
+            .dnd_transfers
+            .borrow()
+            .get(&id)
+            .map(|transfer| (transfer.offer, transfer.window))
+            .ok_or_else(|| format!("DnD transfer {} does not exist", id.into_raw()))?;
+        let mut pipe = self
+            .runtime
+            .borrow()
+            .receive_dnd(offer, hint.mime())
+            .map_err(|error| error.to_string())?;
+        let serial = AsyncRequestSerial(self.next_async_serial.get());
+        self.next_async_serial
+            .set(self.next_async_serial.get().wrapping_add(1));
+        let shared = self.shared.clone();
+        let hint = hint.clone();
+        thread::Builder::new()
+            .name("fika-wayland-dnd-read".to_string())
+            .spawn(move || {
+                let mut bytes = Vec::new();
+                let result = pipe
+                    .read_to_end(&mut bytes)
+                    .map(|_| bytes)
+                    .map_err(|error| error.to_string());
+                let value: Arc<dyn TypedData> = Arc::new(ReceivedTypedData { hint, result });
+                shared
+                    .synthetic_events
+                    .lock()
+                    .expect("Wayland synthetic event queue mutex poisoned")
+                    .push(SyntheticEvent {
+                        window,
+                        event: WindowEvent::DataTransferReceived { id, serial, value },
+                        completed_offer: Some(offer),
+                    });
+                shared.wake.wake();
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(serial)
+    }
+
+    pub fn set_valid_dnd_actions(
+        &self,
+        id: DataTransferId,
+        actions: &[DndAction],
+    ) -> Result<(), String> {
+        let transfer = self
+            .dnd_transfers
+            .borrow()
+            .get(&id)
+            .map(|transfer| (transfer.offer, transfer.hints.clone()))
+            .ok_or_else(|| format!("DnD transfer {} does not exist", id.into_raw()))?;
+        let accepted_mime = (!actions.is_empty())
+            .then(|| transfer.1.iter().find(|hint| **hint == TypeHint::UriList))
+            .flatten()
+            .map(TypeHint::mime);
+        self.runtime
+            .borrow()
+            .set_dnd_offer_actions(
+                transfer.0,
+                accepted_mime,
+                runtime_dnd_actions(actions),
+                preferred_runtime_dnd_action(actions),
+            )
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub struct EventLoop {
+    active: ActiveEventLoop,
+}
+
+include!("platform_event_loop.rs");
+fn physical_to_logical(size: PhysicalSize<u32>) -> LogicalSize {
+    LogicalSize::new(size.width.max(1), size.height.max(1))
+}
+
+fn scale_dnd_position(position: LogicalPosition, scale: f64) -> PhysicalPosition<f64> {
+    PhysicalPosition::new(position.x as f64 * scale, position.y as f64 * scale)
+}
+
+fn runtime_dnd_actions(actions: &[DndAction]) -> RuntimeDndActions {
+    let mut mapped = RuntimeDndActions::empty();
+    for action in actions {
+        mapped |= match action {
+            DndAction::Copy => RuntimeDndActions::COPY,
+            DndAction::Move => RuntimeDndActions::MOVE,
+            DndAction::Ask => RuntimeDndActions::ASK,
+        };
+    }
+    mapped
+}
+
+fn preferred_runtime_dnd_action(actions: &[DndAction]) -> Option<RuntimeDndAction> {
+    if actions.contains(&DndAction::Ask) {
+        Some(RuntimeDndAction::Ask)
+    } else if actions.contains(&DndAction::Move) {
+        Some(RuntimeDndAction::Move)
+    } else if actions.contains(&DndAction::Copy) {
+        Some(RuntimeDndAction::Copy)
+    } else {
+        None
+    }
+}
+
+fn platform_dnd_action(action: RuntimeDndAction) -> DndAction {
+    match action {
+        RuntimeDndAction::Copy => DndAction::Copy,
+        RuntimeDndAction::Move => DndAction::Move,
+        RuntimeDndAction::Ask => DndAction::Ask,
+    }
+}
+
+fn runtime_cursor_icon(icon: CursorIcon) -> RuntimeCursorIcon {
+    match icon {
+        CursorIcon::ColResize => RuntimeCursorIcon::ColResize,
+        CursorIcon::Default => RuntimeCursorIcon::Default,
+        CursorIcon::Pointer => RuntimeCursorIcon::Pointer,
+        CursorIcon::Text => RuntimeCursorIcon::Text,
+    }
+}
+
+fn linux_button(button: u32) -> ButtonSource {
+    let button = match button {
+        0x110 => MouseButton::Left,
+        0x111 => MouseButton::Right,
+        0x112 => MouseButton::Middle,
+        0x113 => MouseButton::Back,
+        0x114 => MouseButton::Forward,
+        value => return ButtonSource::Unknown(value),
+    };
+    ButtonSource::Mouse(button)
+}
+
+fn translate_key_event(
+    state: KeyState,
+    raw_code: u32,
+    keysym: u32,
+    text: Option<String>,
+) -> KeyEvent {
+    let logical_key = logical_key(keysym, text.as_deref());
+    KeyEvent {
+        physical_key: physical_key(raw_code),
+        key_without_modifiers: logical_key.clone(),
+        logical_key,
+        state: match state {
+            KeyState::Pressed | KeyState::Repeated => ElementState::Pressed,
+            KeyState::Released => ElementState::Released,
+        },
+        repeat: state == KeyState::Repeated,
+        text,
+    }
+}
+
+fn logical_key(keysym: u32, text: Option<&str>) -> Key {
+    use xkeysym::key;
+
+    let named = match keysym {
+        key::BackSpace => Some(NamedKey::Backspace),
+        key::Tab | key::ISO_Left_Tab => Some(NamedKey::Tab),
+        key::Return | key::KP_Enter => Some(NamedKey::Enter),
+        key::Escape => Some(NamedKey::Escape),
+        key::Delete | key::KP_Delete => Some(NamedKey::Delete),
+        key::Home | key::KP_Home => Some(NamedKey::Home),
+        key::Left | key::KP_Left => Some(NamedKey::ArrowLeft),
+        key::Up | key::KP_Up => Some(NamedKey::ArrowUp),
+        key::Right | key::KP_Right => Some(NamedKey::ArrowRight),
+        key::Down | key::KP_Down => Some(NamedKey::ArrowDown),
+        key::Page_Up | key::KP_Page_Up => Some(NamedKey::PageUp),
+        key::Page_Down | key::KP_Page_Down => Some(NamedKey::PageDown),
+        key::End | key::KP_End => Some(NamedKey::End),
+        key::F1 => Some(NamedKey::F1),
+        key::F2 => Some(NamedKey::F2),
+        key::F3 => Some(NamedKey::F3),
+        key::F5 => Some(NamedKey::F5),
+        key::F6 => Some(NamedKey::F6),
+        _ => None,
+    };
+    if let Some(named) = named {
+        Key::Named(named)
+    } else if let Some(text) = text.filter(|value| !value.is_empty()) {
+        Key::Character(text.to_string())
+    } else if let Some(character) = xkeysym::Keysym::new(keysym).key_char() {
+        Key::Character(character.to_string())
+    } else {
+        Key::Unidentified(NativeKey::Unidentified)
+    }
+}
+
+fn physical_key(raw_code: u32) -> PhysicalKey {
+    let evdev = raw_code.saturating_sub(8);
+    let code = match evdev {
+        1 => KeyCode::Escape,
+        2 => KeyCode::Digit1,
+        3 => KeyCode::Digit2,
+        4 => KeyCode::Digit3,
+        14 => KeyCode::Backspace,
+        15 => KeyCode::Tab,
+        19 => KeyCode::KeyR,
+        30 => KeyCode::KeyA,
+        32 => KeyCode::KeyD,
+        33 => KeyCode::KeyF,
+        35 => KeyCode::KeyH,
+        38 => KeyCode::KeyL,
+        45 => KeyCode::KeyX,
+        46 => KeyCode::KeyC,
+        47 => KeyCode::KeyV,
+        59 => KeyCode::F1,
+        60 => KeyCode::F2,
+        61 => KeyCode::F3,
+        63 => KeyCode::F5,
+        64 => KeyCode::F6,
+        79 => KeyCode::Numpad1,
+        80 => KeyCode::Numpad2,
+        81 => KeyCode::Numpad3,
+        102 => KeyCode::Home,
+        103 => KeyCode::ArrowUp,
+        105 => KeyCode::ArrowLeft,
+        106 => KeyCode::ArrowRight,
+        107 => KeyCode::End,
+        108 => KeyCode::ArrowDown,
+        111 => KeyCode::Delete,
+        _ => return PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
+    };
+    PhysicalKey::Code(code)
+}

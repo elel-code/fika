@@ -1,7 +1,7 @@
 use std::time::Instant;
 
+use crate::platform::PhysicalSize;
 use fika_core::ViewPoint;
-use winit::dpi::PhysicalSize;
 
 use crate::shell::context_menu::{
     ShellContextMenu, ShellContextMenuItem, ShellContextSubmenu, context_menu_items,

@@ -1,4 +1,4 @@
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
 
 use super::outcome::{ShellActionEffect, ShellActionOutcome};
 use crate::shell::context_menu::ShellContextMenuAction;
@@ -10,7 +10,7 @@ use fika_core::perform_device_place_operation;
 impl FikaWgpuApp {
     pub(crate) fn perform_device_context_action(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         action: ShellContextMenuAction,
     ) {
         let Some(request) = self.scene.context_target_device_action(action) else {

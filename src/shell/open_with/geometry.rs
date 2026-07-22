@@ -1,5 +1,5 @@
+use crate::platform::PhysicalSize;
 use fika_core::{ViewPoint, ViewRect};
-use winit::dpi::PhysicalSize;
 
 use crate::shell::metrics::{
     OPEN_WITH_CHOOSER_BUTTON_GAP, OPEN_WITH_CHOOSER_BUTTON_HEIGHT, OPEN_WITH_CHOOSER_BUTTON_WIDTH,

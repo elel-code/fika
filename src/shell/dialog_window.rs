@@ -2,11 +2,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use winit::cursor::{Cursor as WinitCursor, CursorIcon};
-use winit::dpi::PhysicalSize;
-use winit::event::{Modifiers, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
-use winit::window::{Theme, UserAttentionType, Window, WindowAttributes, WindowId};
+use crate::platform::{
+    ActiveEventLoop, CursorIcon, Modifiers, PhysicalSize, Theme, WaylandWindow, WindowAttributes,
+    WindowEvent, WindowId,
+};
 
 use crate::WgpuState;
 use crate::shell::window_semantics::{
@@ -74,7 +73,7 @@ impl ShellDialogWindowSpec {
 
     fn window_attributes(
         &self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         kind: ShellDialogWindowKind,
     ) -> WindowAttributes {
         let mut attrs = WindowAttributes::default()
@@ -99,14 +98,14 @@ impl ShellDialogWindowSpec {
 pub(crate) struct ShellDetachedDialogWindow {
     kind: ShellDialogWindowKind,
     renderer: WgpuState,
-    window: Arc<dyn Window>,
+    window: Arc<WaylandWindow>,
     layout_size: PhysicalSize<u32>,
     cursor_icon: CursorIcon,
 }
 
 impl ShellDetachedDialogWindow {
     pub(crate) fn create(
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         shared_renderer: Option<&WgpuState>,
         kind: ShellDialogWindowKind,
         spec: &ShellDialogWindowSpec,
@@ -114,7 +113,6 @@ impl ShellDetachedDialogWindow {
         let window = event_loop
             .create_window(spec.window_attributes(event_loop, kind))
             .map_err(|error| format!("{} dialog window create failed: {error}", kind.as_str()))?;
-        let window: Arc<dyn Window> = window.into();
         let renderer = match shared_renderer {
             Some(renderer) => WgpuState::new_with_shared_device(window.clone(), renderer),
             None => WgpuState::new(window.clone()),
@@ -156,20 +154,14 @@ impl ShellDetachedDialogWindow {
         self.layout_size
     }
 
-    pub(crate) fn scale_factor(&self) -> f32 {
-        self.window.scale_factor() as f32
-    }
-
     pub(crate) fn sync(&mut self, spec: &ShellDialogWindowSpec) {
         self.layout_size = spec.surface_size;
         self.window.set_title(&spec.title);
         self.window.set_theme(spec.theme);
-        self.window
-            .set_min_surface_size(spec.min_surface_size.map(Into::into));
-        self.window
-            .set_max_surface_size(spec.max_surface_size.map(Into::into));
+        self.window.set_min_surface_size(spec.min_surface_size);
+        self.window.set_max_surface_size(spec.max_surface_size);
         self.window.set_resizable(spec.resizable);
-        if let Some(applied) = self.window.request_surface_size(spec.surface_size.into()) {
+        if let Some(applied) = self.window.request_surface_size(spec.surface_size) {
             self.renderer.resize(applied);
         }
         self.request_redraw();
@@ -185,8 +177,7 @@ impl ShellDetachedDialogWindow {
 
     pub(crate) fn focus(&self) {
         self.window.focus_window();
-        self.window
-            .request_user_attention(Some(UserAttentionType::Informational));
+        self.window.request_user_attention();
         self.window.request_redraw();
     }
 
@@ -195,7 +186,7 @@ impl ShellDetachedDialogWindow {
             return;
         }
         self.cursor_icon = cursor_icon;
-        self.window.set_cursor(WinitCursor::Icon(cursor_icon));
+        self.window.set_cursor(cursor_icon);
     }
 
     fn prepare_for_drop(&mut self) {
@@ -207,7 +198,7 @@ impl ShellDetachedDialogWindow {
         self.renderer.wait_idle("dialog-window-drop");
     }
 
-    pub(crate) fn renderer_and_window_mut(&mut self) -> (&mut WgpuState, &dyn Window) {
+    pub(crate) fn renderer_and_window_mut(&mut self) -> (&mut WgpuState, &WaylandWindow) {
         (&mut self.renderer, self.window.as_ref())
     }
 }
@@ -327,10 +318,10 @@ impl ShellDialogWindows {
                 self.resize(kind, *size);
                 Some(ShellDialogWindowHostEvent::SurfaceResized)
             }
-            WindowEvent::ScaleFactorChanged { .. } => {
+            WindowEvent::ScaleFactorChanged { scale_factor } => {
                 self.get(kind)
                     .map(|window| ShellDialogWindowHostEvent::ScaleFactorChanged {
-                        scale_factor: window.scale_factor(),
+                        scale_factor: *scale_factor as f32,
                         renderer_size: window.renderer_size(),
                     })
             }

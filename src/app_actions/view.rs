@@ -1,5 +1,5 @@
-use winit::dpi::PhysicalSize;
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
+use crate::platform::PhysicalSize;
 
 use super::outcome::ShellActionOutcome;
 use crate::shell::options::ShellViewMode;
@@ -48,7 +48,7 @@ impl FikaWgpuApp {
 
     pub(crate) fn open_context_target_in_split_pane(
         &mut self,
-        event_loop: &dyn ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         reason: &'static str,
     ) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
@@ -64,7 +64,7 @@ impl FikaWgpuApp {
         }
     }
 
-    pub(crate) fn toggle_split_view_from_toolbar(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn toggle_split_view_from_toolbar(&mut self, event_loop: &ActiveEventLoop) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use winit::event_loop::ActiveEventLoop;
+use crate::platform::ActiveEventLoop;
 
 use super::outcome::ShellActionOutcome;
 use crate::shell::create_rename::disk::{
@@ -12,7 +12,7 @@ use crate::{FikaWgpuApp, path_display_label, task_error_detail};
 use fika_core::{MimeApplicationCache, set_default_mime_application};
 
 impl FikaWgpuApp {
-    pub(crate) fn commit_rename_dialog(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn commit_rename_dialog(&mut self, event_loop: &ActiveEventLoop) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };
@@ -88,7 +88,7 @@ impl FikaWgpuApp {
         }
     }
 
-    pub(crate) fn commit_create_dialog(&mut self, event_loop: &dyn ActiveEventLoop) {
+    pub(crate) fn commit_create_dialog(&mut self, event_loop: &ActiveEventLoop) {
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };

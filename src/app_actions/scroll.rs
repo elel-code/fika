@@ -1,4 +1,4 @@
-use winit::event::MouseScrollDelta;
+use crate::platform::MouseScrollDelta;
 
 use super::outcome::ShellActionOutcome;
 use crate::shell::shortcuts::zoom_action_for_scroll_delta;

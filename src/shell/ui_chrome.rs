@@ -1,5 +1,5 @@
+use crate::platform::PhysicalSize;
 use fika_core::{Entry, ViewRect};
-use winit::dpi::PhysicalSize;
 
 use crate::shell::icon_roles::{FILE_ICON_CORNER_RADIUS_RATIO, FOLDER_ICON_CORNER_RADIUS_RATIO};
 use crate::shell::render::quad::{QuadVertex, push_clipped_rect, push_clipped_rounded_rect};

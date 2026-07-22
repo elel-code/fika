@@ -1,5 +1,5 @@
+use crate::platform::PhysicalSize;
 use fika_core::{ViewPoint, ViewRect};
-use winit::dpi::PhysicalSize;
 
 use crate::shell::context_menu::{
     ShellContextMenu, ShellContextSubmenu, context_menu_items, context_submenu_actions,

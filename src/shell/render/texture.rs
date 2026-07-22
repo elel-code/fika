@@ -1,6 +1,6 @@
+use crate::platform::PhysicalSize;
 use bytemuck::{Pod, Zeroable};
 use fika_core::ViewRect;
-use winit::dpi::PhysicalSize;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AtlasRect {

@@ -178,8 +178,8 @@
 
     #[test]
     fn view_mode_shortcuts_accept_ctrl_digits_and_function_key_fallbacks() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert_eq!(
             view_mode_for_key_parts(true, &PhysicalKey::Code(KeyCode::Digit1), &no_key, &no_key,),
@@ -223,7 +223,7 @@
 
     #[test]
     fn file_keyboard_shortcuts_cover_clipboard_rename_and_delete() {
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert_eq!(
             file_keyboard_command_for_key_parts(
@@ -319,8 +319,8 @@
 
     #[test]
     fn reload_shortcuts_accept_f5_and_ctrl_r() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert!(reload_requested_for_key_parts(
             false,
@@ -350,8 +350,8 @@
 
     #[test]
     fn hidden_shortcut_requires_ctrl_h() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert!(hidden_toggle_requested_for_key_parts(
             true,
@@ -375,8 +375,8 @@
 
     #[test]
     fn dark_mode_shortcut_requires_ctrl_shift_d() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert!(dark_mode_toggle_requested_for_key_parts(
             true,
@@ -403,8 +403,8 @@
 
     #[test]
     fn location_shortcuts_activate_and_capture_text_when_active() {
-        let unidentified = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
-        let no_key = Key::Unidentified(winit::keyboard::NativeKey::Unidentified);
+        let unidentified = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        let no_key = Key::Unidentified(NativeKey::Unidentified);
 
         assert_eq!(
             location_command_for_key_parts(

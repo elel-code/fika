@@ -1,3 +1,5 @@
+mod platform;
+
 include!("main/crate_prelude.rs");
 
 mod app_actions;
