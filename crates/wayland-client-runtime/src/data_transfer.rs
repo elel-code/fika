@@ -129,6 +129,21 @@ impl TransferReadPipe {
     pub fn mime(&self) -> &str {
         &self.mime
     }
+
+    /// Read a textual offer, accepting non-UTF-8 bytes lossily like common
+    /// Wayland clipboard implementations.
+    pub fn read_text(mut self) -> io::Result<String> {
+        let mut content = Vec::new();
+        self.read_to_end(&mut content)?;
+        let text = String::from_utf8(content)
+            .unwrap_or_else(|error| String::from_utf8_lossy(&error.into_bytes()).into_owned());
+        Ok(match self.mime.as_str() {
+            MIME_TEXT_PLAIN_UTF8 | MIME_TEXT_PLAIN => {
+                text.replace("\r\n", "\n").replace('\r', "\n")
+            }
+            _ => text,
+        })
+    }
 }
 
 impl Read for TransferReadPipe {

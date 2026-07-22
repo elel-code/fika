@@ -102,23 +102,11 @@ impl ApplicationHandler for FikaWgpuApp {
                 return;
             }
         };
-        let clipboard = match ShellClipboard::from_window(window.clone()) {
-            Ok(Some(clipboard)) => {
-                fika_log!(
-                    "[fika-wgpu] clipboard-ready backend={}",
-                    clipboard.backend()
-                );
-                Some(clipboard)
-            }
-            Ok(None) => {
-                fika_log!("[fika-wgpu] clipboard-unavailable backend=unsupported");
-                None
-            }
-            Err(error) => {
-                fika_log!("[fika-wgpu] clipboard-unavailable error={error}");
-                None
-            }
-        };
+        let clipboard = ShellClipboard::new(event_loop);
+        fika_log!(
+            "[fika-wgpu] clipboard-ready backend={}",
+            clipboard.backend()
+        );
 
         self.scene
             .set_scale_factor(window.scale_factor() as f32, renderer.size);
@@ -133,7 +121,7 @@ impl ApplicationHandler for FikaWgpuApp {
         self.scene.clamp_scroll(renderer.size);
         renderer.prewarm_scene_caches(&mut self.scene, "startup");
         self.renderer = Some(renderer);
-        self.clipboard = clipboard;
+        self.clipboard = Some(clipboard);
         self.window = Some(window);
 
         if let Some(window) = self.window.as_ref() {

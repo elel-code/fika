@@ -1,12 +1,9 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::Write;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
-use crate::dnd::{
-    DndAction, DndActions, DndEvent, DndIcon, DndMimePayload, DndOfferId, DndReadPipe, DndSourceId,
-};
+use crate::data_transfer::{TransferContent, TransferReadPipe};
+use crate::dnd::{DndAction, DndActions, DndEvent, DndIcon, DndOfferId, DndReadPipe, DndSourceId};
 use crate::event::{
     Event, KeyState, KeyboardEvent, Modifiers, PointerEvent, PointerEventKind, PopupConfigureKind,
     SurfaceEvent, ToplevelState,
@@ -25,7 +22,9 @@ use smithay_client_toolkit::compositor::{
 };
 use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
 use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
-use smithay_client_toolkit::data_device_manager::data_source::{DataSourceHandler, DragSource};
+use smithay_client_toolkit::data_device_manager::data_source::{
+    CopyPasteSource, DataSourceHandler, DragSource,
+};
 use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
 use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::error::GlobalError;
@@ -110,8 +109,12 @@ pub enum RuntimeError {
     ForeignOrStalePopupGrab,
     #[error("drag origin has no focused pointer seat with a current button serial")]
     InvalidDragSerial,
-    #[error("DnD content must contain at least one MIME payload")]
-    EmptyDndContent,
+    #[error("clipboard selection has no focused seat with a current input serial")]
+    InvalidSelectionSerial,
+    #[error("clipboard selection is unavailable")]
+    SelectionUnavailable,
+    #[error("clipboard selection has none of the requested MIME types")]
+    SelectionMimeNotFound,
     #[error("DnD offer {0:?} does not exist")]
     DndOfferNotFound(DndOfferId),
     #[error("the compositor does not support {0}")]
@@ -202,6 +205,7 @@ impl Runtime {
             incoming_dnd: HashMap::new(),
             active_dnd_by_device: HashMap::new(),
             outgoing_dnd: HashMap::new(),
+            selection_sources: HashMap::new(),
             events: VecDeque::with_capacity(options.event_capacity),
             next_surface_id: 1,
             next_dnd_id: 1,
@@ -560,128 +564,6 @@ impl Runtime {
         Ok(())
     }
 
-    /// Start an external drag using the origin's focused pointer seat.
-    ///
-    /// Call this while handling the pointer gesture which activated the drag.
-    /// The runtime owns the compositor serial and selects the newest matching
-    /// seat, so applications do not need to retain protocol serials.
-    pub fn start_drag(
-        &mut self,
-        origin: SurfaceId,
-        payloads: Vec<DndMimePayload>,
-        actions: DndActions,
-        icon: Option<DndIcon>,
-    ) -> Result<DndSourceId, RuntimeError> {
-        if payloads.is_empty() {
-            return Err(RuntimeError::EmptyDndContent);
-        }
-        let origin_surface = self.surface_shared(origin)?;
-        let candidates = self.state.seats.iter().map(|(seat_id, objects)| {
-            (
-                *seat_id,
-                objects.pointer_focus,
-                objects.data_device.is_some(),
-                objects.latest_button_serial,
-            )
-        });
-        let (seat_id, serial) =
-            select_drag_seat(origin, candidates).ok_or(RuntimeError::InvalidDragSerial)?;
-        let icon = icon
-            .map(|icon| prepare_dnd_icon_surface(&mut self.state, &self.queue_handle, icon))
-            .transpose()?;
-        let data_device = self
-            .state
-            .seats
-            .get(&seat_id)
-            .and_then(|objects| objects.data_device.as_ref())
-            .ok_or(RuntimeError::Unsupported("wl_data_device"))?;
-        let source = self.state.data_device_manager.create_drag_and_drop_source(
-            &self.queue_handle,
-            payloads.iter().map(DndMimePayload::mime),
-            map_dnd_actions(actions),
-        );
-        let id = DndSourceId(self.state.next_dnd_id);
-        self.state.next_dnd_id += 1;
-        source.start_drag(
-            data_device,
-            origin_surface.wl_surface(),
-            icon.as_ref().map(|icon| &icon.surface),
-            serial,
-        );
-        // Match winit #4571: on KDE, committing the icon before start_drag can
-        // prevent its offset from taking effect.
-        if let Some(icon) = icon.as_ref() {
-            icon.surface.commit();
-        }
-        self.state.outgoing_dnd.insert(
-            source.inner().id(),
-            OutgoingDndSource {
-                id,
-                _source: source,
-                payloads,
-                selected_action: None,
-                _icon: icon,
-            },
-        );
-        Ok(id)
-    }
-
-    pub fn set_dnd_offer_actions(
-        &self,
-        offer: DndOfferId,
-        accepted_mime: Option<&str>,
-        actions: DndActions,
-        preferred: Option<DndAction>,
-    ) -> Result<(), RuntimeError> {
-        let offer = self
-            .state
-            .incoming_dnd
-            .get(&offer)
-            .ok_or(RuntimeError::DndOfferNotFound(offer))?;
-        offer
-            .offer
-            .accept_mime_type(offer.offer.serial, accepted_mime.map(str::to_string));
-        offer.offer.set_actions(
-            map_dnd_actions(actions),
-            preferred
-                .map(map_dnd_action)
-                .unwrap_or_else(WlDndAction::empty),
-        );
-        Ok(())
-    }
-
-    pub fn receive_dnd(
-        &self,
-        offer: DndOfferId,
-        mime: impl Into<String>,
-    ) -> Result<DndReadPipe, RuntimeError> {
-        let offer = self
-            .state
-            .incoming_dnd
-            .get(&offer)
-            .ok_or(RuntimeError::DndOfferNotFound(offer))?;
-        let mime = mime.into();
-        offer
-            .offer
-            .receive(mime.clone())
-            .map(|pipe| DndReadPipe::new(mime, pipe))
-            .map_err(|error| RuntimeError::Protocol(error.to_string()))
-    }
-
-    pub fn finish_dnd_offer(&mut self, offer: DndOfferId) -> Result<(), RuntimeError> {
-        let offer = self
-            .state
-            .incoming_dnd
-            .remove(&offer)
-            .ok_or(RuntimeError::DndOfferNotFound(offer))?;
-        self.state
-            .active_dnd_by_device
-            .retain(|_, active| *active != offer.id);
-        offer.offer.finish();
-        offer.offer.destroy();
-        Ok(())
-    }
-
     /// Remove a surface and every descendant from the runtime in child-first order.
     /// Renderer-held [`SurfaceHandle`] leases may keep those protocol objects alive;
     /// each child lease holds its parent so the protocol destruction order remains valid.
@@ -770,6 +652,7 @@ impl Runtime {
     }
 }
 
+include!("runtime_data_transfer.rs");
 include!("runtime_helpers.rs");
 struct RuntimeState {
     registry_state: RegistryState,
@@ -788,6 +671,7 @@ struct RuntimeState {
     incoming_dnd: HashMap<DndOfferId, IncomingDndOffer>,
     active_dnd_by_device: HashMap<ObjectId, DndOfferId>,
     outgoing_dnd: HashMap<ObjectId, OutgoingDndSource>,
+    selection_sources: HashMap<ObjectId, SelectionSource>,
     events: VecDeque<Event>,
     next_surface_id: u64,
     next_dnd_id: u64,
@@ -803,9 +687,14 @@ struct IncomingDndOffer {
 struct OutgoingDndSource {
     id: DndSourceId,
     _source: DragSource,
-    payloads: Vec<DndMimePayload>,
+    content: TransferContent,
     selected_action: Option<DndAction>,
     _icon: Option<DndIconSurface>,
+}
+
+struct SelectionSource {
+    _source: CopyPasteSource,
+    content: TransferContent,
 }
 
 struct DndIconSurface {
@@ -816,6 +705,12 @@ struct DndIconSurface {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ButtonSerial {
     surface: SurfaceId,
+    serial: u32,
+    order: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SelectionSerial {
     serial: u32,
     order: u64,
 }
@@ -849,6 +744,9 @@ impl RuntimeState {
             if objects.pointer_focus == Some(id) {
                 objects.pointer_focus = None;
             }
+            if objects.keyboard_focus == Some(id) {
+                objects.keyboard_focus = None;
+            }
         }
     }
 
@@ -861,6 +759,15 @@ impl RuntimeState {
                 serial,
                 order,
             });
+            objects.latest_selection_serial = Some(SelectionSerial { serial, order });
+        }
+    }
+
+    fn record_selection_serial(&mut self, seat_id: u32, serial: u32) {
+        let order = self.next_button_order;
+        self.next_button_order = self.next_button_order.saturating_add(1);
+        if let Some(objects) = self.seats.get_mut(&seat_id) {
+            objects.latest_selection_serial = Some(SelectionSerial { serial, order });
         }
     }
 
@@ -878,6 +785,7 @@ impl RuntimeState {
         let Some(data) = keyboard.data::<KeyboardData<Self, ()>>() else {
             return;
         };
+        self.record_selection_serial(data.seat().id().protocol_id(), serial);
         let serial = InputSerial::new(data.seat().clone(), serial, InputSerialSource::KeyboardKey);
         self.events.push_back(Event::Keyboard(KeyboardEvent::Key {
             surface,
@@ -926,6 +834,14 @@ struct SeatObjects {
     data_device: Option<DataDevice>,
     pointer_focus: Option<SurfaceId>,
     latest_button_serial: Option<ButtonSerial>,
+    latest_selection_serial: Option<SelectionSerial>,
+    keyboard_focus: Option<SurfaceId>,
+}
+
+impl SeatObjects {
+    fn has_focus(&self) -> bool {
+        self.pointer_focus.is_some() || self.keyboard_focus.is_some()
+    }
 }
 
 impl Drop for SeatObjects {

@@ -279,6 +279,14 @@ impl EventLoop {
                             WindowEvent::DragLeft { id },
                         );
                     }
+                    if let Err(error) = self
+                        .active
+                        .runtime
+                        .borrow_mut()
+                        .discard_dnd_offer(offer)
+                    {
+                        eprintln!("[fika-wayland] discard DnD offer failed: {error}");
+                    }
                 }
             }
             DndEvent::Drop {

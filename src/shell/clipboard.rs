@@ -2,11 +2,11 @@ use std::io::Result as IoResult;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
-use crate::platform::WaylandWindow;
+use crate::platform::{ActiveEventLoop, WaylandClipboard};
 use fika_core::{FileClipboardRole, encode_file_clipboard_text};
-use wayland_client_runtime::clipboard::{
-    Clipboard, ClipboardContent, ClipboardMimePayload, MIME_STRING, MIME_TEXT, MIME_TEXT_PLAIN,
-    MIME_TEXT_PLAIN_UTF8, MIME_UTF8_STRING, text_mime_types,
+use wayland_client_runtime::data_transfer::{
+    MIME_STRING, MIME_TEXT, MIME_TEXT_PLAIN, MIME_TEXT_PLAIN_UTF8, MIME_UTF8_STRING, MimePayload,
+    TransferContent, text_mime_types,
 };
 
 const MIME_GNOME_COPIED_FILES: &str = "x-special/gnome-copied-files";
@@ -19,16 +19,16 @@ pub(crate) struct FileClipboardExportRequest {
     pub(crate) text: String,
 }
 
-/// Fika's file-clipboard MIME policy over the reusable Wayland worker.
+/// Fika's file-clipboard MIME policy over the shared Wayland transfer runtime.
 pub(crate) struct ShellClipboard {
-    inner: Clipboard,
+    inner: WaylandClipboard,
 }
 
 impl ShellClipboard {
-    pub(crate) fn from_window(window: Arc<WaylandWindow>) -> Result<Option<Self>, String> {
-        Clipboard::from_display_owner(Arc::new(window.surface_handle()))
-            .map(|clipboard| clipboard.map(|inner| Self { inner }))
-            .map_err(|error| error.to_string())
+    pub(crate) fn new(event_loop: &ActiveEventLoop) -> Self {
+        Self {
+            inner: event_loop.clipboard(),
+        }
     }
 
     pub(crate) fn backend(&self) -> &'static str {
@@ -58,7 +58,7 @@ impl ShellClipboard {
 
     pub(crate) fn load_text_async(&self) -> Result<mpsc::Receiver<IoResult<String>>, String> {
         self.inner
-            .load_async([
+            .load_async(&[
                 MIME_GNOME_COPIED_FILES,
                 MIME_TEXT_URI_LIST,
                 MIME_TEXT_PLAIN_UTF8,
@@ -75,7 +75,7 @@ fn file_clipboard_content(
     role: FileClipboardRole,
     paths: &[PathBuf],
     text: &str,
-) -> Result<ClipboardContent, String> {
+) -> Result<TransferContent, String> {
     let uri_list = encode_file_clipboard_text(FileClipboardRole::Copy, paths);
     let gnome_role = match role {
         FileClipboardRole::Copy => "copy",
@@ -89,23 +89,22 @@ fn file_clipboard_content(
 
     let text_bytes = Arc::<[u8]>::from(text.as_bytes());
     let mut payloads = vec![
-        ClipboardMimePayload::new(MIME_GNOME_COPIED_FILES, Arc::<[u8]>::from(gnome.as_bytes()))
+        MimePayload::new(MIME_GNOME_COPIED_FILES, Arc::<[u8]>::from(gnome.as_bytes()))
             .map_err(|error| error.to_string())?,
-        ClipboardMimePayload::new(MIME_TEXT_URI_LIST, Arc::<[u8]>::from(uri_list.as_bytes()))
+        MimePayload::new(MIME_TEXT_URI_LIST, Arc::<[u8]>::from(uri_list.as_bytes()))
             .map_err(|error| error.to_string())?,
     ];
     payloads.extend(text_mime_types().iter().map(|mime| {
-        ClipboardMimePayload::new(*mime, text_bytes.clone())
-            .expect("built-in text MIME types are non-empty")
+        MimePayload::new(*mime, text_bytes.clone()).expect("built-in text MIME types are non-empty")
     }));
-    ClipboardContent::new(payloads).map_err(|error| error.to_string())
+    TransferContent::new(payloads).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn payload_text(content: &ClipboardContent, mime: &str) -> String {
+    fn payload_text(content: &TransferContent, mime: &str) -> String {
         let payload = content
             .payloads()
             .iter()

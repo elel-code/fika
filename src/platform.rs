@@ -17,11 +17,13 @@ use std::time::{Duration, Instant};
 use wayland_client_runtime::{
     BlurRegion, BlurState, CursorIcon as RuntimeCursorIcon, DecorationPreference, DialogAttributes,
     DndAction as RuntimeDndAction, DndActions as RuntimeDndActions, DndEvent,
-    DndIcon as RuntimeDndIcon, DndMimePayload, DndOfferId, DndSourceId, Event, KeyState,
-    KeyboardEvent, LogicalPosition, LogicalSize, PointerEventKind, Runtime, RuntimeError,
-    RuntimeOptions, SurfaceEvent, SurfaceHandle, SurfaceId, ToplevelAttributes, WakeHandle,
+    DndIcon as RuntimeDndIcon, DndOfferId, DndSourceId, Event, KeyState, KeyboardEvent,
+    LogicalPosition, LogicalSize, MimePayload, PointerEventKind, Runtime, RuntimeError,
+    RuntimeOptions, SurfaceEvent, SurfaceHandle, SurfaceId, ToplevelAttributes, TransferContent,
+    WakeHandle,
 };
 include!("platform_types.rs");
+include!("platform_clipboard.rs");
 #[derive(Clone, Debug)]
 pub struct WindowAttributes {
     title: String,
@@ -387,13 +389,15 @@ impl ActiveEventLoop {
             .get(&window)
             .and_then(Weak::upgrade)
             .ok_or_else(|| "drag origin surface no longer exists".to_string())?;
-        let payloads = data
-            .payloads
-            .into_iter()
-            .map(|(hint, bytes)| {
-                DndMimePayload::new(hint.mime(), bytes).map_err(|error| error.to_string())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let content = TransferContent::new(
+            data.payloads
+                .into_iter()
+                .map(|(hint, bytes)| {
+                    MimePayload::new(hint.mime(), bytes).map_err(|error| error.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )
+        .map_err(|error| error.to_string())?;
         let icon = icon
             .map(|icon| {
                 RuntimeDndIcon::new(
@@ -409,7 +413,7 @@ impl ActiveEventLoop {
         let source = self
             .runtime
             .borrow_mut()
-            .start_drag(window, payloads, runtime_dnd_actions(actions), icon)
+            .start_drag(window, content, runtime_dnd_actions(actions), icon)
             .map_err(|error| error.to_string())?;
         self.dnd_sources.borrow_mut().insert(source, window);
         Ok(DataTransferId(source.get()))

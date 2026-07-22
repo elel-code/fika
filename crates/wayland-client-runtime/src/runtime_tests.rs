@@ -140,4 +140,17 @@ mod tests {
 
         assert_eq!(select_drag_seat(origin, candidates), Some((12, 120)));
     }
+
+    #[test]
+    fn selection_seat_uses_newest_focused_data_device_serial() {
+        let input = |serial, order| Some(SelectionSerial { serial, order });
+        let candidates = [
+            (1, true, true, input(10, 2)),
+            (2, false, true, input(20, 8)),
+            (3, true, false, input(30, 9)),
+            (4, true, true, input(40, 7)),
+        ];
+
+        assert_eq!(select_selection_seat(candidates), Some((4, 40)));
+    }
 }

@@ -252,6 +252,7 @@ impl SeatHandler for RuntimeState {
             Capability::Keyboard => {
                 if let Some(keyboard) = objects.keyboard.take() {
                     self.keyboard_focus.remove(&keyboard.id().protocol_id());
+                    objects.keyboard_focus = None;
                     if keyboard.version() >= 3 {
                         keyboard.release();
                     }
@@ -272,7 +273,9 @@ impl SeatHandler for RuntimeState {
             && let Some(device) = objects.data_device.as_ref()
             && let Some(offer) = self.active_dnd_by_device.remove(&device.inner().id())
         {
-            self.incoming_dnd.remove(&offer);
+            if let Some(record) = self.incoming_dnd.remove(&offer) {
+                record.offer.destroy();
+            }
         }
     }
 }
@@ -320,6 +323,7 @@ impl PointerHandler for RuntimeState {
             };
             let kind = match &event.kind {
                 SctkPointerEventKind::Enter { serial } => {
+                    self.record_selection_serial(seat_id, *serial);
                     if let Some(objects) = self.seats.get_mut(&seat_id) {
                         objects.pointer_focus = Some(surface);
                     }
@@ -411,6 +415,11 @@ impl KeyboardHandler for RuntimeState {
         };
         self.keyboard_focus
             .insert(keyboard.id().protocol_id(), surface);
+        let seat_id = data.seat().id().protocol_id();
+        self.record_selection_serial(seat_id, serial);
+        if let Some(objects) = self.seats.get_mut(&seat_id) {
+            objects.keyboard_focus = Some(surface);
+        }
         self.events.push_back(Event::Keyboard(KeyboardEvent::Enter {
             surface,
             serial: InputSerial::new(
@@ -432,6 +441,12 @@ impl KeyboardHandler for RuntimeState {
     ) {
         let surface = self.surface_id(surface);
         self.keyboard_focus.remove(&keyboard.id().protocol_id());
+        if let Some(data) = keyboard.data::<KeyboardData<Self, ()>>()
+            && let Some(objects) = self.seats.get_mut(&data.seat().id().protocol_id())
+            && objects.keyboard_focus == surface
+        {
+            objects.keyboard_focus = None;
+        }
         if let Some(surface) = surface {
             self.events
                 .push_back(Event::Keyboard(KeyboardEvent::Leave { surface }));
@@ -476,11 +491,14 @@ impl KeyboardHandler for RuntimeState {
         _: &Connection,
         _: &QueueHandle<Self>,
         keyboard: &wl_keyboard::WlKeyboard,
-        _: u32,
+        serial: u32,
         modifiers: SctkModifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        if let Some(data) = keyboard.data::<KeyboardData<Self, ()>>() {
+            self.record_selection_serial(data.seat().id().protocol_id(), serial);
+        }
         let Some(surface) = self
             .keyboard_focus
             .get(&keyboard.id().protocol_id())
@@ -512,31 +530,26 @@ impl RuntimeState {
             .and_then(|device| device.data().drag_offer())
     }
 
-    fn write_dnd_source(
+    fn write_data_source(
         &self,
         source: &wl_data_source::WlDataSource,
         mime: &str,
-        mut pipe: WritePipe,
+        pipe: WritePipe,
     ) {
         let Some(bytes) = self
             .outgoing_dnd
             .get(&source.id())
-            .and_then(|record| {
-                record
-                    .payloads
-                    .iter()
-                    .find(|payload| payload.mime() == mime)
+            .map(|record| &record.content)
+            .or_else(|| {
+                self.selection_sources
+                    .get(&source.id())
+                    .map(|record| &record.content)
             })
-            .map(|payload| payload.bytes().clone())
+            .and_then(|content| content.bytes_for_mime(mime))
         else {
             return;
         };
-        let _ = thread::Builder::new()
-            .name("wayland-dnd-write".to_string())
-            .spawn(move || {
-                let _ = pipe.write_all(&bytes);
-                let _ = pipe.flush();
-            });
+        crate::data_transfer::spawn_write_pipe("wayland-transfer-write", pipe, bytes);
     }
 }
 
@@ -591,9 +604,6 @@ impl DataDeviceHandler for RuntimeState {
             return;
         };
         let surface = record.surface;
-        if !record.offer.dropped {
-            self.incoming_dnd.remove(&id);
-        }
         self.events.push_back(Event::Dnd(DndEvent::Leave {
             offer: id,
             surface,
@@ -691,7 +701,7 @@ impl DataSourceHandler for RuntimeState {
         mime: String,
         pipe: WritePipe,
     ) {
-        self.write_dnd_source(source, &mime, pipe);
+        self.write_data_source(source, &mime, pipe);
     }
 
     fn cancelled(
@@ -700,6 +710,9 @@ impl DataSourceHandler for RuntimeState {
         _: &QueueHandle<Self>,
         source: &wl_data_source::WlDataSource,
     ) {
+        if self.selection_sources.remove(&source.id()).is_some() {
+            return;
+        }
         if let Some(record) = self.outgoing_dnd.remove(&source.id()) {
             self.events
                 .push_back(Event::Dnd(DndEvent::SourceCancelled { source: record.id }));

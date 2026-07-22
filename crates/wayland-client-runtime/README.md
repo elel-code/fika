@@ -18,8 +18,8 @@ general-purpose and contains no Fika-specific model or renderer dependency.
 | Lifetimes | Owns a surface tree, removes descendants child-first, and makes every renderer lease retain its ancestors |
 | Rendering | `SurfaceHandle` implements raw-window-handle 0.6 for both wgpu and direct Vulkan use |
 | Blur | Supports disabled, complete-surface, and arbitrary surface-local rectangle regions through `org_kde_kwin_blur_manager` |
-| Clipboard | Provides a reusable MIME-payload `wl_data_device` worker; application-specific file formats stay in the application |
-| Drag and drop | Handles incoming/outgoing offers, MIME pipes, action negotiation and lifecycle events; optional RGBA previews use owned SHM drag-icon surfaces |
+| Data transfer | Clipboard and DnD share one MIME-content model, runtime connection, seat/serial state, data devices and pipe I/O; application-specific formats stay in the application |
+| Drag and drop | Handles incoming/outgoing offers, action negotiation and lifecycle events; optional RGBA previews use owned SHM drag-icon surfaces |
 | Input | Translates keyboard and pointer events into crate-owned values; uses cursor-shape when available and automatically falls back to the system cursor theme |
 
 Touch event types are reserved in the API, while touch dispatch will be enabled
@@ -86,6 +86,13 @@ applies the logical hotspot offset. The icon is committed after `start_drag`
 for KDE compatibility and remains owned until the source finishes or is
 cancelled. `SourceDropped` reports acceptance immediately, while
 `SourceFinished` marks the point where source and icon resources are released.
+
+Clipboard selections use the same `TransferContent` and runtime-owned seat
+serials as drag sources. `Runtime::store_selection` and
+`Runtime::receive_selection` therefore require no second Wayland connection or
+clipboard-only event thread. Incoming DnD offers remain valid until the queued
+leave/drop event has been consumed and the application explicitly discards or
+finishes them.
 
 `Runtime::set_cursor` uses `wp_cursor_shape_manager_v1` when advertised. On
 older compositors, SCTK loads the same semantic cursor from the configured

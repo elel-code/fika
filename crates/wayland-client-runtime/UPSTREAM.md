@@ -36,8 +36,10 @@ a behavioral reference rather than an implementation source.
   reports drop acceptance without releasing the source or icon before
   `dnd_finished`/cancellation.
 
-The public API remains Wayland-native and payload-oriented; it does not copy
-winit's cross-platform `DataTransfer` abstraction.
+The public API remains Wayland-native, but follows the PR's important shared
+data-transfer boundary: clipboard selections and DnD sources use the same MIME
+content and pipe types. Unlike the PR's currently DnD-only backend, this crate
+also routes clipboard selections through the main runtime connection.
 
 ## SCTK dialog support
 
@@ -62,6 +64,11 @@ premultiplied ARGB8888 SHM buffers and remain owned until source completion or
 cancellation. SCTK's `SeatState` binds seats already present in the initial
 registry without calling `SeatHandler::new_seat`, so per-seat data devices are
 also initialized idempotently from capability callbacks.
+
+Clipboard and DnD sources share the main runtime's seat serials, data devices,
+MIME content, and source request handling. An incoming DnD offer is retained
+across its queued `Leave` event so application callbacks cannot observe an ID
+whose protocol offer was already destroyed.
 
 Cursor selection uses SCTK's themed-pointer path. It prefers
 `wp_cursor_shape_manager_v1` and falls back to the system XCursor theme without
