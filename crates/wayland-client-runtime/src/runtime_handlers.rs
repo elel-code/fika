@@ -200,14 +200,7 @@ impl SeatHandler for RuntimeState {
     }
 
     fn new_seat(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
-        let seat_id = seat.id().protocol_id();
-        let objects = self.seats.entry(seat_id).or_default();
-        if objects.data_device.is_none() {
-            objects.data_device = Some(
-                self.data_device_manager
-                    .get_data_device(qh, &seat),
-            );
-        }
+        self.ensure_seat_data_device(qh, &seat);
     }
 
     fn new_capability(
@@ -218,6 +211,10 @@ impl SeatHandler for RuntimeState {
         capability: Capability,
     ) {
         let seat_id = seat.id().protocol_id();
+        // SeatState binds seats already present in the initial registry without
+        // invoking new_seat. Capability callbacks are therefore also an
+        // initialization path for per-seat data devices.
+        self.ensure_seat_data_device(qh, &seat);
         let objects = self.seats.entry(seat_id).or_default();
         match capability {
             Capability::Keyboard if objects.keyboard.is_none() => {
@@ -276,6 +273,24 @@ impl SeatHandler for RuntimeState {
             && let Some(offer) = self.active_dnd_by_device.remove(&device.inner().id())
         {
             self.incoming_dnd.remove(&offer);
+        }
+    }
+}
+
+impl RuntimeState {
+    fn ensure_seat_data_device(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        seat: &wl_seat::WlSeat,
+    ) {
+        let seat_id = seat.id().protocol_id();
+        if self
+            .seats
+            .get(&seat_id)
+            .is_none_or(|objects| objects.data_device.is_none())
+        {
+            let device = self.data_device_manager.get_data_device(qh, seat);
+            self.seats.entry(seat_id).or_default().data_device = Some(device);
         }
     }
 }

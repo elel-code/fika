@@ -59,7 +59,9 @@ single whole-surface boolean.
 DnD source/offer negotiation follows the `wl_data_device` protocol and SCTK
 0.21 data-device APIs. Drag previews are independent `wl_surface` objects with
 premultiplied ARGB8888 SHM buffers and remain owned until source completion or
-cancellation.
+cancellation. SCTK's `SeatState` binds seats already present in the initial
+registry without calling `SeatHandler::new_seat`, so per-seat data devices are
+also initialized idempotently from capability callbacks.
 
 Cursor selection uses SCTK's themed-pointer path. It prefers
 `wp_cursor_shape_manager_v1` and falls back to the system XCursor theme without
