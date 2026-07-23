@@ -210,20 +210,34 @@ can apply their own coordinate convention exactly once.
 
 ## Pointer gestures
 
-When `RuntimeCapabilities::pointer_gestures_v1` is true, every live pointer
-seat owns swipe and pinch gesture objects. `Event::PointerGesture` reports the
-full begin/update/end lifecycle without filtering finger counts. Swipe updates
-preserve the surface-coordinate movement since the previous event. Pinch
-updates preserve center movement, absolute scale relative to begin, and
-clockwise rotation in degrees since the previous event, allowing policy layers
-to derive pan, zoom, and rotation without a lossy cross-platform conversion.
+`RuntimeCapabilities::pointer_gestures_v1` reports protocol availability; it
+does not create per-seat objects by itself. Call
+`Runtime::set_pointer_gestures_enabled(surface, true)` for surfaces that
+consume gestures. The first subscription lazily creates swipe and pinch
+objects for live pointer seats, and removing the final subscription destroys
+them. Applications such as Fika that do not subscribe therefore pay no
+gesture protocol or event-queue overhead.
+
+Unsubscribing immediately suppresses the remainder of an in-progress gesture
+for that surface and does not fabricate an end serial or timestamp. Code that
+initiates the unsubscribe should clear its own transient gesture state.
+
+`Event::PointerGesture` reports the full begin/update/end lifecycle without
+filtering finger counts. Swipe updates preserve the surface-coordinate
+movement since the previous event. Pinch updates preserve center movement,
+absolute scale relative to begin, and clockwise rotation in degrees since the
+previous event, allowing policy layers to derive pan, zoom, and rotation
+without a lossy cross-platform conversion.
 
 Begin and end events retain opaque seat-scoped input serials and compositor
 timestamps; an end also distinguishes completion from cancellation. Hold has
 no update stage and is available when `pointer_gesture_hold_v1` is true (global
-version 3). Gesture objects are created and destroyed with the seat's
-`wl_pointer`, and active routing is cleared when its target surface disappears,
-so a late update cannot be delivered to a destroyed surface.
+version 3). Gesture objects also follow the seat's `wl_pointer` capability,
+and active routing is cleared when its target surface disappears, so a late
+update cannot be delivered to a destroyed or unsubscribed surface.
+
+`cargo run -p wayland-client-runtime --example pointer_gestures_smoke` checks
+the lazy attach/detach lifecycle against the active compositor.
 
 ## Fractional scaling
 

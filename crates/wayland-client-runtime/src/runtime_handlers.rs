@@ -334,17 +334,11 @@ impl SeatHandler for RuntimeState {
                     .ok();
                 if objects.pointer.is_some() {
                     objects.pointer_session.attach();
-                    objects.pointer_gestures = self.pointer_gesture_manager.as_ref().map(|manager| {
-                        manager.create_seat_gestures(
-                            objects
-                                .pointer
-                                .as_ref()
-                                .expect("pointer was just created")
-                                .pointer(),
-                            &seat,
-                            qh,
-                        )
-                    });
+                    if self.pointer_gesture_subscriptions.is_active()
+                        && let Some(manager) = self.pointer_gesture_manager.as_ref()
+                    {
+                        objects.ensure_pointer_gestures(manager, qh);
+                    }
                 }
             }
             Capability::Touch if objects.touch.is_none() => {

@@ -21,7 +21,8 @@ use crate::pointer_constraints::{
     PointerCaptureTarget, PointerProtocols, SeatPointerSession, validate_pointer_capture_state,
 };
 use crate::pointer_gestures::{
-    PointerGestureHandler, PointerGestureManager, SeatPointerGestures,
+    GestureSubscriptionChange, PointerGestureHandler, PointerGestureManager,
+    PointerGestureSubscriptions, SeatPointerGestures,
 };
 use crate::shm_format::copy_rgba_to_premultiplied_argb8888;
 use crate::surface::{
@@ -316,6 +317,7 @@ impl Runtime {
             fractional_scale_manager,
             pointer_gesture_manager,
             pointer_protocols,
+            pointer_gesture_subscriptions: PointerGestureSubscriptions::default(),
             surfaces: HashMap::new(),
             surface_ids: HashMap::new(),
             children: HashMap::new(),
@@ -1052,6 +1054,43 @@ impl Runtime {
         self.set_pointer_capture_state(surface, state)
     }
 
+    /// Subscribe or unsubscribe a surface from semantic touchpad gestures.
+    ///
+    /// Gesture protocol objects are created lazily for live pointer seats when
+    /// the first surface subscribes and destroyed when the final subscription
+    /// disappears. This keeps applications that do not consume gestures at
+    /// zero per-seat protocol and event overhead.
+    ///
+    /// Disabling a surface immediately drops any in-progress route for that
+    /// surface and does not synthesize an `End` event; the caller initiating
+    /// the unsubscribe should clear its corresponding UI state.
+    pub fn set_pointer_gestures_enabled(
+        &mut self,
+        surface: SurfaceId,
+        enabled: bool,
+    ) -> Result<(), RuntimeError> {
+        self.surface_shared(surface)?;
+        if enabled && self.state.pointer_gesture_manager.is_none() {
+            return Err(RuntimeError::Unsupported("zwp-pointer-gestures-v1"));
+        }
+        let change = self
+            .state
+            .pointer_gesture_subscriptions
+            .set(surface, enabled);
+        if !enabled && change != GestureSubscriptionChange::Unchanged {
+            self.state.clear_pointer_gesture_surface(surface);
+        }
+        self.state
+            .apply_pointer_gesture_subscription_change(change, &self.queue_handle);
+        Ok(())
+    }
+
+    /// Whether a surface currently subscribes to pointer gesture events.
+    pub fn pointer_gestures_enabled(&self, surface: SurfaceId) -> Result<bool, RuntimeError> {
+        self.surface_shared(surface)?;
+        Ok(self.state.pointer_gesture_subscriptions.contains(surface))
+    }
+
     /// Change only the activation region of a surface's retained constraint.
     ///
     /// Region updates on an existing constraint are double-buffered with the
@@ -1377,6 +1416,7 @@ struct RuntimeState {
     fractional_scale_manager: Option<FractionalScaleManager>,
     pointer_gesture_manager: Option<PointerGestureManager>,
     pointer_protocols: PointerProtocols,
+    pointer_gesture_subscriptions: PointerGestureSubscriptions,
     surfaces: HashMap<SurfaceId, Arc<SurfaceShared>>,
     surface_ids: HashMap<ObjectId, SurfaceId>,
     children: HashMap<SurfaceId, Vec<SurfaceId>>,
@@ -1454,6 +1494,7 @@ impl RuntimeState {
         let Some(shared) = self.surfaces.remove(&id) else {
             return;
         };
+        let gesture_change = self.pointer_gesture_subscriptions.remove_surface(id);
         self.surface_ids.remove(&shared.wl_surface().id());
         self.pending_attention.remove(&id);
         self.children.remove(&id);
@@ -1465,8 +1506,18 @@ impl RuntimeState {
         self.keyboard_focus.retain(|_, focused| *focused != id);
         for objects in self.seats.values_mut() {
             objects.pointer_session.remove_surface(id);
-            if let Some(gestures) = objects.pointer_gestures.as_ref() {
-                gestures.remove_surface(id);
+            match gesture_change {
+                GestureSubscriptionChange::DetachSeats => {
+                    objects.pointer_gestures.take();
+                }
+                GestureSubscriptionChange::Unchanged | GestureSubscriptionChange::KeepSeats => {
+                    if let Some(gestures) = objects.pointer_gestures.as_ref() {
+                        gestures.remove_surface(id);
+                    }
+                }
+                GestureSubscriptionChange::AttachSeats => {
+                    unreachable!("removing a gesture subscription cannot activate it")
+                }
             }
             objects.pointer_presses.remove_surface(id);
             if objects.keyboard_focus == Some(id) {
@@ -1476,6 +1527,14 @@ impl RuntimeState {
                 text_input.remove_surface(id);
             }
             objects.touch_points.remove_surface(id);
+        }
+    }
+
+    fn clear_pointer_gesture_surface(&self, surface: SurfaceId) {
+        for objects in self.seats.values() {
+            if let Some(gestures) = objects.pointer_gestures.as_ref() {
+                gestures.remove_surface(surface);
+            }
         }
     }
 
@@ -1508,6 +1567,29 @@ impl RuntimeState {
         let order = self.next_input_order;
         self.next_input_order = self.next_input_order.saturating_add(1);
         order
+    }
+
+    fn apply_pointer_gesture_subscription_change(
+        &mut self,
+        change: GestureSubscriptionChange,
+        queue_handle: &QueueHandle<Self>,
+    ) {
+        match change {
+            GestureSubscriptionChange::Unchanged | GestureSubscriptionChange::KeepSeats => {}
+            GestureSubscriptionChange::AttachSeats => {
+                let Some(manager) = self.pointer_gesture_manager.as_ref() else {
+                    return;
+                };
+                for objects in self.seats.values_mut() {
+                    objects.ensure_pointer_gestures(manager, queue_handle);
+                }
+            }
+            GestureSubscriptionChange::DetachSeats => {
+                for objects in self.seats.values_mut() {
+                    objects.pointer_gestures.take();
+                }
+            }
+        }
     }
 
     fn push_key(
@@ -1577,6 +1659,24 @@ struct SeatObjects {
 impl SeatObjects {
     fn has_focus(&self) -> bool {
         self.pointer_session.focus().is_some() || self.keyboard_focus.is_some()
+    }
+
+    fn ensure_pointer_gestures(
+        &mut self,
+        manager: &PointerGestureManager,
+        queue_handle: &QueueHandle<RuntimeState>,
+    ) {
+        if self.pointer_gestures.is_some() {
+            return;
+        }
+        let Some(pointer) = self.pointer.as_ref().map(ThemedPointer::pointer) else {
+            return;
+        };
+        let Some(data) = pointer.data::<PointerData<()>>() else {
+            return;
+        };
+        self.pointer_gestures =
+            Some(manager.create_seat_gestures(pointer, data.seat(), queue_handle));
     }
 }
 
@@ -1649,6 +1749,7 @@ impl TouchHandler for RuntimeState {
 impl PointerGestureHandler for RuntimeState {
     fn pointer_gesture_surface(&mut self, surface: &wl_surface::WlSurface) -> Option<SurfaceId> {
         self.surface_id(surface)
+            .filter(|surface| self.pointer_gesture_subscriptions.contains(*surface))
     }
 
     fn pointer_gesture_event(&mut self, event: PointerGestureEvent) {
