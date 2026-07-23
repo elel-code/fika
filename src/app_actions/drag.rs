@@ -11,27 +11,29 @@ use crate::platform::{
 };
 
 use super::outcome::ShellActionOutcome;
+use crate::shell::drag_preview_layout::{
+    DragPreviewBackgroundStyle, DragPreviewLabelStyle, MultiDragPreviewLayout,
+    SingleDragPreviewLayout, multi_drag_preview_layout,
+};
 use crate::shell::drop_menu::ShellDropTarget;
+use crate::shell::file_item_view::style::{
+    DolphinItemPalette, item_background_color_for_palette, place_row_background_color_for_palette,
+};
 use crate::shell::icon_roles::{
     FileIconKind, FileIconPathCacheKey, FileIconRoleCacheKey, NamedIconFallback,
     file_icon_path_cache_key, icon_cache_size,
 };
 use crate::shell::tasks::ShellTaskStatus;
 use crate::{
-    DND_PREVIEW_ICON_OUTLINE, DND_PREVIEW_LABEL_HEIGHT, DND_PREVIEW_LABEL_MIN_WIDTH, FikaWgpuApp,
-    FolderPreviewReady, IconRaster, IconRasterCacheKey, IncomingDndTransfer, ItemPixmapLayout,
-    OutgoingDndTransfer, ShellInternalDragPreviewSource, ShellViewMode, ViewRect,
+    FikaWgpuApp, FolderPreviewReady, IconRaster, IconRasterCacheKey, IncomingDndTransfer,
+    ItemPixmapLayout, OutgoingDndTransfer, ShellInternalDragPreviewSource, ShellViewMode, ViewRect,
     decode_file_clipboard_text, entry_path_for_thumbnail, folder_preview_role_draw_rect,
     icon_emblem_kinds_for_path, icon_emblem_rects, normalized_scale_factor, path_uri_from_path,
     rasterize_icon, thumbnail_request_may_have_preview, view_point_from_physical_position,
 };
 
 const ACCEPTED_DND_ACTIONS: [DndAction; 3] = [DndAction::Ask, DndAction::Move, DndAction::Copy];
-const DEEPIN_DND_ICON_SIZE: f32 = 128.0;
-const DEEPIN_DND_ICON_MAX: usize = 4;
-const DEEPIN_DND_ICON_MAX_COUNT: usize = 99;
-const DEEPIN_DND_ICON_ROTATE: f32 = 10.0;
-const DEEPIN_DND_ICON_OPACITY: f32 = 0.1;
+const DND_FALLBACK_ICON_SIZE: f32 = 128.0;
 
 #[derive(Clone, Debug)]
 struct OutgoingDndPayload {
@@ -40,8 +42,14 @@ struct OutgoingDndPayload {
 }
 
 #[derive(Clone, Debug)]
-struct OutgoingDndPreviewRaster {
-    icon: IconRaster,
+struct OutgoingDndPreviewRasters {
+    icons: Vec<Option<IconRaster>>,
+}
+
+impl OutgoingDndPreviewRasters {
+    fn icon(&self, index: usize) -> Option<&IconRaster> {
+        self.icons.get(index).and_then(Option::as_ref)
+    }
 }
 
 impl FikaWgpuApp {
@@ -72,26 +80,44 @@ impl FikaWgpuApp {
         let payload = outgoing_dnd_payload(&paths);
         let scale = self.scene.ui_scale();
         let preview_source = self.scene.active_internal_drag_preview_source(size);
-        let preview_icon_size = outgoing_dnd_preview_icon_size(preview_source.as_ref(), scale);
-        let preview_label = preview_source
-            .as_ref()
-            .map(|source| source.label().to_string())
-            .unwrap_or_else(|| outgoing_dnd_fallback_label(&paths));
-        let preview_metrics = outgoing_dnd_preview_metrics(preview_icon_size, scale)
-            .with_label(!preview_label.is_empty());
-        let preview_raster = self.outgoing_dnd_preview_raster(
+        let mut preview_metrics = if paths.len() == 1 {
+            preview_source
+                .as_ref()
+                .map(|source| outgoing_dnd_preview_metrics_for_layout(source.layout(), scale))
+                .unwrap_or_else(|| outgoing_dnd_fallback_preview_metrics(scale))
+        } else {
+            outgoing_dnd_preview_metrics_for_multi_layout(
+                multi_drag_preview_layout(paths.len(), scale),
+                scale,
+            )
+        };
+        let preview_label = if paths.len() == 1 {
+            preview_source
+                .as_ref()
+                .map(|source| source.label().to_string())
+                .unwrap_or_else(|| outgoing_dnd_fallback_label(&paths))
+        } else {
+            String::new()
+        };
+        let (background_color, label_color, label_style) =
+            outgoing_dnd_preview_colors(preview_source.as_ref(), self.scene.theme());
+        preview_metrics.background_color = background_color;
+        preview_metrics.label_style = label_style.or(preview_metrics.label_style);
+        let preview_rasters = self.outgoing_dnd_preview_rasters(
             preview_source.as_ref(),
             &paths,
             preview_metrics.icon_size,
             preview_metrics.buffer_scale as f32,
+            preview_metrics.visible_icon_count(),
         );
-        let label_raster = self.outgoing_dnd_preview_label_raster(&preview_label, preview_metrics);
+        let label_raster =
+            self.outgoing_dnd_preview_label_raster(&preview_label, preview_metrics, label_style);
         let drag_icon = outgoing_dnd_drag_icon(
             &paths,
             preview_metrics,
-            preview_raster.as_ref(),
+            Some(&preview_rasters),
             label_raster.as_ref(),
-            ui_color_to_rgba8(self.scene.theme().accent()),
+            label_color,
         );
         let send_data = DataTransferSendBuilder::new(payload)
             .with_type(TypeHint::UriList, |payload, _| {
@@ -120,79 +146,50 @@ impl FikaWgpuApp {
         }
     }
 
-    fn outgoing_dnd_preview_raster(
+    fn outgoing_dnd_preview_rasters(
         &mut self,
         source: Option<&ShellInternalDragPreviewSource>,
         paths: &[PathBuf],
         icon_size: u32,
         scale: f32,
-    ) -> Option<OutgoingDndPreviewRaster> {
-        let renderer = self.renderer.as_mut()?;
-        let icon_size_px = icon_cache_size(icon_size as f32);
-        let icon = match source {
-            Some(ShellInternalDragPreviewSource::PaneItem {
-                directory,
-                entry,
-                folder_preview,
-                ..
-            }) => {
-                let icon_path = directory.join(entry.name.as_ref());
-                let base = if entry.is_dir {
-                    let resolved = renderer.icon_renderer.resolver.resolve_entry_visible_fast(
-                        directory,
-                        entry,
-                        icon_size as f32,
-                    );
-                    let base = rasterize_resolved_drag_icon(renderer, resolved.path, icon_size_px)?;
-                    apply_folder_preview_to_drag_icon(base, folder_preview.as_ref())
-                } else if let Some(raster) = ready_drag_thumbnail(
-                    &mut renderer.icon_renderer.raster_cache,
-                    &mut renderer.icon_renderer.thumbnails,
-                    directory,
-                    entry,
-                    icon_size_px,
-                ) {
-                    raster
-                } else {
-                    let resolved = renderer.icon_renderer.resolver.resolve_entry_visible_fast(
-                        directory,
-                        entry,
-                        icon_size as f32,
-                    );
-                    rasterize_resolved_drag_icon(renderer, resolved.path, icon_size_px)?
-                };
-                apply_drag_emblems(renderer, base, &icon_path, scale)
-            }
-            Some(ShellInternalDragPreviewSource::Place { icon_name, .. }) => {
-                rasterize_named_drag_icon(renderer, icon_name, icon_size_px)?
-            }
-            None => {
-                let path = paths.first()?;
-                let key =
-                    file_icon_path_cache_key(path, path.is_dir(), None, true, icon_size as f32);
-                let resolved = renderer
-                    .icon_renderer
-                    .resolver
-                    .resolve_path_cache_key_fast(key);
-                let base = rasterize_resolved_drag_icon(renderer, resolved.path, icon_size_px)?;
-                apply_drag_emblems(renderer, base, path, scale)
-            }
+        visible_count: usize,
+    ) -> OutgoingDndPreviewRasters {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return OutgoingDndPreviewRasters { icons: Vec::new() };
         };
-        Some(OutgoingDndPreviewRaster { icon })
+        let icon_size_px = icon_cache_size(icon_size as f32);
+        let icons = paths
+            .iter()
+            .take(visible_count)
+            .map(|path| {
+                outgoing_dnd_preview_raster_for_path(
+                    renderer,
+                    source,
+                    path,
+                    icon_size,
+                    icon_size_px,
+                    scale,
+                )
+            })
+            .collect();
+        OutgoingDndPreviewRasters { icons }
     }
 
     fn outgoing_dnd_preview_label_raster(
         &mut self,
         label: &str,
         metrics: OutgoingDndPreviewMetrics,
+        style: Option<DragPreviewLabelStyle>,
     ) -> Option<OutgoingDndPreviewLabelRaster> {
         let rect = metrics.label_rect?;
+        let style = style.or(metrics.label_style)?;
         let renderer = self.renderer.as_mut()?;
         let alpha = renderer.text_renderer.rasterize_drag_label(
             label,
             rect.width as u32,
             rect.height as u32,
             metrics.buffer_scale as f32,
+            style,
         );
         Some(OutgoingDndPreviewLabelRaster {
             alpha: Arc::from(alpha),
@@ -564,6 +561,48 @@ impl FikaWgpuApp {
     }
 }
 
+fn outgoing_dnd_preview_colors(
+    source: Option<&ShellInternalDragPreviewSource>,
+    theme: crate::shell::theme::ShellTheme,
+) -> ([u8; 4], [u8; 4], Option<DragPreviewLabelStyle>) {
+    let Some(source) = source else {
+        return (
+            [0, 0, 0, 0],
+            text_color_to_rgba8(theme.primary_text()),
+            Some(DragPreviewLabelStyle::PlainSingleLine),
+        );
+    };
+    let layout = source.layout();
+    let background = match layout.background_style {
+        DragPreviewBackgroundStyle::SelectedItem => item_background_color_for_palette(
+            true,
+            false,
+            DolphinItemPalette::from_shell_theme(theme),
+        ),
+        DragPreviewBackgroundStyle::HoveredPlace => place_row_background_color_for_palette(
+            false,
+            true,
+            DolphinItemPalette::from_shell_theme(theme),
+        ),
+        DragPreviewBackgroundStyle::None => [0.0, 0.0, 0.0, 0.0],
+    };
+    let label_color = match source {
+        ShellInternalDragPreviewSource::PaneItem { .. } => {
+            if theme.is_dark() {
+                [241, 245, 249, 255]
+            } else {
+                [15, 23, 42, 255]
+            }
+        }
+        ShellInternalDragPreviewSource::Place { .. } => text_color_to_rgba8(theme.primary_text()),
+    };
+    (
+        ui_color_to_rgba8(background),
+        label_color,
+        layout.label.map(|label| label.style),
+    )
+}
+
 fn outgoing_dnd_payload(paths: &[PathBuf]) -> OutgoingDndPayload {
     let uris = paths
         .iter()
@@ -571,6 +610,115 @@ fn outgoing_dnd_payload(paths: &[PathBuf]) -> OutgoingDndPayload {
         .collect::<Vec<_>>();
     let text = uris.join("\n");
     OutgoingDndPayload { uris, text }
+}
+
+fn outgoing_dnd_preview_raster_for_path(
+    renderer: &mut crate::WgpuState,
+    source: Option<&ShellInternalDragPreviewSource>,
+    path: &Path,
+    icon_size: u32,
+    icon_size_px: u16,
+    scale: f32,
+) -> Option<IconRaster> {
+    match source {
+        Some(ShellInternalDragPreviewSource::PaneItem {
+            directory,
+            entry,
+            items,
+            view_mode,
+            folder_preview,
+            ..
+        }) => {
+            if let Some(item) = items.iter().find(|item| item.path == path) {
+                let source_path = entry_path_for_thumbnail(directory, entry);
+                let item_folder_preview = (source_path == path)
+                    .then_some(folder_preview.as_ref())
+                    .flatten();
+                return rasterize_entry_drag_icon(
+                    renderer,
+                    DragPreviewEntryRasterSource {
+                        directory,
+                        entry: &item.entry,
+                        path,
+                        folder_preview: item_folder_preview,
+                        view_mode: *view_mode,
+                    },
+                    icon_size,
+                    scale,
+                );
+            }
+            rasterize_path_drag_icon(renderer, path, icon_size, icon_size_px, scale)
+        }
+        Some(ShellInternalDragPreviewSource::Place { icon_name, .. }) => {
+            rasterize_named_drag_icon(renderer, icon_name, icon_size_px)
+        }
+        _ => rasterize_path_drag_icon(renderer, path, icon_size, icon_size_px, scale),
+    }
+}
+
+struct DragPreviewEntryRasterSource<'a> {
+    directory: &'a Path,
+    entry: &'a crate::Entry,
+    path: &'a Path,
+    folder_preview: Option<&'a FolderPreviewReady>,
+    view_mode: ShellViewMode,
+}
+
+fn rasterize_entry_drag_icon(
+    renderer: &mut crate::WgpuState,
+    source: DragPreviewEntryRasterSource<'_>,
+    icon_size: u32,
+    scale: f32,
+) -> Option<IconRaster> {
+    let DragPreviewEntryRasterSource {
+        directory,
+        entry,
+        path,
+        folder_preview,
+        view_mode,
+    } = source;
+    let icon_size_px = icon_cache_size(icon_size as f32);
+    let base = if entry.is_dir {
+        let resolved = renderer.icon_renderer.resolver.resolve_entry_visible_fast(
+            directory,
+            entry,
+            icon_size as f32,
+        );
+        let base = rasterize_resolved_drag_icon(renderer, resolved.path, icon_size_px)?;
+        apply_folder_preview_to_drag_icon(base, folder_preview, view_mode)
+    } else if let Some(raster) = ready_drag_thumbnail(
+        &mut renderer.icon_renderer.raster_cache,
+        &mut renderer.icon_renderer.thumbnails,
+        directory,
+        entry,
+        icon_size_px,
+    ) {
+        raster
+    } else {
+        let resolved = renderer.icon_renderer.resolver.resolve_entry_visible_fast(
+            directory,
+            entry,
+            icon_size as f32,
+        );
+        rasterize_resolved_drag_icon(renderer, resolved.path, icon_size_px)?
+    };
+    Some(apply_drag_emblems(renderer, base, path, scale))
+}
+
+fn rasterize_path_drag_icon(
+    renderer: &mut crate::WgpuState,
+    path: &Path,
+    icon_size: u32,
+    icon_size_px: u16,
+    scale: f32,
+) -> Option<IconRaster> {
+    let key = file_icon_path_cache_key(path, path.is_dir(), None, true, icon_size as f32);
+    let resolved = renderer
+        .icon_renderer
+        .resolver
+        .resolve_path_cache_key_fast(key);
+    let base = rasterize_resolved_drag_icon(renderer, resolved.path, icon_size_px)?;
+    Some(apply_drag_emblems(renderer, base, path, scale))
 }
 
 fn ready_drag_thumbnail(
@@ -646,12 +794,13 @@ fn rasterize_named_drag_icon_exact(
 fn apply_folder_preview_to_drag_icon(
     base: IconRaster,
     folder_preview: Option<&FolderPreviewReady>,
+    view_mode: ShellViewMode,
 ) -> IconRaster {
     let Some(folder_preview) = folder_preview else {
         return base;
     };
     let layout = ItemPixmapLayout {
-        view_mode: ShellViewMode::Icons,
+        view_mode,
         icon_rect: ViewRect {
             x: 0.0,
             y: 0.0,
@@ -731,25 +880,29 @@ fn drag_emblem_pixel_rects(icon_size: u32, scale: f32) -> [PixelRect; 4] {
 fn outgoing_dnd_drag_icon(
     paths: &[PathBuf],
     metrics: OutgoingDndPreviewMetrics,
-    raster: Option<&OutgoingDndPreviewRaster>,
+    rasters: Option<&OutgoingDndPreviewRasters>,
     label: Option<&OutgoingDndPreviewLabelRaster>,
     label_color: [u8; 4],
 ) -> Option<DragIcon> {
-    let pixels = outgoing_dnd_preview_pixels_with_label(paths, metrics, raster, label, label_color);
+    let pixels =
+        outgoing_dnd_preview_pixels_with_label(paths, metrics, rasters, label, label_color);
     let icon = RgbaIcon::new(pixels, metrics.canvas_width, metrics.canvas_height).ok()?;
     let buffer_scale = metrics.buffer_scale;
-    let logical_width = metrics.canvas_width as i32 / buffer_scale;
-    let logical_hotspot_y = (metrics.icon_rect.y + metrics.icon_size as i32 / 2) / buffer_scale;
     Some(DragIcon {
         icon,
         buffer_scale,
-        offset_x: -logical_width / 2,
-        offset_y: -logical_hotspot_y,
+        offset_x: -(metrics.hotspot_x / buffer_scale),
+        offset_y: -(metrics.hotspot_y / buffer_scale),
     })
 }
 
 fn ui_color_to_rgba8(color: [f32; 4]) -> [u8; 4] {
     color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+fn text_color_to_rgba8(color: cosmic_text::Color) -> [u8; 4] {
+    let [r, g, b, a] = color.as_rgba();
+    [r, g, b, a]
 }
 
 fn outgoing_dnd_fallback_label(paths: &[PathBuf]) -> String {

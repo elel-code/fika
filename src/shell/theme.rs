@@ -80,11 +80,6 @@ pub(crate) struct ShellDropTargetColors {
     pub(crate) marker: UiColor,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ShellDragPreviewColors {
-    pub(crate) badge: UiColor,
-}
-
 impl ShellTheme {
     pub(crate) fn for_dark_mode(dark_mode: bool) -> Self {
         match ShellThemeMode::from_dark_mode(dark_mode) {
@@ -225,17 +220,6 @@ impl ShellTheme {
         }
     }
 
-    pub(crate) fn drag_preview(self) -> ShellDragPreviewColors {
-        match self.mode {
-            ShellThemeMode::Light => ShellDragPreviewColors {
-                badge: [0.957, 0.290, 0.290, 1.0],
-            },
-            ShellThemeMode::Dark => ShellDragPreviewColors {
-                badge: [0.957, 0.290, 0.290, 1.0],
-            },
-        }
-    }
-
     pub(crate) fn task_status_color(self, kind: ShellTaskStatusKind) -> UiColor {
         match kind {
             ShellTaskStatusKind::Running => self.task_running,
@@ -328,7 +312,6 @@ mod tests {
         assert_eq!(dark.scrollbar().track, [0.145, 0.157, 0.176, 1.0]);
         assert_eq!(light.rubber_band().fill, [0.280, 0.580, 0.920, 0.18]);
         assert_eq!(dark.drop_target().marker, [0.953, 0.612, 0.071, 1.0]);
-        assert_eq!(dark.drag_preview().badge, [0.957, 0.290, 0.290, 1.0]);
     }
 
     #[test]

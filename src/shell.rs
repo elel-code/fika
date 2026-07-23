@@ -8,6 +8,7 @@ pub(crate) mod create_rename;
 pub(crate) mod dialog_window;
 pub(crate) mod directory_watch;
 pub(crate) mod drag_preview;
+pub(crate) mod drag_preview_layout;
 pub(crate) mod drop_menu;
 pub(crate) mod file_item_view;
 pub(crate) mod folder_preview;

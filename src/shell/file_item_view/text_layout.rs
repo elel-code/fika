@@ -124,6 +124,39 @@ pub(crate) fn dolphin_elide_filename_to_width_shaped<'a>(
     }
 }
 
+pub(crate) fn dolphin_elide_text_to_width_shaped<'a>(
+    font_system: &mut FontSystem,
+    buffer: &mut Buffer,
+    label: &'a str,
+    max_width: f32,
+    font_size: f32,
+    line_height: f32,
+) -> Cow<'a, str> {
+    let max_width = max_width.max(1.0);
+    if dolphin_text_width_no_wrap(font_system, buffer, label, font_size, line_height) <= max_width {
+        return Cow::Borrowed(label);
+    }
+    let ellipsis_width = dolphin_text_width_no_wrap(
+        font_system,
+        buffer,
+        DOLPHIN_ELLIPSIS,
+        font_size,
+        line_height,
+    );
+    if ellipsis_width >= max_width {
+        return Cow::Owned(DOLPHIN_ELLIPSIS.to_string());
+    }
+    let prefix = dolphin_prefix_to_width_shaped(
+        font_system,
+        buffer,
+        label,
+        max_width - ellipsis_width,
+        font_size,
+        line_height,
+    );
+    Cow::Owned(format!("{prefix}{DOLPHIN_ELLIPSIS}"))
+}
+
 fn dolphin_wrapped_text_lines(
     font_system: &mut FontSystem,
     buffer: &mut Buffer,
@@ -395,5 +428,23 @@ mod tests {
                 .replace(DOLPHIN_WRAP_HINT, "")
                 .ends_with(".png")
         );
+    }
+
+    #[test]
+    fn shaped_plain_text_elides_at_the_end() {
+        let mut font_system = FontSystem::new();
+        let mut buffer = Buffer::new_empty(Metrics::new(13.0, 18.0));
+        let label = "A very long removable device name";
+        let display = dolphin_elide_text_to_width_shaped(
+            &mut font_system,
+            &mut buffer,
+            label,
+            72.0,
+            13.0,
+            18.0,
+        );
+
+        assert_ne!(display, label);
+        assert!(display.ends_with(DOLPHIN_ELLIPSIS));
     }
 }

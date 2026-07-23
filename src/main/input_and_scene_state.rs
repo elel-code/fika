@@ -436,24 +436,38 @@ impl ShellInternalDrag {
 
 }
 #[derive(Clone, Debug)]
+struct ShellInternalDragPreviewItem {
+    path: PathBuf,
+    entry: Entry,
+}
+
+#[derive(Clone, Debug)]
 enum ShellInternalDragPreviewSource {
     PaneItem {
         directory: PathBuf,
         entry: Entry,
+        items: Vec<ShellInternalDragPreviewItem>,
         label: String,
-        icon_size: f32,
+        view_mode: ShellViewMode,
+        layout: crate::shell::drag_preview_layout::SingleDragPreviewLayout,
         folder_preview: Option<FolderPreviewReady>,
     },
     Place {
         label: String,
         icon_name: String,
-        icon_size: f32,
+        layout: crate::shell::drag_preview_layout::SingleDragPreviewLayout,
     },
 }
 impl ShellInternalDragPreviewSource {
     fn label(&self) -> &str {
         match self {
             Self::PaneItem { label, .. } | Self::Place { label, .. } => label,
+        }
+    }
+
+    fn layout(&self) -> crate::shell::drag_preview_layout::SingleDragPreviewLayout {
+        match self {
+            Self::PaneItem { layout, .. } | Self::Place { layout, .. } => *layout,
         }
     }
 }

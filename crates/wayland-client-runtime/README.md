@@ -110,7 +110,8 @@ serials as drag sources. `Runtime::store_selection` and
 `Runtime::receive_selection` therefore require no second Wayland connection or
 clipboard-only event thread. Incoming DnD offers remain valid until the queued
 leave/drop event has been consumed and the application explicitly discards or
-finishes them.
+finishes them. Discarding is idempotent so a queued leave can safely race with
+completion of the same dropped offer; finishing remains strict.
 
 `Runtime::set_cursor` uses `wp_cursor_shape_manager_v1` when advertised. On
 older compositors, SCTK loads the same semantic cursor from the configured

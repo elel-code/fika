@@ -183,8 +183,15 @@ impl Runtime {
     }
 
     /// Discard an offer that left without a successful drop.
+    ///
+    /// This cleanup operation is idempotent because a compositor may queue a
+    /// leave after the application has already finished the dropped offer.
     pub fn discard_dnd_offer(&mut self, offer: DndOfferId) -> Result<(), RuntimeError> {
-        let offer = self.take_dnd_offer(offer)?;
+        let offer = match self.take_dnd_offer(offer) {
+            Ok(offer) => offer,
+            Err(RuntimeError::DndOfferNotFound(_)) => return Ok(()),
+            Err(error) => return Err(error),
+        };
         offer.offer.destroy();
         Ok(())
     }

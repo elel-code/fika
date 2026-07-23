@@ -57,7 +57,8 @@ use shell::file_item_view::style::{
 use shell::file_item_view::text::{compact_entry_text_width, estimated_text_cursor_x};
 use shell::file_item_view::text::required_compact_item_width;
 use shell::file_item_view::text_layout::{
-    dolphin_elide_filename_to_width_shaped, dolphin_icons_filename_line_count,
+    dolphin_elide_filename_to_width_shaped, dolphin_elide_text_to_width_shaped,
+    dolphin_icons_filename_line_count,
     dolphin_layout_icons_filename, dolphin_text_width_no_wrap,
 };
 use shell::file_item_view::{

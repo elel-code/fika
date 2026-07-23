@@ -270,16 +270,61 @@
                 .expect("active drag preview source");
             match preview {
                 ShellInternalDragPreviewSource::PaneItem {
-                    label, icon_size, ..
+                    label, layout, ..
                 } => {
                     assert_eq!(label, "note.txt", "view_mode={view_mode:?}");
-                    assert_eq!(icon_size, expected_icon_size, "view_mode={view_mode:?}");
+                    assert_eq!(
+                        layout.icon.width.max(layout.icon.height),
+                        expected_icon_size,
+                        "view_mode={view_mode:?}"
+                    );
                 }
                 ShellInternalDragPreviewSource::Place { .. } => {
                     panic!("pane pointer drag returned a place preview")
                 }
             }
         }
+    }
+
+    #[test]
+    fn place_drag_preview_retains_the_row_grab_point_and_centers_its_label() {
+        let mut scene = test_scene(Vec::new(), ShellViewMode::Icons);
+        scene.places = vec![ShellPlace::new(
+            "",
+            "H",
+            "Home",
+            PathBuf::from("/tmp"),
+            false,
+        )];
+        let size = PhysicalSize::new(700, 360);
+        let row = scene.place_row_rects(size)[0].1;
+        let start = ViewPoint {
+            x: row.x + 54.0,
+            y: row.y + 11.0,
+        };
+
+        assert!(scene.begin_internal_drag_for_place(0, start));
+        assert!(scene.set_pointer(
+            ViewPoint {
+                x: start.x + RUBBER_BAND_START_THRESHOLD + 2.0,
+                y: start.y,
+            },
+            size,
+        ));
+
+        let preview = scene
+            .active_internal_drag_preview_source(size)
+            .expect("active place drag preview");
+        let ShellInternalDragPreviewSource::Place { layout, .. } = preview else {
+            panic!("place drag returned a pane preview");
+        };
+        let label = layout.label.expect("place preview label");
+        assert_eq!(layout.hotspot, ViewPoint { x: 54.0, y: 11.0 });
+        assert_eq!(label.rect.height, scene.text_line_height());
+        assert_eq!(
+            label.rect.y,
+            (layout.bounds.height - scene.text_line_height()) / 2.0
+        );
     }
 
     #[test]

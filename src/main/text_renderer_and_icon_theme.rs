@@ -57,6 +57,7 @@ impl TextRenderer {
         width: u32,
         height: u32,
         buffer_scale: f32,
+        style: crate::shell::drag_preview_layout::DragPreviewLabelStyle,
     ) -> Vec<u8> {
         let resources = TextFrameResources::from_renderer(self);
         let mut builder = TextFrameBuilder::new(
@@ -65,13 +66,7 @@ impl TextRenderer {
             buffer_scale,
             Vec::new(),
         );
-        builder.rasterize_label(
-            label,
-            width,
-            height,
-            LabelAlignment::Center,
-            LabelWrap::WordOrGlyph,
-        )
+        builder.rasterize_drag_label(label, width, height, style)
     }
 
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
