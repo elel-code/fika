@@ -13,7 +13,7 @@ impl OutputHandler for RuntimeState {
 
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
         if let Some(info) = output_info(&self.output_state, &output) {
-            self.events.push_back(Event::Output(OutputEvent::Added(info)));
+            self.events.push(Event::Output(OutputEvent::Added(info)));
         }
     }
 
@@ -25,7 +25,7 @@ impl OutputHandler for RuntimeState {
     ) {
         if let Some(info) = output_info(&self.output_state, &output) {
             self.events
-                .push_back(Event::Output(OutputEvent::Updated(info)));
+                .push(Event::Output(OutputEvent::Updated(info)));
         }
     }
 
@@ -37,7 +37,7 @@ impl OutputHandler for RuntimeState {
     ) {
         if let Some(info) = output_info(&self.output_state, &output) {
             self.events
-                .push_back(Event::Output(OutputEvent::Removed(info.id)));
+                .push(Event::Output(OutputEvent::Removed(info.id)));
         }
     }
 }
@@ -76,7 +76,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, LayerSurfaceData> for R
                 serial,
             } => state
                 .events
-                .push_back(Event::LayerSurface(LayerSurfaceEvent::Configure {
+                .push(Event::LayerSurface(LayerSurfaceEvent::Configure {
                     surface,
                     suggested_size,
                     serial,
@@ -91,7 +91,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, LayerSurfaceData> for R
                 }
                 state
                     .events
-                    .push_back(Event::LayerSurface(LayerSurfaceEvent::Closed {
+                    .push(Event::LayerSurface(LayerSurfaceEvent::Closed {
                         surface,
                     }));
             }
@@ -124,7 +124,7 @@ impl CompositorHandler for RuntimeState {
                 return;
             }
             self.events
-                .push_back(Event::Surface(SurfaceEvent::ScaleFactorChanged {
+                .push(Event::Surface(SurfaceEvent::ScaleFactorChanged {
                     surface,
                     factor: f64::from(factor),
                 }));
@@ -149,7 +149,7 @@ impl CompositorHandler for RuntimeState {
     ) {
         if let Some(surface) = self.surface_id(surface) {
             self.events
-                .push_back(Event::Surface(SurfaceEvent::Frame { surface, time }));
+                .push(Event::Surface(SurfaceEvent::Frame { surface, time }));
         }
     }
 
@@ -206,7 +206,7 @@ fn push_toplevel_configure(
     );
     state
         .events
-        .push_back(Event::Surface(SurfaceEvent::Configure {
+        .push(Event::Surface(SurfaceEvent::Configure {
             surface,
             suggested_size,
             state: toplevel_state(&configure),
@@ -218,7 +218,7 @@ impl WindowHandler for RuntimeState {
     fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, window: &Window) {
         if let Some(surface) = self.surface_id(window.wl_surface()) {
             self.events
-                .push_back(Event::Surface(SurfaceEvent::CloseRequested { surface }));
+                .push(Event::Surface(SurfaceEvent::CloseRequested { surface }));
         }
     }
 
@@ -238,7 +238,7 @@ impl DialogHandler for RuntimeState {
     fn request_close(&mut self, _: &Connection, _: &QueueHandle<Self>, dialog: &Dialog) {
         if let Some(surface) = self.surface_id(dialog.wl_surface()) {
             self.events
-                .push_back(Event::Surface(SurfaceEvent::CloseRequested { surface }));
+                .push(Event::Surface(SurfaceEvent::CloseRequested { surface }));
         }
     }
 
@@ -272,7 +272,7 @@ impl PopupHandler for RuntimeState {
             _ => PopupConfigureKind::Reactive,
         };
         self.events
-            .push_back(Event::Surface(SurfaceEvent::PopupConfigure {
+            .push(Event::Surface(SurfaceEvent::PopupConfigure {
                 surface,
                 position: LogicalPosition::new(configure.position.0, configure.position.1),
                 size: LogicalSize::new(
@@ -287,7 +287,7 @@ impl PopupHandler for RuntimeState {
     fn done(&mut self, _: &Connection, _: &QueueHandle<Self>, popup: &Popup) {
         if let Some(surface) = self.surface_id(popup.wl_surface()) {
             self.events
-                .push_back(Event::Surface(SurfaceEvent::PopupDone { surface }));
+                .push(Event::Surface(SurfaceEvent::PopupDone { surface }));
         }
     }
 }
@@ -386,7 +386,7 @@ impl SeatHandler for RuntimeState {
             _ => {}
         }
         for surface in cancelled_touch_surfaces {
-            self.events.push_back(Event::Touch(TouchEvent {
+            self.events.push(Event::Touch(TouchEvent {
                 surface: Some(surface),
                 kind: TouchEventKind::Cancelled,
             }));
@@ -398,7 +398,7 @@ impl SeatHandler for RuntimeState {
             return;
         };
         for surface in objects.touch_points.drain_surfaces() {
-            self.events.push_back(Event::Touch(TouchEvent {
+            self.events.push(Event::Touch(TouchEvent {
                 surface: Some(surface),
                 kind: TouchEventKind::Cancelled,
             }));
@@ -572,7 +572,7 @@ impl PointerHandler for RuntimeState {
                     source: map_axis_source(*source),
                 },
             };
-            self.events.push_back(Event::Pointer(PointerEvent {
+            self.events.push(Event::Pointer(PointerEvent {
                 surface,
                 position: event.position,
                 kind,
@@ -626,7 +626,7 @@ impl RuntimeState {
             return;
         };
         objects.touch_points.insert(id, surface, serial);
-        self.events.push_back(Event::Touch(TouchEvent {
+        self.events.push(Event::Touch(TouchEvent {
             surface: Some(surface),
             kind: TouchEventKind::Down {
                 time,
@@ -650,7 +650,7 @@ impl RuntimeState {
             .seats
             .get_mut(&seat_id)
             .and_then(|objects| objects.touch_points.remove(id));
-        self.events.push_back(Event::Touch(TouchEvent {
+        self.events.push(Event::Touch(TouchEvent {
             surface,
             kind: TouchEventKind::Up {
                 time,
@@ -674,7 +674,7 @@ impl RuntimeState {
         else {
             return;
         };
-        self.events.push_back(Event::Touch(TouchEvent {
+        self.events.push(Event::Touch(TouchEvent {
             surface: Some(surface),
             kind: TouchEventKind::Motion {
                 time,
@@ -698,7 +698,7 @@ impl RuntimeState {
         else {
             return;
         };
-        self.events.push_back(Event::Touch(TouchEvent {
+        self.events.push(Event::Touch(TouchEvent {
             surface: Some(surface),
             kind: TouchEventKind::Shape { id, major, minor },
         }));
@@ -717,7 +717,7 @@ impl RuntimeState {
         else {
             return;
         };
-        self.events.push_back(Event::Touch(TouchEvent {
+        self.events.push(Event::Touch(TouchEvent {
             surface: Some(surface),
             kind: TouchEventKind::Orientation { id, degrees },
         }));
@@ -729,14 +729,14 @@ impl RuntimeState {
         };
         let surfaces = objects.touch_points.drain_surfaces();
         if surfaces.is_empty() {
-            self.events.push_back(Event::Touch(TouchEvent {
+            self.events.push(Event::Touch(TouchEvent {
                 surface: None,
                 kind: TouchEventKind::Cancelled,
             }));
             return;
         }
         for surface in surfaces {
-            self.events.push_back(Event::Touch(TouchEvent {
+            self.events.push(Event::Touch(TouchEvent {
                 surface: Some(surface),
                 kind: TouchEventKind::Cancelled,
             }));
@@ -768,7 +768,7 @@ impl KeyboardHandler for RuntimeState {
         if let Some(objects) = self.seats.get_mut(&seat_id) {
             objects.keyboard_focus = Some(surface);
         }
-        self.events.push_back(Event::Keyboard(KeyboardEvent::Enter {
+        self.events.push(Event::Keyboard(KeyboardEvent::Enter {
             surface,
             serial: InputSerial::new(
                 data.seat().clone(),
@@ -797,7 +797,7 @@ impl KeyboardHandler for RuntimeState {
         }
         if let Some(surface) = surface {
             self.events
-                .push_back(Event::Keyboard(KeyboardEvent::Leave { surface }));
+                .push(Event::Keyboard(KeyboardEvent::Leave { surface }));
         }
     }
 
@@ -855,7 +855,7 @@ impl KeyboardHandler for RuntimeState {
             return;
         };
         self.events
-            .push_back(Event::Keyboard(KeyboardEvent::Modifiers {
+            .push(Event::Keyboard(KeyboardEvent::Modifiers {
                 surface,
                 modifiers: Modifiers {
                     ctrl: modifiers.ctrl,
@@ -930,7 +930,7 @@ impl DataDeviceHandler for RuntimeState {
                 surface,
             },
         );
-        self.events.push_back(Event::Dnd(DndEvent::Enter {
+        self.events.push(Event::Dnd(DndEvent::Enter {
             offer: id,
             surface,
             position: LogicalPosition::new(x.round() as i32, y.round() as i32),
@@ -952,7 +952,7 @@ impl DataDeviceHandler for RuntimeState {
             return;
         };
         let surface = record.surface;
-        self.events.push_back(Event::Dnd(DndEvent::Leave {
+        self.events.push(Event::Dnd(DndEvent::Leave {
             offer: id,
             surface,
         }));
@@ -972,7 +972,7 @@ impl DataDeviceHandler for RuntimeState {
         let Some(record) = self.incoming_dnd.get(&id) else {
             return;
         };
-        self.events.push_back(Event::Dnd(DndEvent::Motion {
+        self.events.push(Event::Dnd(DndEvent::Motion {
             offer: id,
             surface: record.surface,
             position: LogicalPosition::new(x.round() as i32, y.round() as i32),
@@ -1003,7 +1003,7 @@ impl DataDeviceHandler for RuntimeState {
             return;
         };
         record.offer = current;
-        self.events.push_back(Event::Dnd(DndEvent::Drop {
+        self.events.push(Event::Dnd(DndEvent::Drop {
             offer: id,
             surface: record.surface,
             action: dnd_action(record.offer.selected_action),
@@ -1063,7 +1063,7 @@ impl DataSourceHandler for RuntimeState {
         }
         if let Some(record) = self.outgoing_dnd.remove(&source.id()) {
             self.events
-                .push_back(Event::Dnd(DndEvent::SourceCancelled { source: record.id }));
+                .push(Event::Dnd(DndEvent::SourceCancelled { source: record.id }));
         }
     }
 
@@ -1074,7 +1074,7 @@ impl DataSourceHandler for RuntimeState {
         source: &wl_data_source::WlDataSource,
     ) {
         if let Some(record) = self.outgoing_dnd.get(&source.id()) {
-            self.events.push_back(Event::Dnd(DndEvent::SourceDropped {
+            self.events.push(Event::Dnd(DndEvent::SourceDropped {
                 source: record.id,
                 action: record.selected_action,
             }));
@@ -1089,7 +1089,7 @@ impl DataSourceHandler for RuntimeState {
     ) {
         if let Some(record) = self.outgoing_dnd.remove(&source.id()) {
             self.events
-                .push_back(Event::Dnd(DndEvent::SourceFinished {
+                .push(Event::Dnd(DndEvent::SourceFinished {
                     source: record.id,
                     action: record.selected_action,
                 }));

@@ -56,6 +56,13 @@ loop {
 # Ok::<(), wayland_client_runtime::RuntimeError>(())
 ```
 
+Embedding event loops that must release a runtime borrow before invoking
+application callbacks can reuse one `Vec<Event>` with
+`Runtime::drain_events_into`. Pending events are stored contiguously and
+appended in protocol order, avoiding a new collection allocation on every
+dispatch iteration. `Runtime::drain_events` remains available for direct
+iterator-based handling.
+
 ## Region blur
 
 Unlike a whole-window boolean, the blur request preserves the protocol's

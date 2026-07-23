@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,8 +6,8 @@ use crate::activation::{ActivationHandler, ActivationManager, ActivationTokenPur
 use crate::data_transfer::{TransferContent, TransferReadPipe};
 use crate::dnd::{DndAction, DndActions, DndEvent, DndIcon, DndOfferId, DndReadPipe, DndSourceId};
 use crate::event::{
-    Event, KeyState, KeyboardEvent, Modifiers, PointerEvent, PointerEventKind, PopupConfigureKind,
-    SurfaceEvent, ToplevelState, TouchEvent, TouchEventKind,
+    Event, EventBuffer, KeyState, KeyboardEvent, Modifiers, PointerEvent, PointerEventKind,
+    PopupConfigureKind, SurfaceEvent, ToplevelState, TouchEvent, TouchEventKind,
 };
 use crate::fractional_scale::{FractionalScaleHandler, FractionalScaleManager};
 use crate::input::{InputSerial, InputSerialSource};
@@ -105,7 +105,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
 
 #[derive(Clone, Debug)]
 pub struct RuntimeOptions {
-    /// Initial capacity for the owned event queue.
+    /// Initial capacity for the owned event batch.
     pub event_capacity: usize,
 }
 
@@ -328,7 +328,7 @@ impl Runtime {
             outgoing_dnd: HashMap::new(),
             selection_sources: HashMap::new(),
             pending_attention: HashSet::new(),
-            events: VecDeque::with_capacity(options.event_capacity),
+            events: EventBuffer::with_capacity(options.event_capacity),
             next_surface_id: 1,
             next_dnd_id: 1,
             next_input_order: 1,
@@ -404,7 +404,16 @@ impl Runtime {
     }
 
     pub fn drain_events(&mut self) -> impl Iterator<Item = Event> + '_ {
-        self.state.events.drain(..)
+        self.state.events.drain()
+    }
+
+    /// Append all pending events to a reusable caller-owned batch.
+    ///
+    /// Unlike collecting [`Runtime::drain_events`], this lets event loops keep
+    /// one allocation across dispatch iterations. Existing items in `target`
+    /// are preserved before the newly drained events.
+    pub fn drain_events_into(&mut self, target: &mut Vec<Event>) {
+        self.state.events.drain_into(target);
     }
 
     pub fn create_toplevel(
@@ -1427,7 +1436,7 @@ struct RuntimeState {
     outgoing_dnd: HashMap<ObjectId, OutgoingDndSource>,
     selection_sources: HashMap<ObjectId, SelectionSource>,
     pending_attention: HashSet<SurfaceId>,
-    events: VecDeque<Event>,
+    events: EventBuffer,
     next_surface_id: u64,
     next_dnd_id: u64,
     next_input_order: u64,
@@ -1608,7 +1617,7 @@ impl RuntimeState {
         };
         self.record_selection_serial(data.seat().id().protocol_id(), serial);
         let serial = InputSerial::new(data.seat().clone(), serial, InputSerialSource::KeyboardKey);
-        self.events.push_back(Event::Keyboard(KeyboardEvent::Key {
+        self.events.push(Event::Keyboard(KeyboardEvent::Key {
             surface,
             state,
             time: event.time,
@@ -1706,7 +1715,7 @@ impl ActivationHandler for RuntimeState {
         match purpose {
             ActivationTokenPurpose::Export { request, surface } => {
                 self.events
-                    .push_back(Event::Activation(ActivationEvent::TokenDone {
+                    .push(Event::Activation(ActivationEvent::TokenDone {
                         request,
                         requesting_surface: surface,
                         token: ActivationToken::from_raw(token),
@@ -1728,7 +1737,7 @@ impl FractionalScaleHandler for RuntimeState {
     fn preferred_scale(&mut self, surface: &wl_surface::WlSurface, factor: f64) {
         if let Some(surface) = self.surface_id(surface) {
             self.events
-                .push_back(Event::Surface(SurfaceEvent::ScaleFactorChanged {
+                .push(Event::Surface(SurfaceEvent::ScaleFactorChanged {
                     surface,
                     factor,
                 }));
@@ -1759,7 +1768,7 @@ impl PointerGestureHandler for RuntimeState {
         if let Some((seat_id, serial)) = input {
             self.record_selection_serial(seat_id, serial);
         }
-        self.events.push_back(Event::PointerGesture(event));
+        self.events.push(Event::PointerGesture(event));
     }
 }
 
@@ -1845,7 +1854,7 @@ impl RelativePointerHandler for RuntimeState {
             return;
         }
         self.events
-            .push_back(Event::RelativePointer(RelativePointerEvent {
+            .push(Event::RelativePointer(RelativePointerEvent {
                 surface,
                 time_micros: event.utime,
                 delta: event.delta,
@@ -1871,7 +1880,7 @@ impl RuntimeState {
         else {
             return;
         };
-        self.events.push_back(Event::PointerConstraint(event));
+        self.events.push(Event::PointerConstraint(event));
     }
 }
 
@@ -1902,7 +1911,7 @@ impl TextInputHandler for RuntimeState {
         };
         session.enter(surface, desired.as_ref());
         self.events
-            .push_back(Event::TextInput(TextInputEvent::Entered { surface }));
+            .push(Event::TextInput(TextInputEvent::Entered { surface }));
     }
 
     fn text_input_left(
@@ -1923,7 +1932,7 @@ impl TextInputHandler for RuntimeState {
         session.leave();
         if let Some(surface) = surface {
             self.events
-                .push_back(Event::TextInput(TextInputEvent::Left { surface }));
+                .push(Event::TextInput(TextInputEvent::Left { surface }));
         }
     }
 
@@ -1944,7 +1953,7 @@ impl TextInputHandler for RuntimeState {
             .and_then(|objects| objects.text_input.as_ref())
             .is_some_and(|session| session.accepts_done(text_input, surface));
         if enabled {
-            self.events.push_back(Event::TextInput(TextInputEvent::Done(
+            self.events.push(Event::TextInput(TextInputEvent::Done(
                 batch.into_done(surface, serial),
             )));
         }

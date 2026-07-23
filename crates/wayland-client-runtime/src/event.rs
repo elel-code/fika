@@ -191,3 +191,75 @@ pub enum Event {
     Touch(TouchEvent),
     Dnd(DndEvent),
 }
+
+/// Contiguous pending-event storage optimized for append-and-drain batches.
+pub(crate) struct EventBuffer {
+    pending: Vec<Event>,
+}
+
+impl EventBuffer {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            pending: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub(crate) fn push(&mut self, event: Event) {
+        self.pending.push(event);
+    }
+
+    pub(crate) fn drain(&mut self) -> std::vec::Drain<'_, Event> {
+        self.pending.drain(..)
+    }
+
+    pub(crate) fn drain_into(&mut self, target: &mut Vec<Event>) {
+        target.append(&mut self.pending);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_buffer_drains_in_order_and_reuses_internal_capacity() {
+        let mut events = EventBuffer::with_capacity(4);
+        events.push(Event::Touch(TouchEvent {
+            surface: None,
+            kind: TouchEventKind::Cancelled,
+        }));
+        events.push(Event::Touch(TouchEvent {
+            surface: Some(SurfaceId(7)),
+            kind: TouchEventKind::Cancelled,
+        }));
+        let capacity = events.pending.capacity();
+        let mut drained = vec![Event::Touch(TouchEvent {
+            surface: Some(SurfaceId(1)),
+            kind: TouchEventKind::Cancelled,
+        })];
+
+        events.drain_into(&mut drained);
+
+        assert_eq!(drained.len(), 3);
+        assert!(matches!(
+            drained[0],
+            Event::Touch(TouchEvent {
+                surface: Some(SurfaceId(1)),
+                ..
+            })
+        ));
+        assert!(matches!(
+            drained[1],
+            Event::Touch(TouchEvent { surface: None, .. })
+        ));
+        assert!(matches!(
+            drained[2],
+            Event::Touch(TouchEvent {
+                surface: Some(SurfaceId(7)),
+                ..
+            })
+        ));
+        assert!(events.pending.is_empty());
+        assert_eq!(events.pending.capacity(), capacity);
+    }
+}

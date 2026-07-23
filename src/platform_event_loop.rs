@@ -34,15 +34,14 @@ impl EventLoop {
 
     pub fn run_app<A: ApplicationHandler>(self, mut app: A) -> Result<(), RuntimeError> {
         app.can_create_surfaces(&self.active);
+        let mut runtime_events = Vec::new();
         while !self.active.exiting.get() {
             self.process_commands();
-            let events = self
-                .active
-                .runtime
-                .borrow_mut()
-                .drain_events()
-                .collect::<Vec<_>>();
-            for event in events {
+            {
+                let mut runtime = self.active.runtime.borrow_mut();
+                runtime.drain_events_into(&mut runtime_events);
+            }
+            for event in runtime_events.drain(..) {
                 self.dispatch_runtime_event(&mut app, event)?;
                 if self.active.exiting.get() {
                     break;
