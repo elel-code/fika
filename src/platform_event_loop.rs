@@ -149,6 +149,7 @@ impl EventLoop {
     ) -> Result<(), RuntimeError> {
         match event {
             Event::Surface(event) => self.dispatch_surface_event(app, event),
+            Event::LayerSurface(_) | Event::Output(_) => Ok(()),
             Event::Activation(_) => Ok(()),
             Event::PointerConstraint(_) | Event::RelativePointer(_) => Ok(()),
             Event::TextInput(event) => {

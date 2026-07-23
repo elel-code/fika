@@ -1,8 +1,9 @@
 use bitflags::bitflags;
 
 use crate::{
-    ActivationEvent, DndEvent, InputSerial, LogicalPosition, LogicalSize, PointerConstraintEvent,
-    RelativePointerEvent, SuggestedSize, SurfaceId, TextInputEvent,
+    ActivationEvent, DndEvent, InputSerial, LayerSurfaceEvent, LogicalPosition, LogicalSize,
+    OutputEvent, PointerConstraintEvent, RelativePointerEvent, SuggestedSize, SurfaceId,
+    TextInputEvent,
 };
 
 bitflags! {
@@ -177,6 +178,8 @@ pub struct TouchEvent {
 #[derive(Clone, Debug)]
 pub enum Event {
     Surface(SurfaceEvent),
+    LayerSurface(LayerSurfaceEvent),
+    Output(OutputEvent),
     Activation(ActivationEvent),
     Pointer(PointerEvent),
     PointerConstraint(PointerConstraintEvent),

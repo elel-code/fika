@@ -14,12 +14,15 @@ mod event;
 mod fractional_scale;
 mod geometry;
 mod input;
+mod layer_shell;
+mod output;
 mod pointer_constraints;
 mod runtime;
 mod shm_format;
 mod surface;
 mod text_input;
 mod toplevel_icon;
+mod toplevel_interaction;
 mod touch;
 
 pub use activation::{
@@ -36,6 +39,11 @@ pub use event::{
 };
 pub use geometry::{LogicalPosition, LogicalRect, LogicalSize, SuggestedSize};
 pub use input::{CursorIcon, InputSerial, InputSerialSource};
+pub use layer_shell::{
+    LayerAnchor, LayerEdge, LayerKeyboardInteractivity, LayerMargins, LayerSurfaceAttributes,
+    LayerSurfaceError, LayerSurfaceEvent, LayerSurfaceLayer, LayerSurfaceState,
+};
+pub use output::{OutputEvent, OutputId, OutputInfo};
 pub use pointer_constraints::{
     PointerCaptureState, PointerConstraint, PointerConstraintError, PointerConstraintEvent,
     PointerConstraintRegion, RelativePointerEvent,
@@ -51,3 +59,4 @@ pub use text_input::{
     TextInputState, TextInputSurroundingText,
 };
 pub use toplevel_icon::{ToplevelIcon, ToplevelIconBuffer, ToplevelIconError};
+pub use toplevel_interaction::ResizeEdge;

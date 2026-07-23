@@ -17,11 +17,12 @@ impl Runtime {
                 *seat_id,
                 objects.pointer_session.focus(),
                 objects.data_device.is_some(),
-                objects.latest_button_serial,
+                objects.pointer_presses.latest_for_surface(origin),
             )
         });
-        let (seat_id, serial) =
-            select_drag_seat(origin, candidates).ok_or(RuntimeError::InvalidDragSerial)?;
+        let (seat_id, press) = select_active_pointer_press(origin, candidates)
+            .ok_or(RuntimeError::InvalidDragSerial)?;
+        let serial = press.serial;
         let icon = icon
             .map(|icon| prepare_dnd_icon_surface(&mut self.state, &self.queue_handle, icon))
             .transpose()?;

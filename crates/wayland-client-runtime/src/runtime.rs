@@ -11,6 +11,11 @@ use crate::event::{
 };
 use crate::fractional_scale::{FractionalScaleHandler, FractionalScaleManager};
 use crate::input::{InputSerial, InputSerialSource};
+use crate::layer_shell::{
+    LayerProtocolEvent, LayerShellManager, LayerSurfaceAttributes, LayerSurfaceData,
+    LayerSurfaceError, LayerSurfaceEvent, LayerSurfaceState, handle_layer_event,
+};
+use crate::output::output_info;
 use crate::pointer_constraints::{
     PointerCaptureTarget, PointerProtocols, SeatPointerSession, validate_pointer_capture_state,
 };
@@ -21,13 +26,16 @@ use crate::surface::{
 };
 use crate::toplevel_icon::ToplevelIconManager;
 use crate::text_input::{PendingBatch, SeatTextInput, TextInputHandler, TextInputManager};
+use crate::toplevel_interaction::{
+    PointerPressTracker, ToplevelInteraction, select_active_pointer_press,
+};
 use crate::touch::{TouchData, TouchHandler, TouchPoints};
 use crate::{
     ActivationEvent, ActivationRequestId, ActivationToken, ActivationTokenAttributes, BlurRegion,
-    BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize, PointerCaptureState,
-    PointerConstraint, PointerConstraintError, PointerConstraintRegion, PopupAttributes,
-    RelativePointerEvent, SuggestedSize, TextInputEvent, TextInputState, ToplevelAttributes,
-    ToplevelIcon,
+    BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize, OutputEvent, OutputId,
+    OutputInfo, PointerCaptureState, PointerConstraint, PointerConstraintError,
+    PointerConstraintRegion, PopupAttributes, RelativePointerEvent, ResizeEdge, SuggestedSize,
+    TextInputEvent, TextInputState, ToplevelAttributes, ToplevelIcon,
 };
 use smithay_client_toolkit::background_effect::{
     BackgroundEffectHandler, BackgroundEffectState,
@@ -52,7 +60,7 @@ use smithay_client_toolkit::reexports::client::protocol::{
     wl_data_device, wl_data_source, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
     wl_touch,
 };
-use smithay_client_toolkit::reexports::client::{Connection, Proxy, QueueHandle};
+use smithay_client_toolkit::reexports::client::{Connection, Dispatch, Proxy, QueueHandle};
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::{
     xdg_positioner, xdg_toplevel,
 };
@@ -86,6 +94,9 @@ use smithay_client_toolkit::shell::xdg::{XdgPositioner, XdgShell};
 use smithay_client_toolkit::shm::slot::{Buffer as ShmBuffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
+use wayland_protocols_wlr::layer_shell::v1::client::{
+    zwlr_layer_shell_v1, zwlr_layer_surface_v1,
+};
 
 #[derive(Clone, Debug)]
 pub struct RuntimeOptions {
@@ -108,6 +119,14 @@ pub struct RuntimeCapabilities {
     pub xdg_activation_v1: bool,
     /// The compositor supports assigning per-toplevel names or pixel icons.
     pub xdg_toplevel_icon_v1: bool,
+    /// A deployed layer-shell backend is available.
+    pub layer_shell_v1: bool,
+    /// The layer-shell backend supports changing an existing surface's layer.
+    pub layer_shell_dynamic_layer: bool,
+    /// The layer-shell backend supports normal on-demand keyboard focus.
+    pub layer_shell_on_demand_keyboard: bool,
+    /// The layer-shell backend supports explicit exclusive-edge disambiguation.
+    pub layer_shell_exclusive_edge: bool,
     /// The compositor supports seat-scoped text input and input methods.
     pub text_input_v3: bool,
     /// The compositor can confine or lock a pointer to a surface.
@@ -148,6 +167,18 @@ pub enum RuntimeError {
     InvalidActivationTarget(SurfaceId),
     #[error("surface {0:?} cannot have an xdg toplevel icon")]
     InvalidToplevelIconTarget(SurfaceId),
+    #[error("surface {0:?} is not an xdg toplevel")]
+    InvalidToplevelInteractionTarget(SurfaceId),
+    #[error("toplevel interaction requires a focused pointer seat with a pressed button")]
+    InvalidToplevelInteractionSerial,
+    #[error("surface {0:?} is not a layer surface")]
+    InvalidLayerSurfaceTarget(SurfaceId),
+    #[error("output {0:?} is no longer available")]
+    OutputNotFound(OutputId),
+    #[error("invalid layer surface: {0}")]
+    InvalidLayerSurface(#[from] LayerSurfaceError),
+    #[error("surface {0:?} does not support xdg window geometry")]
+    InvalidWindowGeometryTarget(SurfaceId),
     #[error("drag origin has no focused pointer seat with a current button serial")]
     InvalidDragSerial,
     #[error("clipboard selection has no focused seat with a current input serial")]
@@ -222,6 +253,7 @@ impl Runtime {
         let background_effect_state = BackgroundEffectState::new(&globals, &queue_handle);
         let xdg_activation = ActivationManager::bind(&globals, &queue_handle).ok();
         let toplevel_icon_manager = ToplevelIconManager::bind(&globals, &queue_handle).ok();
+        let layer_shell_manager = LayerShellManager::bind(&globals, &queue_handle).ok();
         let text_input_manager = TextInputManager::bind(&globals, &queue_handle).ok();
         let fractional_scale_manager = FractionalScaleManager::bind(&globals, &queue_handle).ok();
         let pointer_protocols = PointerProtocols::bind(
@@ -236,6 +268,16 @@ impl Runtime {
             xdg_dialog_v1: has_global(&globals, "xdg_wm_dialog_v1"),
             xdg_activation_v1: xdg_activation.is_some(),
             xdg_toplevel_icon_v1: toplevel_icon_manager.is_some(),
+            layer_shell_v1: layer_shell_manager.is_some(),
+            layer_shell_dynamic_layer: layer_shell_manager
+                .as_ref()
+                .is_some_and(|manager| manager.version() >= 2),
+            layer_shell_on_demand_keyboard: layer_shell_manager
+                .as_ref()
+                .is_some_and(|manager| manager.version() >= 4),
+            layer_shell_exclusive_edge: layer_shell_manager
+                .as_ref()
+                .is_some_and(|manager| manager.version() >= 5),
             text_input_v3: text_input_manager.is_some(),
             pointer_constraints_v1: pointer_protocols.has_constraints(),
             relative_pointer_v1: pointer_protocols.has_relative_pointer(),
@@ -256,6 +298,7 @@ impl Runtime {
             xdg_shell,
             xdg_activation,
             toplevel_icon_manager,
+            layer_shell_manager,
             text_input_manager,
             fractional_scale_manager,
             pointer_protocols,
@@ -272,7 +315,7 @@ impl Runtime {
             events: VecDeque::with_capacity(options.event_capacity),
             next_surface_id: 1,
             next_dnd_id: 1,
-            next_button_order: 1,
+            next_input_order: 1,
             next_activation_request_id: 1,
         };
 
@@ -307,6 +350,15 @@ impl Runtime {
         capabilities.ext_background_effect =
             supports_ext_background_blur(self.state.background_effect_state.capabilities());
         capabilities
+    }
+
+    /// Metadata snapshots for outputs whose initial compositor description is complete.
+    pub fn outputs(&self) -> Vec<OutputInfo> {
+        self.state
+            .output_state
+            .outputs()
+            .filter_map(|output| output_info(&self.state.output_state, &output))
+            .collect()
     }
 
     /// Preferred square icon sizes advertised by the compositor, in logical
@@ -356,6 +408,32 @@ impl Runtime {
             None,
             SurfaceKind::Toplevel,
         ))
+    }
+
+    /// Create a layer surface and perform its required initial bufferless commit.
+    ///
+    /// Wait for [`Event::LayerSurface`] with
+    /// [`LayerSurfaceEvent::Configure`] before attaching the first renderer
+    /// buffer. All layer state is double-buffered with `wl_surface`.
+    pub fn create_layer_surface(
+        &mut self,
+        attributes: LayerSurfaceAttributes,
+    ) -> Result<SurfaceId, RuntimeError> {
+        let manager = self
+            .state
+            .layer_shell_manager
+            .as_ref()
+            .ok_or(RuntimeError::Unsupported("layer-shell-v1"))?;
+        let output = attributes
+            .output
+            .map(|output| self.resolve_output(output))
+            .transpose()?;
+        let surface = self.state.compositor.create_surface(&self.queue_handle);
+        let layer =
+            manager.create_surface(&self.queue_handle, surface, output.as_ref(), &attributes)?;
+        let id = self.insert_surface(ProtocolSurface::Layer(layer), None, SurfaceKind::Layer);
+        self.surface_shared(id)?.wl_surface().commit();
+        Ok(id)
     }
 
     /// Create a parented toplevel and add xdg-dialog-v1 modality when available.
@@ -437,12 +515,15 @@ impl Runtime {
         let positioner = self.make_positioner(&attributes.positioner)?;
         let surface = self.state.compositor.create_surface(&self.queue_handle);
         let popup = Popup::from_surface(
-            Some(parent_shared.protocol.xdg_surface()),
+            parent_shared.protocol.xdg_surface(),
             &positioner,
             &self.queue_handle,
             surface,
             &self.state.xdg_shell,
         )?;
+        if let Some(layer) = parent_shared.protocol.layer_surface() {
+            layer.role().get_popup(popup.xdg_popup());
+        }
         if let Some(serial) = attributes.grab.as_ref() {
             popup.xdg_popup().grab(&serial.seat, serial.serial);
         }
@@ -579,6 +660,7 @@ impl Runtime {
         self.surface_shared(surface)?
             .protocol
             .xdg_surface()
+            .ok_or(RuntimeError::InvalidWindowGeometryTarget(surface))?
             .set_window_geometry(
                 origin.x,
                 origin.y,
@@ -614,6 +696,67 @@ impl Runtime {
             .ok_or(RuntimeError::InvalidParent(surface))?;
         toplevel.set_app_id(app_id.into());
         Ok(())
+    }
+
+    /// Replace the complete double-buffered state of a layer surface.
+    ///
+    /// Equal state is ignored and only changed protocol fields are sent. Call
+    /// [`Runtime::commit`] to apply the update atomically.
+    pub fn set_layer_surface_state(
+        &self,
+        surface: SurfaceId,
+        state: LayerSurfaceState,
+    ) -> Result<(), RuntimeError> {
+        let shared = self.surface_shared(surface)?;
+        let layer = shared
+            .protocol
+            .layer_surface()
+            .ok_or(RuntimeError::InvalidLayerSurfaceTarget(surface))?;
+        layer.apply_state(state)?;
+        Ok(())
+    }
+
+    pub fn layer_surface_state(
+        &self,
+        surface: SurfaceId,
+    ) -> Result<LayerSurfaceState, RuntimeError> {
+        let shared = self.surface_shared(surface)?;
+        shared
+            .protocol
+            .layer_surface()
+            .map(|layer| layer.state())
+            .ok_or(RuntimeError::InvalidLayerSurfaceTarget(surface))
+    }
+
+    /// Begin a compositor-driven move using the newest pointer press that is
+    /// still held over this toplevel.
+    ///
+    /// Call this while handling a pointer press. Wayland rejects requests made
+    /// without the press serial for the active implicit pointer grab.
+    pub fn begin_interactive_move(&self, surface: SurfaceId) -> Result<(), RuntimeError> {
+        self.request_toplevel_interaction(surface, ToplevelInteraction::Move)
+    }
+
+    /// Begin a compositor-driven resize using the newest pointer press that is
+    /// still held over this toplevel.
+    pub fn begin_interactive_resize(
+        &self,
+        surface: SurfaceId,
+        edge: ResizeEdge,
+    ) -> Result<(), RuntimeError> {
+        self.request_toplevel_interaction(surface, ToplevelInteraction::Resize(edge))
+    }
+
+    /// Show the compositor's window menu at a surface-local logical position.
+    ///
+    /// Call this while handling a pointer press so the runtime can supply the
+    /// active implicit-grab serial required by xdg-shell.
+    pub fn show_window_menu(
+        &self,
+        surface: SurfaceId,
+        position: LogicalPosition,
+    ) -> Result<(), RuntimeError> {
+        self.request_toplevel_interaction(surface, ToplevelInteraction::WindowMenu(position))
     }
 
     /// Set or clear the icon for an individual toplevel.
@@ -715,8 +858,14 @@ impl Runtime {
     /// Set the integer buffer scale used to interpret attached renderer buffers.
     pub fn set_buffer_scale(&self, surface: SurfaceId, factor: i32) -> Result<(), RuntimeError> {
         let shared = self.surface_shared(surface)?;
-        validate_buffer_scale(factor, shared.fractional_scale.is_some())?;
-        shared.wl_surface().set_buffer_scale(factor);
+        let wl_surface = shared.wl_surface();
+        if validate_buffer_scale(
+            factor,
+            shared.fractional_scale.is_some(),
+            wl_surface.version(),
+        )? {
+            wl_surface.set_buffer_scale(factor);
+        }
         Ok(())
     }
 
@@ -1043,6 +1192,45 @@ impl Runtime {
         Ok(shared)
     }
 
+    fn request_toplevel_interaction(
+        &self,
+        surface: SurfaceId,
+        interaction: ToplevelInteraction,
+    ) -> Result<(), RuntimeError> {
+        let shared = self.surface_shared(surface)?;
+        let toplevel = shared
+            .protocol
+            .xdg_toplevel()
+            .ok_or(RuntimeError::InvalidToplevelInteractionTarget(surface))?;
+        let candidates = self.state.seats.values().filter_map(|objects| {
+            let pointer = objects.pointer.as_ref()?.pointer();
+            let seat = pointer.data::<PointerData<()>>()?.seat().clone();
+            Some((
+                seat,
+                objects.pointer_session.focus(),
+                true,
+                objects.pointer_presses.latest_for_surface(surface),
+            ))
+        });
+        let (seat, press) = select_active_pointer_press(surface, candidates)
+            .ok_or(RuntimeError::InvalidToplevelInteractionSerial)?;
+        interaction.send(toplevel, &seat, press.serial);
+        Ok(())
+    }
+
+    fn resolve_output(&self, id: OutputId) -> Result<wl_output::WlOutput, RuntimeError> {
+        self.state
+            .output_state
+            .outputs()
+            .find(|output| {
+                self.state
+                    .output_state
+                    .info(output)
+                    .is_some_and(|info| info.id == id.get())
+            })
+            .ok_or(RuntimeError::OutputNotFound(id))
+    }
+
     fn make_positioner(&self, value: &PopupPositioner) -> Result<XdgPositioner, RuntimeError> {
         let positioner = XdgPositioner::new(&self.state.xdg_shell)?;
         positioner.set_size(u32_to_i32(value.size.width), u32_to_i32(value.size.height));
@@ -1081,7 +1269,16 @@ fn supports_ext_background_blur(capabilities: Option<BackgroundEffectCapability>
     capabilities.is_some_and(|value| value.contains(BackgroundEffectCapability::Blur))
 }
 
-fn validate_buffer_scale(factor: i32, fractional_scale: bool) -> Result<(), RuntimeError> {
+/// Validate a buffer-scale update and report whether a wire request is needed.
+///
+/// wl_surface v1/v2 have an implicit, immutable scale of one. Treating one as
+/// a no-op keeps those compositors usable without sending the v3 request that
+/// would otherwise terminate the connection.
+fn validate_buffer_scale(
+    factor: i32,
+    fractional_scale: bool,
+    surface_version: u32,
+) -> Result<bool, RuntimeError> {
     if factor < 1 {
         return Err(RuntimeError::Protocol(
             "buffer scale must be at least one".to_string(),
@@ -1092,7 +1289,15 @@ fn validate_buffer_scale(factor: i32, fractional_scale: bool) -> Result<(), Runt
             "buffer scale must remain one while fractional scaling is active".to_string(),
         ));
     }
-    Ok(())
+    if surface_version < 3 {
+        if factor == 1 {
+            return Ok(false);
+        }
+        return Err(RuntimeError::Unsupported(
+            "integer buffer scaling on wl_surface versions below 3",
+        ));
+    }
+    Ok(true)
 }
 
 fn validate_viewport_destination(size: Option<LogicalSize>) -> Result<(), RuntimeError> {
@@ -1126,7 +1331,9 @@ fn make_pointer_constraint_region(
 fn validate_activation_target(surface: SurfaceId, kind: SurfaceKind) -> Result<(), RuntimeError> {
     match kind {
         SurfaceKind::Toplevel | SurfaceKind::Dialog => Ok(()),
-        SurfaceKind::Popup => Err(RuntimeError::InvalidActivationTarget(surface)),
+        SurfaceKind::Popup | SurfaceKind::Layer => {
+            Err(RuntimeError::InvalidActivationTarget(surface))
+        }
     }
 }
 
@@ -1151,6 +1358,7 @@ struct RuntimeState {
     xdg_shell: XdgShell,
     xdg_activation: Option<ActivationManager>,
     toplevel_icon_manager: Option<ToplevelIconManager>,
+    layer_shell_manager: Option<LayerShellManager>,
     text_input_manager: Option<TextInputManager>,
     fractional_scale_manager: Option<FractionalScaleManager>,
     pointer_protocols: PointerProtocols,
@@ -1167,7 +1375,7 @@ struct RuntimeState {
     events: VecDeque<Event>,
     next_surface_id: u64,
     next_dnd_id: u64,
-    next_button_order: u64,
+    next_input_order: u64,
     next_activation_request_id: u64,
 }
 
@@ -1209,13 +1417,6 @@ struct DndIconSurface {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ButtonSerial {
-    surface: SurfaceId,
-    serial: u32,
-    order: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SelectionSerial {
     serial: u32,
     order: u64,
@@ -1249,6 +1450,7 @@ impl RuntimeState {
         self.keyboard_focus.retain(|_, focused| *focused != id);
         for objects in self.seats.values_mut() {
             objects.pointer_session.remove_surface(id);
+            objects.pointer_presses.remove_surface(id);
             if objects.keyboard_focus == Some(id) {
                 objects.keyboard_focus = None;
             }
@@ -1259,25 +1461,35 @@ impl RuntimeState {
         }
     }
 
-    fn record_button_serial(&mut self, seat_id: u32, surface: SurfaceId, serial: u32) {
-        let order = self.next_button_order;
-        self.next_button_order = self.next_button_order.saturating_add(1);
+    fn record_pointer_press(&mut self, seat_id: u32, surface: SurfaceId, button: u32, serial: u32) {
+        let order = self.take_input_order();
         if let Some(objects) = self.seats.get_mut(&seat_id) {
-            objects.latest_button_serial = Some(ButtonSerial {
-                surface,
-                serial,
-                order,
-            });
+            objects
+                .pointer_presses
+                .press(button, surface, serial, order);
+            objects.latest_selection_serial = Some(SelectionSerial { serial, order });
+        }
+    }
+
+    fn record_pointer_release(&mut self, seat_id: u32, button: u32, serial: u32) {
+        let order = self.take_input_order();
+        if let Some(objects) = self.seats.get_mut(&seat_id) {
+            objects.pointer_presses.release(button);
             objects.latest_selection_serial = Some(SelectionSerial { serial, order });
         }
     }
 
     fn record_selection_serial(&mut self, seat_id: u32, serial: u32) {
-        let order = self.next_button_order;
-        self.next_button_order = self.next_button_order.saturating_add(1);
+        let order = self.take_input_order();
         if let Some(objects) = self.seats.get_mut(&seat_id) {
             objects.latest_selection_serial = Some(SelectionSerial { serial, order });
         }
+    }
+
+    fn take_input_order(&mut self) -> u64 {
+        let order = self.next_input_order;
+        self.next_input_order = self.next_input_order.saturating_add(1);
+        order
     }
 
     fn push_key(
@@ -1310,9 +1522,7 @@ impl RuntimeState {
 
 fn is_current_popup_grab(objects: &SeatObjects, source: InputSerialSource, serial: u32) -> bool {
     match source {
-        InputSerialSource::PointerPress => objects
-            .latest_button_serial
-            .is_some_and(|value| value.serial == serial),
+        InputSerialSource::PointerPress => objects.pointer_presses.contains_serial(serial),
         InputSerialSource::TouchDown => objects.touch_points.contains_serial(serial),
         _ => false,
     }
@@ -1331,21 +1541,6 @@ fn collect_post_order(
     order.push(id);
 }
 
-fn select_drag_seat(
-    origin: SurfaceId,
-    candidates: impl IntoIterator<Item = (u32, Option<SurfaceId>, bool, Option<ButtonSerial>)>,
-) -> Option<(u32, u32)> {
-    candidates
-        .into_iter()
-        .filter_map(|(seat_id, pointer_focus, has_data_device, button)| {
-            let button = button?;
-            (has_data_device && pointer_focus == Some(origin) && button.surface == origin)
-                .then_some((seat_id, button))
-        })
-        .max_by_key(|(_, button)| button.order)
-        .map(|(seat_id, button)| (seat_id, button.serial))
-}
-
 #[derive(Default)]
 struct SeatObjects {
     keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -1354,7 +1549,7 @@ struct SeatObjects {
     pointer_session: SeatPointerSession,
     text_input: Option<SeatTextInput>,
     data_device: Option<DataDevice>,
-    latest_button_serial: Option<ButtonSerial>,
+    pointer_presses: PointerPressTracker,
     latest_selection_serial: Option<SelectionSerial>,
     keyboard_focus: Option<SurfaceId>,
     touch_points: TouchPoints,

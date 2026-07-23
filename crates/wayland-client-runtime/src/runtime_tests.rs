@@ -49,10 +49,17 @@ mod tests {
 
     #[test]
     fn fractional_scale_keeps_wl_surface_buffer_scale_at_one() {
-        assert!(validate_buffer_scale(1, true).is_ok());
-        assert!(validate_buffer_scale(2, false).is_ok());
-        assert!(validate_buffer_scale(0, false).is_err());
-        assert!(validate_buffer_scale(2, true).is_err());
+        assert!(matches!(validate_buffer_scale(1, true, 3), Ok(true)));
+        assert!(matches!(validate_buffer_scale(2, false, 3), Ok(true)));
+        assert!(validate_buffer_scale(0, false, 3).is_err());
+        assert!(validate_buffer_scale(2, true, 3).is_err());
+    }
+
+    #[test]
+    fn old_wl_surface_never_receives_the_v3_buffer_scale_request() {
+        assert!(matches!(validate_buffer_scale(1, false, 1), Ok(false)));
+        assert!(matches!(validate_buffer_scale(1, false, 2), Ok(false)));
+        assert!(validate_buffer_scale(2, false, 2).is_err());
     }
 
     #[test]
@@ -70,6 +77,10 @@ mod tests {
         assert!(validate_activation_target(surface, SurfaceKind::Dialog).is_ok());
         assert!(matches!(
             validate_activation_target(surface, SurfaceKind::Popup),
+            Err(RuntimeError::InvalidActivationTarget(id)) if id == surface
+        ));
+        assert!(matches!(
+            validate_activation_target(surface, SurfaceKind::Layer),
             Err(RuntimeError::InvalidActivationTarget(id)) if id == surface
         ));
     }
@@ -147,65 +158,6 @@ mod tests {
             map_cursor_icon(CursorIcon::ColResize),
             SctkCursorIcon::ColResize
         );
-    }
-
-    #[test]
-    fn drag_seat_requires_origin_focus_data_device_and_matching_button_surface() {
-        let origin = SurfaceId(7);
-        let other = SurfaceId(8);
-        let candidates = [
-            (
-                1,
-                Some(other),
-                true,
-                Some(ButtonSerial {
-                    surface: other,
-                    serial: 10,
-                    order: 1,
-                }),
-            ),
-            (
-                2,
-                Some(origin),
-                false,
-                Some(ButtonSerial {
-                    surface: origin,
-                    serial: 20,
-                    order: 2,
-                }),
-            ),
-            (
-                3,
-                Some(origin),
-                true,
-                Some(ButtonSerial {
-                    surface: other,
-                    serial: 30,
-                    order: 3,
-                }),
-            ),
-        ];
-
-        assert_eq!(select_drag_seat(origin, candidates), None);
-    }
-
-    #[test]
-    fn drag_seat_uses_newest_matching_button_across_multiple_seats() {
-        let origin = SurfaceId(7);
-        let button = |serial, order| {
-            Some(ButtonSerial {
-                surface: origin,
-                serial,
-                order,
-            })
-        };
-        let candidates = [
-            (11, Some(origin), true, button(110, 4)),
-            (12, Some(origin), true, button(120, 9)),
-            (13, Some(origin), true, None),
-        ];
-
-        assert_eq!(select_drag_seat(origin, candidates), Some((12, 120)));
     }
 
     #[test]

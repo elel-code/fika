@@ -17,6 +17,7 @@ use smithay_client_toolkit::shell::xdg::popup::Popup;
 use smithay_client_toolkit::shell::xdg::window::Window;
 
 use crate::fractional_scale::FractionalScaleSurface;
+use crate::layer_shell::LayerProtocolSurface;
 use crate::text_input::TextInputState;
 use crate::toplevel_icon::AppliedToplevelIcon;
 use crate::{InputSerial, LogicalPosition, LogicalRect, LogicalSize, PointerCaptureState};
@@ -36,6 +37,7 @@ pub enum SurfaceKind {
     Toplevel,
     Dialog,
     Popup,
+    Layer,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -155,6 +157,7 @@ pub(crate) enum ProtocolSurface {
     NativeDialog(Dialog),
     FallbackDialog(Window),
     Popup(Popup),
+    Layer(LayerProtocolSurface),
 }
 
 impl ProtocolSurface {
@@ -163,17 +166,20 @@ impl ProtocolSurface {
             Self::Toplevel(window) | Self::FallbackDialog(window) => window.wl_surface(),
             Self::NativeDialog(dialog) => dialog.wl_surface(),
             Self::Popup(popup) => popup.wl_surface(),
+            Self::Layer(layer) => layer.wl_surface(),
         }
     }
 
     pub(crate) fn xdg_surface(
         &self,
-    ) -> &smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_surface::XdgSurface
-    {
+    ) -> Option<
+        &smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_surface::XdgSurface,
+    > {
         match self {
-            Self::Toplevel(window) | Self::FallbackDialog(window) => window.xdg_surface(),
-            Self::NativeDialog(dialog) => dialog.xdg_surface(),
-            Self::Popup(popup) => popup.xdg_surface(),
+            Self::Toplevel(window) | Self::FallbackDialog(window) => Some(window.xdg_surface()),
+            Self::NativeDialog(dialog) => Some(dialog.xdg_surface()),
+            Self::Popup(popup) => Some(popup.xdg_surface()),
+            Self::Layer(_) => None,
         }
     }
 
@@ -185,7 +191,14 @@ impl ProtocolSurface {
         match self {
             Self::Toplevel(window) | Self::FallbackDialog(window) => Some(window.xdg_toplevel()),
             Self::NativeDialog(dialog) => Some(dialog.xdg_toplevel()),
-            Self::Popup(_) => None,
+            Self::Popup(_) | Self::Layer(_) => None,
+        }
+    }
+
+    pub(crate) fn layer_surface(&self) -> Option<&LayerProtocolSurface> {
+        match self {
+            Self::Layer(layer) => Some(layer),
+            _ => None,
         }
     }
 }

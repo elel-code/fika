@@ -16,6 +16,7 @@ bitflags = "2"
 raw-window-handle = "0.6"
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop", "system", "xkbcommon"] }
 thiserror = "2"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

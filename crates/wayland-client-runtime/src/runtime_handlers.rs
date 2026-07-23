@@ -11,9 +11,92 @@ impl OutputHandler for RuntimeState {
         &mut self.output_state
     }
 
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        if let Some(info) = output_info(&self.output_state, &output) {
+            self.events.push_back(Event::Output(OutputEvent::Added(info)));
+        }
+    }
+
+    fn update_output(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        if let Some(info) = output_info(&self.output_state, &output) {
+            self.events
+                .push_back(Event::Output(OutputEvent::Updated(info)));
+        }
+    }
+
+    fn output_destroyed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        if let Some(info) = output_info(&self.output_state, &output) {
+            self.events
+                .push_back(Event::Output(OutputEvent::Removed(info.id)));
+        }
+    }
+}
+
+impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for RuntimeState {
+    fn event(
+        _: &mut Self,
+        _: &zwlr_layer_shell_v1::ZwlrLayerShellV1,
+        _: zwlr_layer_shell_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        unreachable!("zwlr_layer_shell_v1 has no events")
+    }
+}
+
+impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, LayerSurfaceData> for RuntimeState {
+    fn event(
+        state: &mut Self,
+        role: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        data: &LayerSurfaceData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(event) = handle_layer_event(role, event) else {
+            return;
+        };
+        let Some(surface) = state.surface_id(data.wl_surface()) else {
+            return;
+        };
+        match event {
+            LayerProtocolEvent::Configure {
+                suggested_size,
+                serial,
+            } => state
+                .events
+                .push_back(Event::LayerSurface(LayerSurfaceEvent::Configure {
+                    surface,
+                    suggested_size,
+                    serial,
+                })),
+            LayerProtocolEvent::Closed => {
+                if let Some(layer) = state
+                    .surfaces
+                    .get(&surface)
+                    .and_then(|shared| shared.protocol.layer_surface())
+                {
+                    layer.mark_closed();
+                }
+                state
+                    .events
+                    .push_back(Event::LayerSurface(LayerSurfaceEvent::Closed {
+                        surface,
+                    }));
+            }
+        }
+    }
 }
 
 impl BackgroundEffectHandler for RuntimeState {
@@ -284,7 +367,7 @@ impl SeatHandler for RuntimeState {
             Capability::Pointer => {
                 objects.pointer_session.detach();
                 objects.pointer.take();
-                objects.latest_button_serial = None;
+                objects.pointer_presses.clear();
             }
             Capability::Touch => {
                 if let Some(touch) = objects.touch.take()
@@ -382,6 +465,11 @@ impl PointerHandler for RuntimeState {
         let seat = data.seat().clone();
         let seat_id = seat.id().protocol_id();
         for event in events {
+            if let SctkPointerEventKind::Release { button, serial, .. } = &event.kind {
+                // End the implicit grab even when the target surface was
+                // destroyed earlier in this dispatch cycle.
+                self.record_pointer_release(seat_id, *button, *serial);
+            }
             let Some(surface) = self.surface_id(&event.surface) else {
                 continue;
             };
@@ -442,7 +530,7 @@ impl PointerHandler for RuntimeState {
                     button,
                     serial,
                 } => {
-                    self.record_button_serial(seat_id, surface, *serial);
+                    self.record_pointer_press(seat_id, surface, *button, *serial);
                     PointerEventKind::Press {
                         time: *time,
                         button: *button,
@@ -457,18 +545,15 @@ impl PointerHandler for RuntimeState {
                     time,
                     button,
                     serial,
-                } => {
-                    self.record_button_serial(seat_id, surface, *serial);
-                    PointerEventKind::Release {
-                        time: *time,
-                        button: *button,
-                        serial: InputSerial::new(
-                            seat.clone(),
-                            *serial,
-                            InputSerialSource::PointerRelease,
-                        ),
-                    }
-                }
+                } => PointerEventKind::Release {
+                    time: *time,
+                    button: *button,
+                    serial: InputSerial::new(
+                        seat.clone(),
+                        *serial,
+                        InputSerialSource::PointerRelease,
+                    ),
+                },
                 SctkPointerEventKind::Axis {
                     time,
                     horizontal,

@@ -12,10 +12,11 @@ general-purpose and contains no Fika-specific model or renderer dependency.
 | Area | Public behavior |
 | --- | --- |
 | Connection/event loop | Owns the Wayland connection, event queue and calloop dispatcher; exposes an owned event queue and cross-thread wake handle |
-| Toplevels | Creates xdg-toplevel surfaces and reports configure/close/frame/scale events |
+| Toplevels | Creates xdg-toplevel surfaces, reports configure/close/frame/scale events, and starts compositor-driven move, eight-edge resize, and window-menu interactions |
 | Dialogs | Creates parented xdg-dialog-v1 surfaces with modality; falls back to a parented xdg-toplevel when unsupported |
 | Activation | Exports and consumes `xdg-activation-v1` tokens, carries optional app/seat/serial context, and supports coalesced user-attention requests |
 | Toplevel icons | Uses `xdg-toplevel-icon-v1` with XDG theme names, one or more immutable SHM pixel fallbacks, compositor-preferred sizes, and explicit commit semantics |
+| Layer surfaces | Exposes a backend-neutral layer API over deployed `zwlr_layer_shell_v1` through v5, including output targeting, dynamic layer, on-demand keyboard focus, exclusive-edge disambiguation, configure/closed events, and layer-parented popups |
 | Popups | Exposes the complete xdg-positioner anchor, gravity, constraint, offset, reactive and reposition state; accepts only opaque press/down serials for grabs |
 | Lifetimes | Owns a surface tree, removes descendants child-first, and makes every renderer lease retain its ancestors |
 | Rendering | `SurfaceHandle` implements raw-window-handle 0.6 for both wgpu and direct Vulkan use |
@@ -112,6 +113,52 @@ last-up fallback. Down/up serials remain seat-scoped, active touch-down serials
 can request popup grabs, and cancel/capability-removal events clear every
 affected surface without leaving stale touch IDs behind.
 
+## Toplevel pointer interactions
+
+While handling a `PointerEventKind::Press`, call
+`Runtime::begin_interactive_move`, `Runtime::begin_interactive_resize`, or
+`Runtime::show_window_menu`. The runtime finds the focused seat and supplies
+the active implicit-grab serial, so application code never stores raw Wayland
+serials. `ResizeEdge` exposes all eight protocol directions.
+
+Pressed buttons are tracked independently per seat. Releasing one button
+invalidates only that button's serial, and an older button that remains held
+can still drive an interaction. Surface destruction and pointer-capability
+removal clear the associated state. Outgoing DnD uses this same active-press
+tracker, preventing a release serial or a stale completed grab from starting a
+drag.
+
+## Layer surfaces
+
+`Runtime::create_layer_surface` creates background, bottom, top, or overlay
+surfaces through a backend-neutral public API. `LayerSurfaceState` retains the
+complete double-buffered size, anchors, exclusive zone and v5 exclusive edge,
+margins, keyboard interactivity, and layer. The runtime validates
+compositor-selected zero-sized axes and protocol-version requirements before
+creating an object or sending an update.
+
+Creation performs the protocol-required initial commit without a buffer. Wait
+for `Event::LayerSurface(LayerSurfaceEvent::Configure { .. })` before attaching
+the first renderer buffer; configure serials are acknowledged inside protocol
+dispatch. `Runtime::set_layer_surface_state` diffs against retained state and
+sends only changed fields, then the caller applies them with one
+`Runtime::commit`. A compositor `closed` event makes later updates fail instead
+of silently sending requests to an unusable role.
+
+An optional `OutputId` from `Runtime::outputs` targets a specific live output;
+`None` delegates placement to the compositor. Output hotplug and metadata
+changes are reported as `Event::Output`. An xdg-popup created with a layer
+surface parent automatically uses the layer-shell `get_popup` association
+before its initial commit.
+
+The currently deployed backend is `zwlr_layer_shell_v1` v1-v5. The public API
+does not expose that vendor namespace, allowing a future standardized
+ext-layer-shell backend to be added without changing applications. Inspect the
+four `layer_shell_*` capability fields before using versioned behavior.
+
+`cargo run -p wayland-client-runtime --example layer_surface_smoke` probes
+initial configure and closed events without attaching a renderer buffer.
+
 ## Pointer constraints and relative motion
 
 `Runtime::set_pointer_constraint` retains `None`, `Confined`, or `Locked` for
@@ -161,6 +208,11 @@ Render buffers at `round(logical_size * factor)`, keep
 commit that attaches the resized buffer. The viewport destination is
 double-buffered with the surface. Without the paired globals, use the integer
 scale event and `Runtime::set_buffer_scale` instead.
+
+On legacy wl_surface v1/v2 compositors, scale one is the fixed protocol
+default and is therefore a safe no-op. Larger integer scales return
+`RuntimeError::Unsupported` instead of sending the v3-only request and
+terminating the Wayland connection.
 
 ## Surface activation
 
@@ -230,14 +282,15 @@ session, so the next `enter` always starts from a complete state.
 ## Internal module boundary
 
 Protocol-specific ownership and dispatch are kept in focused modules:
-`activation`, `fractional_scale`, `pointer_constraints`, `text_input`,
-`toplevel_icon`, `touch`, and the shared SHM pixel formatter. `Runtime` binds
-those modules and translates their callbacks into crate-owned events, while
-`SurfaceShared` only retains declarative per-surface state and protocol
-resources. Pointer constraints and text input each own their per-seat proxies,
-state machines, and destruction paths. This keeps generated Wayland proxy
-details out of the public API and prevents application policy from leaking
-into reusable protocol code.
+`activation`, `fractional_scale`, `layer_shell`, `output`,
+`pointer_constraints`, `text_input`, `toplevel_icon`,
+`toplevel_interaction`, `touch`, and the shared SHM pixel formatter. `Runtime`
+binds those modules and translates their callbacks into crate-owned events,
+while `SurfaceShared` only retains declarative per-surface state and protocol
+resources. Pointer constraints, text input, layer surfaces, and toplevel
+interaction tracking own their state machines and destruction paths. This
+keeps generated Wayland proxy details out of the public API and prevents
+application policy from leaking into reusable protocol code.
 
 ## Protocol lifetime rule
 
