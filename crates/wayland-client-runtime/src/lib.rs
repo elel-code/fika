@@ -16,7 +16,9 @@ mod geometry;
 mod input;
 mod layer_shell;
 mod output;
+mod pointer_axis;
 mod pointer_constraints;
+mod pointer_gestures;
 mod runtime;
 mod shm_format;
 mod surface;
@@ -44,9 +46,13 @@ pub use layer_shell::{
     LayerSurfaceError, LayerSurfaceEvent, LayerSurfaceLayer, LayerSurfaceState,
 };
 pub use output::{OutputEvent, OutputId, OutputInfo};
+pub use pointer_axis::{PointerAxisDirection, PointerAxisSource, PointerAxisValue};
 pub use pointer_constraints::{
     PointerCaptureState, PointerConstraint, PointerConstraintError, PointerConstraintEvent,
     PointerConstraintRegion, RelativePointerEvent,
+};
+pub use pointer_gestures::{
+    PointerGestureEvent, PointerHoldEvent, PointerPinchEvent, PointerSwipeEvent,
 };
 pub use runtime::{Runtime, RuntimeCapabilities, RuntimeError, RuntimeOptions, WakeHandle};
 pub use surface::{

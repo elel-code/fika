@@ -2,8 +2,8 @@ use bitflags::bitflags;
 
 use crate::{
     ActivationEvent, DndEvent, InputSerial, LayerSurfaceEvent, LogicalPosition, LogicalSize,
-    OutputEvent, PointerConstraintEvent, RelativePointerEvent, SuggestedSize, SurfaceId,
-    TextInputEvent,
+    OutputEvent, PointerAxisSource, PointerAxisValue, PointerConstraintEvent, PointerGestureEvent,
+    RelativePointerEvent, SuggestedSize, SurfaceId, TextInputEvent,
 };
 
 bitflags! {
@@ -83,8 +83,9 @@ pub enum PointerEventKind {
     },
     Axis {
         time: u32,
-        horizontal: f64,
-        vertical: f64,
+        horizontal: PointerAxisValue,
+        vertical: PointerAxisValue,
+        source: Option<PointerAxisSource>,
     },
 }
 
@@ -182,6 +183,7 @@ pub enum Event {
     Output(OutputEvent),
     Activation(ActivationEvent),
     Pointer(PointerEvent),
+    PointerGesture(PointerGestureEvent),
     PointerConstraint(PointerConstraintEvent),
     RelativePointer(RelativePointerEvent),
     Keyboard(KeyboardEvent),

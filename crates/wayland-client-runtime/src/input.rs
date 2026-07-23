@@ -15,6 +15,8 @@ pub enum InputSerialSource {
     PointerEnter,
     PointerPress,
     PointerRelease,
+    PointerGestureBegin,
+    PointerGestureEnd,
     KeyboardEnter,
     KeyboardKey,
     TouchDown,

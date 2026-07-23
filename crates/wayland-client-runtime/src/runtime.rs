@@ -16,8 +16,12 @@ use crate::layer_shell::{
     LayerSurfaceError, LayerSurfaceEvent, LayerSurfaceState, handle_layer_event,
 };
 use crate::output::output_info;
+use crate::pointer_axis::{map_axis_source, map_axis_value};
 use crate::pointer_constraints::{
     PointerCaptureTarget, PointerProtocols, SeatPointerSession, validate_pointer_capture_state,
+};
+use crate::pointer_gestures::{
+    PointerGestureHandler, PointerGestureManager, SeatPointerGestures,
 };
 use crate::shm_format::copy_rgba_to_premultiplied_argb8888;
 use crate::surface::{
@@ -34,8 +38,8 @@ use crate::{
     ActivationEvent, ActivationRequestId, ActivationToken, ActivationTokenAttributes, BlurRegion,
     BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize, OutputEvent, OutputId,
     OutputInfo, PointerCaptureState, PointerConstraint, PointerConstraintError,
-    PointerConstraintRegion, PopupAttributes, RelativePointerEvent, ResizeEdge, SuggestedSize,
-    TextInputEvent, TextInputState, ToplevelAttributes, ToplevelIcon,
+    PointerConstraintRegion, PointerGestureEvent, PopupAttributes, RelativePointerEvent,
+    ResizeEdge, SuggestedSize, TextInputEvent, TextInputState, ToplevelAttributes, ToplevelIcon,
 };
 use smithay_client_toolkit::background_effect::{
     BackgroundEffectHandler, BackgroundEffectState,
@@ -133,6 +137,10 @@ pub struct RuntimeCapabilities {
     pub pointer_constraints_v1: bool,
     /// The compositor can report accelerated and unaccelerated relative motion.
     pub relative_pointer_v1: bool,
+    /// The compositor supports swipe and pinch pointer gestures.
+    pub pointer_gestures_v1: bool,
+    /// The pointer-gestures-v1 global is new enough to support hold gestures.
+    pub pointer_gesture_hold_v1: bool,
     pub popup_reposition: bool,
     /// The compositor currently advertises the ext-background-effect-v1 blur capability.
     pub ext_background_effect: bool,
@@ -256,6 +264,7 @@ impl Runtime {
         let layer_shell_manager = LayerShellManager::bind(&globals, &queue_handle).ok();
         let text_input_manager = TextInputManager::bind(&globals, &queue_handle).ok();
         let fractional_scale_manager = FractionalScaleManager::bind(&globals, &queue_handle).ok();
+        let pointer_gesture_manager = PointerGestureManager::bind(&globals, &queue_handle).ok();
         let pointer_protocols = PointerProtocols::bind(
             &globals,
             &queue_handle,
@@ -281,6 +290,10 @@ impl Runtime {
             text_input_v3: text_input_manager.is_some(),
             pointer_constraints_v1: pointer_protocols.has_constraints(),
             relative_pointer_v1: pointer_protocols.has_relative_pointer(),
+            pointer_gestures_v1: pointer_gesture_manager.is_some(),
+            pointer_gesture_hold_v1: pointer_gesture_manager
+                .as_ref()
+                .is_some_and(PointerGestureManager::supports_hold),
             popup_reposition: xdg_shell.xdg_wm_base().version() >= 3,
             ext_background_effect: false,
             fractional_scale: fractional_scale_manager.is_some(),
@@ -301,6 +314,7 @@ impl Runtime {
             layer_shell_manager,
             text_input_manager,
             fractional_scale_manager,
+            pointer_gesture_manager,
             pointer_protocols,
             surfaces: HashMap::new(),
             surface_ids: HashMap::new(),
@@ -1361,6 +1375,7 @@ struct RuntimeState {
     layer_shell_manager: Option<LayerShellManager>,
     text_input_manager: Option<TextInputManager>,
     fractional_scale_manager: Option<FractionalScaleManager>,
+    pointer_gesture_manager: Option<PointerGestureManager>,
     pointer_protocols: PointerProtocols,
     surfaces: HashMap<SurfaceId, Arc<SurfaceShared>>,
     surface_ids: HashMap<ObjectId, SurfaceId>,
@@ -1450,6 +1465,9 @@ impl RuntimeState {
         self.keyboard_focus.retain(|_, focused| *focused != id);
         for objects in self.seats.values_mut() {
             objects.pointer_session.remove_surface(id);
+            if let Some(gestures) = objects.pointer_gestures.as_ref() {
+                gestures.remove_surface(id);
+            }
             objects.pointer_presses.remove_surface(id);
             if objects.keyboard_focus == Some(id) {
                 objects.keyboard_focus = None;
@@ -1545,6 +1563,7 @@ fn collect_post_order(
 struct SeatObjects {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<ThemedPointer>,
+    pointer_gestures: Option<SeatPointerGestures>,
     touch: Option<wl_touch::WlTouch>,
     pointer_session: SeatPointerSession,
     text_input: Option<SeatTextInput>,
@@ -1568,6 +1587,7 @@ impl Drop for SeatObjects {
         {
             keyboard.release();
         }
+        self.pointer_gestures.take();
         self.pointer_session.detach();
         self.pointer.take();
         if let Some(touch) = self.touch.take()
@@ -1623,6 +1643,22 @@ impl TouchHandler for RuntimeState {
 
     fn touch_cancelled(&mut self, seat: &wl_seat::WlSeat) {
         self.touch_cancel(seat);
+    }
+}
+
+impl PointerGestureHandler for RuntimeState {
+    fn pointer_gesture_surface(&mut self, surface: &wl_surface::WlSurface) -> Option<SurfaceId> {
+        self.surface_id(surface)
+    }
+
+    fn pointer_gesture_event(&mut self, event: PointerGestureEvent) {
+        let input = event
+            .serial()
+            .map(|serial| (serial.seat.id().protocol_id(), serial.serial));
+        if let Some((seat_id, serial)) = input {
+            self.record_selection_serial(seat_id, serial);
+        }
+        self.events.push_back(Event::PointerGesture(event));
     }
 }
 

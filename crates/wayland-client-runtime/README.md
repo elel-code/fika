@@ -24,8 +24,9 @@ general-purpose and contains no Fika-specific model or renderer dependency.
 | Blur | Uses `ext-background-effect-v1` and preserves complete-surface or arbitrary surface-local rectangle regions |
 | Data transfer | Clipboard and DnD share one MIME-content model, runtime connection, seat/serial state, data devices and pipe I/O; application-specific formats stay in the application |
 | Drag and drop | Handles incoming/outgoing offers, action negotiation and lifecycle events; optional RGBA previews use owned SHM drag-icon surfaces |
-| Input | Translates framed multi-touch, keyboard, and pointer events into crate-owned values; uses cursor-shape when available and automatically falls back to the system cursor theme |
+| Input | Translates framed multi-touch, keyboard, pointer, and touchpad gesture events into crate-owned values; preserves continuous, discrete, value120, source, stop, and relative-direction axis data; uses cursor-shape when available and falls back to the system cursor theme |
 | Pointer capture | Implements `zwp_pointer_constraints_v1` confinement/locking and lazily creates `zwp_relative_pointer_v1` only for subscribed or locked surfaces |
+| Pointer gestures | Implements `zwp_pointer_gestures_v1` swipe, pinch/pan/rotation, and v3 hold lifecycles with per-seat objects and surface-safe routing |
 | Text input | Implements seat-scoped `zwp_text_input_v3`, atomic preedit/commit/delete batches, retained editor state, UTF-8 byte offsets, content hints and cursor rectangles |
 
 ## Basic use
@@ -193,6 +194,37 @@ in `RuntimeCapabilities` before enabling optional behavior.
 `cargo run -p wayland-client-runtime --example pointer_capture_smoke` provides
 an interactive confinement and relative-motion probe.
 
+## Pointer axis frames
+
+`PointerEventKind::Axis` preserves both axes of one `wl_pointer.frame` as
+`PointerAxisValue`. Continuous compositor-coordinate deltas remain available
+without conversion, while `value120` retains partial high-resolution wheel
+steps and deprecated `discrete` values remain as a fallback. Per-axis stop and
+relative physical direction plus the frame's wheel, finger, continuous, or
+wheel-tilt source are also retained.
+
+`PointerAxisValue::logical_steps` prefers `value120 / 120` and then discrete
+steps. It returns `None` for touchpad/continuous-only input instead of guessing
+a line-to-pixel ratio. Values retain Wayland's sign convention so policy layers
+can apply their own coordinate convention exactly once.
+
+## Pointer gestures
+
+When `RuntimeCapabilities::pointer_gestures_v1` is true, every live pointer
+seat owns swipe and pinch gesture objects. `Event::PointerGesture` reports the
+full begin/update/end lifecycle without filtering finger counts. Swipe updates
+preserve the surface-coordinate movement since the previous event. Pinch
+updates preserve center movement, absolute scale relative to begin, and
+clockwise rotation in degrees since the previous event, allowing policy layers
+to derive pan, zoom, and rotation without a lossy cross-platform conversion.
+
+Begin and end events retain opaque seat-scoped input serials and compositor
+timestamps; an end also distinguishes completion from cancellation. Hold has
+no update stage and is available when `pointer_gesture_hold_v1` is true (global
+version 3). Gesture objects are created and destroyed with the seat's
+`wl_pointer`, and active routing is cleared when its target surface disappears,
+so a late update cannot be delivered to a destroyed surface.
+
 ## Fractional scaling
 
 Fractional scaling is enabled only when both `wp-fractional-scale-v1` and
@@ -282,7 +314,7 @@ session, so the next `enter` always starts from a complete state.
 ## Internal module boundary
 
 Protocol-specific ownership and dispatch are kept in focused modules:
-`activation`, `fractional_scale`, `layer_shell`, `output`,
+`activation`, `fractional_scale`, `layer_shell`, `output`, `pointer_axis`,
 `pointer_constraints`, `text_input`, `toplevel_icon`,
 `toplevel_interaction`, `touch`, and the shared SHM pixel formatter. `Runtime`
 binds those modules and translates their callbacks into crate-owned events,

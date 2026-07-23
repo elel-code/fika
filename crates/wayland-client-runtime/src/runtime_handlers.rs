@@ -334,6 +334,17 @@ impl SeatHandler for RuntimeState {
                     .ok();
                 if objects.pointer.is_some() {
                     objects.pointer_session.attach();
+                    objects.pointer_gestures = self.pointer_gesture_manager.as_ref().map(|manager| {
+                        manager.create_seat_gestures(
+                            objects
+                                .pointer
+                                .as_ref()
+                                .expect("pointer was just created")
+                                .pointer(),
+                            &seat,
+                            qh,
+                        )
+                    });
                 }
             }
             Capability::Touch if objects.touch.is_none() => {
@@ -365,6 +376,7 @@ impl SeatHandler for RuntimeState {
                 }
             }
             Capability::Pointer => {
+                objects.pointer_gestures.take();
                 objects.pointer_session.detach();
                 objects.pointer.take();
                 objects.pointer_presses.clear();
@@ -558,11 +570,12 @@ impl PointerHandler for RuntimeState {
                     time,
                     horizontal,
                     vertical,
-                    ..
+                    source,
                 } => PointerEventKind::Axis {
                     time: *time,
-                    horizontal: horizontal.absolute,
-                    vertical: vertical.absolute,
+                    horizontal: map_axis_value(*horizontal),
+                    vertical: map_axis_value(*vertical),
+                    source: map_axis_source(*source),
                 },
             };
             self.events.push_back(Event::Pointer(PointerEvent {

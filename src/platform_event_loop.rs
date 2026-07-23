@@ -151,7 +151,9 @@ impl EventLoop {
             Event::Surface(event) => self.dispatch_surface_event(app, event),
             Event::LayerSurface(_) | Event::Output(_) => Ok(()),
             Event::Activation(_) => Ok(()),
-            Event::PointerConstraint(_) | Event::RelativePointer(_) => Ok(()),
+            Event::PointerConstraint(_)
+            | Event::RelativePointer(_)
+            | Event::PointerGesture(_) => Ok(()),
             Event::TextInput(event) => {
                 self.dispatch_text_input_event(app, event);
                 Ok(())
@@ -186,8 +188,8 @@ impl EventLoop {
                         ..
                     } => WindowEvent::MouseWheel {
                         delta: MouseScrollDelta::PixelDelta(PhysicalPosition::new(
-                            -horizontal * scale,
-                            -vertical * scale,
+                            -horizontal.continuous * scale,
+                            -vertical.continuous * scale,
                         )),
                     },
                 };
