@@ -440,13 +440,22 @@ enum ShellInternalDragPreviewSource {
     PaneItem {
         directory: PathBuf,
         entry: Entry,
+        label: String,
         icon_size: f32,
         folder_preview: Option<FolderPreviewReady>,
     },
     Place {
+        label: String,
         icon_name: String,
         icon_size: f32,
     },
+}
+impl ShellInternalDragPreviewSource {
+    fn label(&self) -> &str {
+        match self {
+            Self::PaneItem { label, .. } | Self::Place { label, .. } => label,
+        }
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// One active incoming Wayland offer, including offers from this client.

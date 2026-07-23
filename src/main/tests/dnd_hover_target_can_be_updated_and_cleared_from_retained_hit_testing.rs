@@ -229,6 +229,60 @@
     }
 
     #[test]
+    fn compact_and_details_pointer_drags_activate_after_crossing_threshold() {
+        let size = PhysicalSize::new(1100, 600);
+        for view_mode in [ShellViewMode::Compact, ShellViewMode::Details] {
+            let mut scene = test_scene(vec![test_entry("note.txt", false)], view_mode);
+            assert!(scene.set_scale_factor(1.5, size));
+            let projection = scene
+                .pane_projection(ShellPaneId::SLOT_0, size)
+                .expect("pane projection");
+            let item = projection.visible_items[0].layout;
+            let start = ViewPoint {
+                x: projection.geometry.content.x
+                    + item.visual_rect.x
+                    + item.visual_rect.width / 2.0,
+                y: projection.geometry.content.y
+                    + item.visual_rect.y
+                    + item.visual_rect.height / 2.0,
+            };
+            let expected_icon_size = item.icon_rect.width.max(item.icon_rect.height);
+
+            assert!(scene.begin_pane_pointer(
+                SelectionClick {
+                    point: start,
+                    extend: false,
+                    toggle: false,
+                },
+                size,
+            ));
+            assert!(!scene.internal_drag_active(), "view_mode={view_mode:?}");
+
+            let moved = ViewPoint {
+                x: start.x + RUBBER_BAND_START_THRESHOLD + 2.0,
+                y: start.y,
+            };
+            assert!(scene.set_pointer(moved, size));
+            assert!(scene.internal_drag_active(), "view_mode={view_mode:?}");
+
+            let preview = scene
+                .active_internal_drag_preview_source(size)
+                .expect("active drag preview source");
+            match preview {
+                ShellInternalDragPreviewSource::PaneItem {
+                    label, icon_size, ..
+                } => {
+                    assert_eq!(label, "note.txt", "view_mode={view_mode:?}");
+                    assert_eq!(icon_size, expected_icon_size, "view_mode={view_mode:?}");
+                }
+                ShellInternalDragPreviewSource::Place { .. } => {
+                    panic!("pane pointer drag returned a place preview")
+                }
+            }
+        }
+    }
+
+    #[test]
     fn external_drag_rejects_plain_files_and_clears_hover() {
         let mut scene = test_scene(vec![test_entry("note.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);

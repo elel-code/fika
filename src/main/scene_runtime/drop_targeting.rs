@@ -219,6 +219,7 @@ impl ShellScene {
                 Some(ShellInternalDragPreviewSource::PaneItem {
                     directory: pane.path.to_path_buf(),
                     entry,
+                    label: drag.label.clone(),
                     icon_size,
                     folder_preview,
                 })
@@ -231,8 +232,9 @@ impl ShellScene {
                     place.icon_name
                 };
                 Some(ShellInternalDragPreviewSource::Place {
+                    label: drag.label.clone(),
                     icon_name: icon_name.to_string(),
-                    icon_size: self.scale_metric(128.0),
+                    icon_size: self.scale_metric(PLACES_ICON_SIZE),
                 })
             }
         }

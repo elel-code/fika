@@ -1,16 +1,52 @@
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct OutgoingDndPreviewMetrics {
-    canvas_size: u32,
+    canvas_width: u32,
+    canvas_height: u32,
     icon_size: u32,
     outline: i32,
-    unit: f32,
+    buffer_scale: i32,
+    icon_rect: PixelRect,
+    label_rect: Option<PixelRect>,
+}
+
+#[derive(Clone, Debug)]
+struct OutgoingDndPreviewLabelRaster {
+    alpha: Arc<[u8]>,
+    width: u32,
+    height: u32,
+}
+
+impl OutgoingDndPreviewMetrics {
+    fn with_label(mut self, has_label: bool) -> Self {
+        if !has_label {
+            return self;
+        }
+        let minimum_width =
+            scaled_preview_dimension(DND_PREVIEW_LABEL_MIN_WIDTH, self.buffer_scale);
+        self.canvas_width = self.canvas_width.max(minimum_width);
+        self.canvas_width = align_preview_dimension(self.canvas_width, self.buffer_scale);
+        self.icon_rect.x = (self.canvas_width as i32 - self.icon_size as i32) / 2;
+        let label_height =
+            scaled_preview_dimension(DND_PREVIEW_LABEL_HEIGHT, self.buffer_scale);
+        self.label_rect = Some(PixelRect::new(
+            0,
+            self.canvas_height as i32,
+            self.canvas_width as i32,
+            label_height as i32,
+        ));
+        self.canvas_height = align_preview_dimension(
+            self.canvas_height.saturating_add(label_height),
+            self.buffer_scale,
+        );
+        self
+    }
 }
 
 fn outgoing_dnd_preview_icon_size(
     source: Option<&ShellInternalDragPreviewSource>,
     scale: f32,
 ) -> u32 {
-    let unit = scale.clamp(1.0, 2.0);
+    let unit = normalized_scale_factor(scale).max(1.0);
     match source {
         Some(ShellInternalDragPreviewSource::PaneItem { icon_size, .. })
         | Some(ShellInternalDragPreviewSource::Place { icon_size, .. }) => {
@@ -21,22 +57,48 @@ fn outgoing_dnd_preview_icon_size(
 }
 
 fn outgoing_dnd_preview_metrics(icon_size: u32, scale: f32) -> OutgoingDndPreviewMetrics {
-    let unit = scale.clamp(1.0, 2.0);
-    let outline = (DEEPIN_DND_ICON_OUTLINE * unit).round() as i32;
+    let logical_scale = normalized_scale_factor(scale).max(1.0);
+    let buffer_scale = logical_scale.round().max(1.0) as i32;
+    let logical_icon_size = (icon_size as f32 / logical_scale).clamp(16.0, 256.0);
+    let icon_size = scaled_preview_dimension(logical_icon_size, buffer_scale);
+    let outline = scaled_preview_dimension(DND_PREVIEW_ICON_OUTLINE, buffer_scale) as i32;
+    let canvas_width = align_preview_dimension(
+        icon_size.saturating_add(outline.max(0) as u32 * 2),
+        buffer_scale,
+    );
     OutgoingDndPreviewMetrics {
-        canvas_size: icon_size + outline.max(0) as u32 * 2,
+        canvas_width,
+        canvas_height: canvas_width,
         icon_size,
         outline,
-        unit,
+        buffer_scale,
+        icon_rect: PixelRect::new(
+            (canvas_width as i32 - icon_size as i32) / 2,
+            outline,
+            icon_size as i32,
+            icon_size as i32,
+        ),
+        label_rect: None,
     }
 }
 
+#[cfg(test)]
 fn outgoing_dnd_preview_pixels(
     paths: &[PathBuf],
     metrics: OutgoingDndPreviewMetrics,
     raster: Option<&OutgoingDndPreviewRaster>,
 ) -> Vec<u8> {
-    let mut pixels = vec![0; (metrics.canvas_size * metrics.canvas_size * 4) as usize];
+    outgoing_dnd_preview_pixels_with_label(paths, metrics, raster, None, [55, 120, 210, 230])
+}
+
+fn outgoing_dnd_preview_pixels_with_label(
+    paths: &[PathBuf],
+    metrics: OutgoingDndPreviewMetrics,
+    raster: Option<&OutgoingDndPreviewRaster>,
+    label: Option<&OutgoingDndPreviewLabelRaster>,
+    label_color: [u8; 4],
+) -> Vec<u8> {
+    let mut pixels = vec![0; (metrics.canvas_width * metrics.canvas_height * 4) as usize];
     let count = paths.len().max(1);
     let is_dir = paths.first().is_some_and(|path| path.is_dir());
     let fallback;
@@ -47,18 +109,14 @@ fn outgoing_dnd_preview_pixels(
             &fallback
         }
     };
-    let icon_rect = PixelRect::new(
-        metrics.outline,
-        metrics.outline,
-        metrics.icon_size as i32,
-        metrics.icon_size as i32,
-    );
+    let icon_rect = metrics.icon_rect;
     let ghost_count = count.saturating_sub(1).min(DEEPIN_DND_ICON_MAX - 1);
     for index in (0..ghost_count).rev() {
         let opacity = 1.0 - (index as f32 + 5.0) * DEEPIN_DND_ICON_OPACITY;
         draw_raster_rotated(
             &mut pixels,
-            metrics.canvas_size,
+            metrics.canvas_width,
+            metrics.canvas_height,
             raster,
             icon_rect,
             deepin_drag_icon_rotation(index),
@@ -67,7 +125,8 @@ fn outgoing_dnd_preview_pixels(
     }
     draw_raster_rotated(
         &mut pixels,
-        metrics.canvas_size,
+        metrics.canvas_width,
+        metrics.canvas_height,
         raster,
         icon_rect,
         0.0,
@@ -76,7 +135,21 @@ fn outgoing_dnd_preview_pixels(
     if count > 1 {
         draw_count_badge(&mut pixels, metrics, count);
     }
+    if let (Some(label_rect), Some(label)) = (metrics.label_rect, label) {
+        draw_label_background(&mut pixels, metrics, label_rect, label_color);
+        draw_label_alpha(&mut pixels, metrics, label_rect, label);
+    }
     pixels
+}
+
+fn scaled_preview_dimension(logical: f32, buffer_scale: i32) -> u32 {
+    let scale = buffer_scale.max(1) as f32;
+    align_preview_dimension((logical.max(1.0) * scale).round().max(1.0) as u32, buffer_scale)
+}
+
+fn align_preview_dimension(value: u32, buffer_scale: i32) -> u32 {
+    let scale = buffer_scale.max(1) as u32;
+    value.max(scale).div_ceil(scale) * scale
 }
 
 fn deepin_drag_icon_rotation(index: usize) -> f32 {
@@ -165,13 +238,14 @@ fn draw_count_badge(pixels: &mut [u8], metrics: OutgoingDndPreviewMetrics, count
     } else {
         24.0
     };
-    let radius = (length * metrics.unit / 2.0).round() as i32;
-    let inset = (10.0 * metrics.unit).round() as i32;
-    let center_x = metrics.outline + metrics.icon_size as i32 - inset;
-    let center_y = metrics.outline + metrics.icon_size as i32 - inset;
+    let scale = metrics.buffer_scale as f32;
+    let radius = (length * scale / 2.0).round() as i32;
+    let inset = (10.0 * scale).round() as i32;
+    let center_x = metrics.icon_rect.right() - inset;
+    let center_y = metrics.icon_rect.bottom() - inset;
     draw_circle(
         pixels,
-        metrics.canvas_size,
+        metrics.canvas_width,
         center_x,
         center_y,
         radius,
@@ -179,7 +253,7 @@ fn draw_count_badge(pixels: &mut [u8], metrics: OutgoingDndPreviewMetrics, count
     );
     draw_circle_outline(
         pixels,
-        metrics.canvas_size,
+        metrics.canvas_width,
         center_x,
         center_y,
         radius,
@@ -193,16 +267,16 @@ fn draw_count_badge(pixels: &mut [u8], metrics: OutgoingDndPreviewMetrics, count
     let digit_scale = if label.len() > 2 { 2.0 } else { 3.0 };
     draw_digit_label(
         pixels,
-        metrics.canvas_size,
+        metrics.canvas_width,
         &label,
         center_x,
         center_y,
-        (digit_scale * metrics.unit).round().max(2.0) as i32,
+        (digit_scale * scale).round().max(2.0) as i32,
         [255, 255, 255, 255],
     );
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PixelRect {
     x: i32,
     y: i32,
@@ -231,7 +305,8 @@ impl PixelRect {
 
 fn draw_raster_rotated(
     pixels: &mut [u8],
-    canvas_size: u32,
+    canvas_width: u32,
+    canvas_height: u32,
     raster: &IconRaster,
     rect: PixelRect,
     angle_degrees: f32,
@@ -248,9 +323,9 @@ fn draw_raster_rotated(
     let radians = angle_degrees.to_radians();
     let (sin, cos) = radians.sin_cos();
     let min_x = (center_x as i32 - radius).max(0);
-    let max_x = (center_x as i32 + radius + 1).min(canvas_size as i32);
+    let max_x = (center_x as i32 + radius + 1).min(canvas_width as i32);
     let min_y = (center_y as i32 - radius).max(0);
-    let max_y = (center_y as i32 + radius + 1).min(canvas_size as i32);
+    let max_y = (center_y as i32 + radius + 1).min(canvas_height as i32);
     for y in min_y..max_y {
         for x in min_x..max_x {
             let dx = x as f32 + 0.5 - center_x;
@@ -267,7 +342,74 @@ fn draw_raster_rotated(
             let source_x = local_x / rect.width as f32 * (raster.width as f32 - 1.0);
             let source_y = local_y / rect.height as f32 * (raster.height as f32 - 1.0);
             if let Some(color) = sample_raster_bilinear(raster, source_x, source_y, opacity) {
-                blend_pixel(pixels, canvas_size, x, y, color);
+                blend_pixel_rect(pixels, canvas_width, canvas_height, x, y, color);
+            }
+        }
+    }
+}
+
+fn draw_label_background(
+    pixels: &mut [u8],
+    metrics: OutgoingDndPreviewMetrics,
+    rect: PixelRect,
+    color: [u8; 4],
+) {
+    draw_rounded_rect_rect(
+        pixels,
+        metrics.canvas_width,
+        metrics.canvas_height,
+        rect,
+        (4 * metrics.buffer_scale).max(1),
+        color,
+    );
+}
+
+fn draw_label_alpha(
+    pixels: &mut [u8],
+    metrics: OutgoingDndPreviewMetrics,
+    rect: PixelRect,
+    label: &OutgoingDndPreviewLabelRaster,
+) {
+    let width = rect.width.min(label.width as i32).max(0) as u32;
+    let height = rect.height.min(label.height as i32).max(0) as u32;
+    for y in 0..height {
+        for x in 0..width {
+            let alpha = label.alpha[(y * label.width + x) as usize];
+            if alpha == 0 {
+                continue;
+            }
+            blend_pixel_rect(
+                pixels,
+                metrics.canvas_width,
+                metrics.canvas_height,
+                rect.x + x as i32,
+                rect.y + y as i32,
+                [255, 255, 255, alpha],
+            );
+        }
+    }
+}
+
+fn draw_rounded_rect_rect(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    rect: PixelRect,
+    radius: i32,
+    color: [u8; 4],
+) {
+    if color[3] == 0 {
+        return;
+    }
+    let radius = radius.max(0).min(rect.width / 2).min(rect.height / 2);
+    let min_x = rect.x.max(0);
+    let max_x = rect.right().min(width as i32);
+    let min_y = rect.y.max(0);
+    let max_y = rect.bottom().min(height as i32);
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            if rounded_rect_contains(rect, radius, x, y) {
+                blend_pixel_rect(pixels, width, height, x, y, color);
             }
         }
     }
@@ -533,10 +675,21 @@ fn digit_pattern(ch: char) -> Option<[&'static str; 5]> {
 }
 
 fn blend_pixel(pixels: &mut [u8], size: u32, x: i32, y: i32, src: [u8; 4]) {
-    if x < 0 || y < 0 || x >= size as i32 || y >= size as i32 || src[3] == 0 {
+    blend_pixel_rect(pixels, size, size, x, y, src);
+}
+
+fn blend_pixel_rect(
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    src: [u8; 4],
+) {
+    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 || src[3] == 0 {
         return;
     }
-    let offset = ((y as u32 * size + x as u32) * 4) as usize;
+    let offset = ((y as u32 * width + x as u32) * 4) as usize;
     let src_a = src[3] as u16;
     let inv_a = 255 - src_a;
     let dst_a = pixels[offset + 3] as u16;
@@ -578,4 +731,3 @@ fn external_drag_drop_sources(
         event_paths
     }
 }
-

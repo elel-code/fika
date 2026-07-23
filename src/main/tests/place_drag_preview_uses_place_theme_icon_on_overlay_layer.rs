@@ -10,7 +10,7 @@
             false,
         )];
         let icon_name = scene.places[0].icon_name;
-        let icon_size = icon_cache_size(scene.scale_metric(128.0));
+        let icon_size = icon_cache_size(scene.scale_metric(PLACES_ICON_SIZE));
         let icon_path = PathBuf::from("/tmp/fika-place-preview-icon.png");
         let key = FileIconPathCacheKey {
             role: FileIconRoleCacheKey {
@@ -65,10 +65,13 @@
             size,
         );
         scene.push_drag_preview_overlay(&mut vertices, &mut text, &mut icons, scene.theme(), size);
+        let text_frame = text.finish();
         let frame = icons.finish();
 
         assert!(!frame.overlay_vertices.is_empty());
         assert!(frame.vertices.is_empty());
+        assert_eq!(text_frame.stats.labels, 1);
+        assert_eq!(text_frame.stats.quads, 1);
     }
 
     #[test]

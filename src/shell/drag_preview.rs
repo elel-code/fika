@@ -6,7 +6,8 @@ use crate::shell::render::quad::{QuadVertex, push_clipped_rounded_rect};
 use crate::shell::theme::{ShellTheme, UiColor};
 use crate::shell::ui_chrome::{push_fallback_file_icon, push_place_icon};
 use crate::{
-    IconDrawLayer, IconFrameBuilder, ItemPixmapLayout, LabelAlignment, NamedIconFallback,
+    DND_PREVIEW_ICON_OUTLINE, DND_PREVIEW_LABEL_HEIGHT, DND_PREVIEW_LABEL_MIN_WIDTH, IconDrawLayer,
+    IconFrameBuilder, ItemPixmapLayout, LabelAlignment, NamedIconFallback, PLACES_ICON_SIZE,
     ShellInternalDrag, ShellInternalDragSource, ShellScene, TextFrameBuilder, intersect_rect,
     place_icon_paint, translated_rect,
 };
@@ -41,6 +42,7 @@ pub(crate) fn push_drag_preview_overlay(
 
     push_deepin_drag_icon_stack(&paint, vertices, icons, top_icon, drag);
 
+    push_deepin_drag_label(&paint, vertices, text, rect, drag);
     if drag.paths.len() > 1 {
         push_deepin_drag_count_badge(
             &paint,
@@ -50,8 +52,6 @@ pub(crate) fn push_drag_preview_overlay(
             drag.paths.len(),
             theme.drag_preview().badge,
         );
-    } else {
-        push_deepin_drag_label(&paint, vertices, text, rect, top_icon, drag);
     }
 }
 
@@ -73,16 +73,22 @@ fn drag_preview_rect(
     let icon_size = drag_preview_icon_size(scene, drag, size);
     let outline = drag_preview_icon_outline(scene);
     let pixmap_size = icon_size + outline * 2.0;
-    let text_extra = if drag.paths.len() == 1 {
-        (scene.text_line_height() * 2.0 - outline).max(0.0)
+    let has_label = !drag.label.is_empty();
+    let label_width = if has_label {
+        scene.scale_metric(DND_PREVIEW_LABEL_MIN_WIDTH)
     } else {
         0.0
     };
-    let width = pixmap_size;
-    let height = pixmap_size + text_extra;
+    let label_height = if has_label {
+        scene.scale_metric(DND_PREVIEW_LABEL_HEIGHT)
+    } else {
+        0.0
+    };
+    let width = pixmap_size.max(label_width);
+    let height = pixmap_size + label_height;
     ViewRect {
         x: drag.current.x - width / 2.0,
-        y: drag.current.y - height / 2.0,
+        y: drag.current.y - outline - icon_size / 2.0,
         width,
         height,
     }
@@ -95,10 +101,9 @@ fn drag_preview_top_icon_rect(
 ) -> ViewRect {
     let rect = drag_preview_rect(scene, drag, size);
     let icon_size = drag_preview_icon_size(scene, drag, size);
-    let outline = drag_preview_icon_outline(scene);
     ViewRect {
-        x: rect.x + outline,
-        y: rect.y + outline,
+        x: rect.x + (rect.width - icon_size) / 2.0,
+        y: drag.current.y - icon_size / 2.0,
         width: icon_size,
         height: icon_size,
     }
@@ -127,12 +132,12 @@ fn drag_preview_icon_size(
             view.map(|view| scene.drag_preview_icon_size_for_pane_item(view, item_layout))
                 .unwrap_or_else(|| scene.scale_metric(128.0))
         }
-        ShellInternalDragSource::Place { .. } => scene.scale_metric(128.0),
+        ShellInternalDragSource::Place { .. } => scene.scale_metric(PLACES_ICON_SIZE),
     }
 }
 
 fn drag_preview_icon_outline(scene: &ShellScene) -> f32 {
-    scene.scale_metric(30.0)
+    scene.scale_metric(DND_PREVIEW_ICON_OUTLINE)
 }
 
 fn push_deepin_drag_icon_stack(
@@ -246,18 +251,16 @@ fn push_deepin_drag_label(
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
     rect: ViewRect,
-    icon: ViewRect,
     drag: &ShellInternalDrag,
 ) {
     if drag.label.is_empty() {
         return;
     }
-    let text_width = (rect.width - drag_preview_icon_outline(paint.scene) * 0.5).max(1.0);
     let label_rect = ViewRect {
-        x: rect.x + (rect.width - text_width) / 2.0,
-        y: icon.bottom(),
-        width: text_width,
-        height: paint.scene.text_line_height() * 2.0,
+        x: rect.x,
+        y: rect.bottom() - paint.scene.scale_metric(DND_PREVIEW_LABEL_HEIGHT),
+        width: rect.width,
+        height: paint.scene.scale_metric(DND_PREVIEW_LABEL_HEIGHT),
     };
     let mut background = paint.theme.accent();
     background[3] = 0.90;
