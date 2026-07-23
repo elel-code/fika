@@ -120,6 +120,14 @@ that surface, destroyed before focus moves elsewhere, and recreated from the
 retained state on a later enter. This preserves the protocol's one-constraint
 rule without leaking seat or proxy identities into application code.
 
+`PointerConstraintRegion::SurfaceInput` sends the protocol's NULL region and
+therefore follows the current surface input region. `Rectangles` preserves an
+arbitrary union of surface-local rectangles, including an intentionally empty
+region. Empty rectangle dimensions and values outside Wayland's signed integer
+range are rejected before any request is sent. Changing the region of an
+existing constraint uses `set_region`; the update is double-buffered and takes
+effect on the next `Runtime::commit`.
+
 `PointerConstraintEvent` reports whether the compositor has activated or
 deactivated the requested lock/confinement. When `relative_pointer_v1` is
 available, locked surfaces receive `RelativePointerEvent` automatically. An
@@ -134,6 +142,9 @@ position used when a lock ends. It is a hint rather than a pointer warp and is
 double-buffered with `wl_surface`, so apply it with the next
 `Runtime::commit`. Inspect `pointer_constraints_v1` and `relative_pointer_v1`
 in `RuntimeCapabilities` before enabling optional behavior.
+
+`cargo run -p wayland-client-runtime --example pointer_capture_smoke` provides
+an interactive confinement and relative-motion probe.
 
 ## Fractional scaling
 

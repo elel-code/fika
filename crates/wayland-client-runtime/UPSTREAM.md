@@ -170,9 +170,12 @@ seat lookup instead of scanning every seat for a matching object.
 Pointer capture was reviewed against winit main at
 `d84ec647d80d9ef76c5a42b948c852b8e0db9210`, winit 0.30.13, and the
 `pointer-constraints-unstable-v1` / `relative-pointer-unstable-v1`
-specifications. The retained behaviors are persistent whole-surface
-confinement and locking, relative motion with unaccelerated deltas, and a
-locked-pointer restoration hint.
+specifications. The retained behaviors are persistent confinement and locking,
+relative motion with unaccelerated deltas, and a
+locked-pointer restoration hint. The runtime also exposes the protocol's full
+region model: NULL surface-input regions, arbitrary rectangle unions, empty
+regions, and double-buffered `set_region` updates without replacing an
+otherwise unchanged constraint object.
 
 This runtime additionally owns constraint activation state and lifecycle in a
 dedicated per-seat session. It destroys a constraint before moving that pointer

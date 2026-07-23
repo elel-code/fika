@@ -37,7 +37,8 @@ pub use event::{
 pub use geometry::{LogicalPosition, LogicalRect, LogicalSize, SuggestedSize};
 pub use input::{CursorIcon, InputSerial, InputSerialSource};
 pub use pointer_constraints::{
-    PointerCaptureState, PointerConstraint, PointerConstraintEvent, RelativePointerEvent,
+    PointerCaptureState, PointerConstraint, PointerConstraintError, PointerConstraintEvent,
+    PointerConstraintRegion, RelativePointerEvent,
 };
 pub use runtime::{Runtime, RuntimeCapabilities, RuntimeError, RuntimeOptions, WakeHandle};
 pub use surface::{

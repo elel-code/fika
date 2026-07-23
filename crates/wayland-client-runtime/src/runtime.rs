@@ -11,7 +11,9 @@ use crate::event::{
 };
 use crate::fractional_scale::{FractionalScaleHandler, FractionalScaleManager};
 use crate::input::{InputSerial, InputSerialSource};
-use crate::pointer_constraints::{PointerProtocols, SeatPointerSession};
+use crate::pointer_constraints::{
+    PointerCaptureTarget, PointerProtocols, SeatPointerSession, validate_pointer_capture_state,
+};
 use crate::shm_format::copy_rgba_to_premultiplied_argb8888;
 use crate::surface::{
     DecorationPreference, Gravity, ManagedBlur, PopupAnchor, PopupPositioner, ProtocolSurface,
@@ -23,8 +25,9 @@ use crate::touch::{TouchData, TouchHandler, TouchPoints};
 use crate::{
     ActivationEvent, ActivationRequestId, ActivationToken, ActivationTokenAttributes, BlurRegion,
     BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize, PointerCaptureState,
-    PointerConstraint, PopupAttributes, RelativePointerEvent, SuggestedSize, TextInputEvent,
-    TextInputState, ToplevelAttributes, ToplevelIcon,
+    PointerConstraint, PointerConstraintError, PointerConstraintRegion, PopupAttributes,
+    RelativePointerEvent, SuggestedSize, TextInputEvent, TextInputState, ToplevelAttributes,
+    ToplevelIcon,
 };
 use smithay_client_toolkit::background_effect::{
     BackgroundEffectHandler, BackgroundEffectState,
@@ -159,6 +162,8 @@ pub enum RuntimeError {
     Unsupported(&'static str),
     #[error("surface {0:?} has not requested a locked pointer")]
     PointerNotLocked(SurfaceId),
+    #[error("invalid pointer constraint: {0}")]
+    InvalidPointerConstraint(#[from] PointerConstraintError),
     #[error("Wayland protocol operation failed: {0}")]
     Protocol(String),
 }
@@ -802,6 +807,7 @@ impl Runtime {
         surface: SurfaceId,
         state: PointerCaptureState,
     ) -> Result<(), RuntimeError> {
+        validate_pointer_capture_state(&state)?;
         if state.constraint != PointerConstraint::None
             && !self.state.pointer_protocols.has_constraints()
         {
@@ -819,16 +825,24 @@ impl Runtime {
         {
             return Ok(());
         }
+        let region = if state.constraint == PointerConstraint::None {
+            None
+        } else {
+            make_pointer_constraint_region(&self.state.compositor, &state.region)?
+        };
 
         for objects in self.state.seats.values_mut() {
             let Some(pointer) = objects.pointer.as_ref() else {
                 continue;
             };
             objects.pointer_session.sync_capture(
-                surface,
-                shared.wl_surface(),
-                pointer.pointer(),
-                state,
+                PointerCaptureTarget::new(
+                    surface,
+                    shared.wl_surface(),
+                    pointer.pointer(),
+                    region.as_ref().map(Region::wl_region),
+                ),
+                &state,
                 &self.state.pointer_protocols,
                 &self.queue_handle,
             )?;
@@ -847,10 +861,11 @@ impl Runtime {
         constraint: PointerConstraint,
     ) -> Result<(), RuntimeError> {
         let shared = self.surface_shared(surface)?;
-        let mut state = *shared
+        let mut state = shared
             .pointer_capture
             .lock()
-            .expect("surface pointer capture mutex poisoned");
+            .expect("surface pointer capture mutex poisoned")
+            .clone();
         state.constraint = constraint;
         self.set_pointer_capture_state(surface, state)
     }
@@ -865,11 +880,31 @@ impl Runtime {
         enabled: bool,
     ) -> Result<(), RuntimeError> {
         let shared = self.surface_shared(surface)?;
-        let mut state = *shared
+        let mut state = shared
             .pointer_capture
             .lock()
-            .expect("surface pointer capture mutex poisoned");
+            .expect("surface pointer capture mutex poisoned")
+            .clone();
         state.relative_motion = enabled;
+        self.set_pointer_capture_state(surface, state)
+    }
+
+    /// Change only the activation region of a surface's retained constraint.
+    ///
+    /// Region updates on an existing constraint are double-buffered with the
+    /// target `wl_surface`; call [`Runtime::commit`] to apply the change.
+    pub fn set_pointer_constraint_region(
+        &mut self,
+        surface: SurfaceId,
+        region: PointerConstraintRegion,
+    ) -> Result<(), RuntimeError> {
+        let shared = self.surface_shared(surface)?;
+        let mut state = shared
+            .pointer_capture
+            .lock()
+            .expect("surface pointer capture mutex poisoned")
+            .clone();
+        state.region = region;
         self.set_pointer_capture_state(surface, state)
     }
 
@@ -1067,6 +1102,25 @@ fn validate_viewport_destination(size: Option<LogicalSize>) -> Result<(), Runtim
         ));
     }
     Ok(())
+}
+
+fn make_pointer_constraint_region(
+    compositor: &CompositorState,
+    region: &PointerConstraintRegion,
+) -> Result<Option<Region>, RuntimeError> {
+    let PointerConstraintRegion::Rectangles(rectangles) = region else {
+        return Ok(None);
+    };
+    let wire_region = Region::new(compositor)?;
+    for rectangle in rectangles {
+        wire_region.add(
+            rectangle.origin.x,
+            rectangle.origin.y,
+            rectangle.size.width as i32,
+            rectangle.size.height as i32,
+        );
+    }
+    Ok(Some(wire_region))
 }
 
 fn validate_activation_target(surface: SurfaceId, kind: SurfaceKind) -> Result<(), RuntimeError> {
@@ -1455,17 +1509,7 @@ impl RelativePointerHandler for RuntimeState {
         let Some(surface) = session.focus() else {
             return;
         };
-        let capture = self
-            .surfaces
-            .get(&surface)
-            .map(|shared| {
-                *shared
-                    .pointer_capture
-                    .lock()
-                    .expect("surface pointer capture mutex poisoned")
-            })
-            .unwrap_or_default();
-        if !session.should_emit_relative(capture) {
+        if !session.should_emit_relative() {
             return;
         }
         self.events

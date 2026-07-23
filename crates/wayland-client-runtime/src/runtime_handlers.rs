@@ -392,21 +392,35 @@ impl PointerHandler for RuntimeState {
                         .surfaces
                         .get(&surface)
                         .map(|shared| {
-                            *shared
+                            shared
                                 .pointer_capture
                                 .lock()
                                 .expect("surface pointer capture mutex poisoned")
+                                .clone()
                         })
                         .unwrap_or_default();
+                    let region = if capture.constraint == PointerConstraint::None {
+                        Ok(None)
+                    } else {
+                        make_pointer_constraint_region(&self.compositor, &capture.region)
+                    };
                     if let Some(objects) = self.seats.get_mut(&seat_id) {
-                        let _ = objects.pointer_session.enter(
-                            surface,
-                            &event.surface,
-                            pointer,
-                            capture,
-                            &self.pointer_protocols,
-                            qh,
-                        );
+                        match region {
+                            Ok(region) => {
+                                let _ = objects.pointer_session.enter(
+                                    PointerCaptureTarget::new(
+                                        surface,
+                                        &event.surface,
+                                        pointer,
+                                        region.as_ref().map(Region::wl_region),
+                                    ),
+                                    &capture,
+                                    &self.pointer_protocols,
+                                    qh,
+                                );
+                            }
+                            Err(_) => objects.pointer_session.focus_enter(surface),
+                        }
                     }
                     PointerEventKind::Enter {
                         serial: InputSerial::new(
