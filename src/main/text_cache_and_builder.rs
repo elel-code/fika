@@ -373,7 +373,6 @@ impl TextHitTestRuntime {
         )
     }
 
-    #[cfg(test)]
     fn cursor_x(
         &mut self,
         label: &str,
@@ -419,7 +418,6 @@ impl TextHitTestRuntime {
     }
 }
 
-#[cfg(test)]
 #[derive(Clone, Copy)]
 struct TextCursorLayout {
     rect: ViewRect,

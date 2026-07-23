@@ -20,6 +20,13 @@ impl FikaWgpuApp {
         if event.state != ElementState::Pressed {
             return;
         }
+        if self
+            .window
+            .as_ref()
+            .is_some_and(|window| self.text_input_consumes_key(window.id(), event))
+        {
+            return;
+        }
         let Some(size) = self.renderer.as_ref().map(|renderer| renderer.size) else {
             return;
         };

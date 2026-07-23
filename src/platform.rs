@@ -19,10 +19,17 @@ use wayland_client_runtime::{
     DndAction as RuntimeDndAction, DndActions as RuntimeDndActions, DndEvent,
     DndIcon as RuntimeDndIcon, DndOfferId, DndSourceId, Event, KeyState, KeyboardEvent,
     LogicalPosition, LogicalSize, MimePayload, PointerEventKind, Runtime, RuntimeError,
-    RuntimeOptions, SurfaceEvent, SurfaceHandle, SurfaceId, ToplevelAttributes,
+    RuntimeOptions, SurfaceEvent, SurfaceHandle, SurfaceId,
+    TextInputChangeCause as RuntimeTextInputChangeCause,
+    TextInputContentHint as RuntimeTextInputContentHint,
+    TextInputContentPurpose as RuntimeTextInputContentPurpose,
+    TextInputContentType as RuntimeTextInputContentType, TextInputEvent as RuntimeTextInputEvent,
+    TextInputState as RuntimeTextInputState,
+    TextInputSurroundingText as RuntimeTextInputSurroundingText, ToplevelAttributes,
     ToplevelIcon as RuntimeToplevelIcon, TransferContent, WakeHandle,
 };
 include!("platform_types.rs");
+include!("platform_text_input.rs");
 include!("platform_clipboard.rs");
 #[derive(Clone, Debug)]
 pub struct WindowAttributes {
@@ -111,6 +118,7 @@ enum RuntimeCommand {
     SetMaxSize(SurfaceId, Option<LogicalSize>),
     SetBlur(SurfaceId, BlurState),
     SetCursor(CursorIcon),
+    SetIme(SurfaceId, Option<ImeState>),
     RequestUserAttention(SurfaceId),
     ArmFrame(SurfaceId),
     Destroy(SurfaceId),
@@ -144,6 +152,34 @@ impl LoopShared {
             .push(command);
         self.wake.wake();
     }
+
+    fn push_ime(&self, surface: SurfaceId, state: Option<ImeState>) {
+        let mut commands = self
+            .commands
+            .lock()
+            .expect("Wayland command queue mutex poisoned");
+        queue_ime_command(&mut commands, surface, state);
+        drop(commands);
+        self.wake.wake();
+    }
+}
+
+fn queue_ime_command(
+    commands: &mut Vec<RuntimeCommand>,
+    surface: SurfaceId,
+    state: Option<ImeState>,
+) {
+    for command in commands.iter_mut().rev() {
+        match command {
+            RuntimeCommand::SetIme(candidate, pending) if *candidate == surface => {
+                *pending = state;
+                return;
+            }
+            RuntimeCommand::Destroy(candidate) if *candidate == surface => break,
+            _ => {}
+        }
+    }
+    commands.push(RuntimeCommand::SetIme(surface, state));
 }
 
 pub struct WaylandWindow {
@@ -259,6 +295,10 @@ impl WaylandWindow {
 
     pub fn set_cursor(&self, cursor: CursorIcon) {
         self.shared.push(RuntimeCommand::SetCursor(cursor));
+    }
+
+    pub fn set_ime_state(&self, state: Option<ImeState>) {
+        self.shared.push_ime(self.id, state);
     }
 
     pub fn focus_window(&self) {}

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::shell::pane::ShellPaneId;
+use crate::shell::text_input::ShellTextPreedit;
 
 #[path = "create_rename/disk.rs"]
 pub(crate) mod disk;
@@ -54,6 +55,7 @@ pub(crate) struct ShellCreateDialog {
     pub(crate) name: String,
     pub(crate) error: Option<String>,
     pub(crate) replace_on_insert: bool,
+    pub(crate) preedit: Option<ShellTextPreedit>,
 }
 
 impl ShellCreateDialog {
@@ -72,6 +74,7 @@ impl ShellCreateDialog {
             name,
             error: None,
             replace_on_insert: true,
+            preedit: None,
         }
     }
 }
@@ -106,6 +109,7 @@ pub(crate) struct ShellRenameDialog {
     pub(crate) privileged: bool,
     pub(crate) error: Option<String>,
     pub(crate) replace_on_insert: bool,
+    pub(crate) preedit: Option<ShellTextPreedit>,
 }
 
 impl ShellRenameDialog {
@@ -127,6 +131,7 @@ impl ShellRenameDialog {
             privileged,
             error: None,
             replace_on_insert: true,
+            preedit: None,
         })
     }
 }

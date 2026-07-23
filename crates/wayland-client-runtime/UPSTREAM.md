@@ -147,4 +147,39 @@ runtime owns only the optional manager and the public orchestration methods;
 surface state retains only the applied storage. The same `shm_format` module is
 used by toplevel and drag icons so alpha conversion cannot diverge.
 
+## Text input v3
+
+Text-input behavior was reviewed against winit main at
+`d84ec647d80d9ef76c5a42b948c852b8e0db9210` and the unstable
+`text-input-unstable-v3` specification. The runtime follows its seat-scoped
+focus model, always disables on leave, resends the complete client state after
+enter, and preserves the protocol ordering of delete, commit, and preedit data
+inside one `done` batch.
+
+Unlike winit's cross-platform event stream, this crate exposes the atomic
+Wayland batch directly. The reusable module validates UTF-8 byte offsets and
+the 4000-byte surrounding-text limit, owns pending compositor data and the
+per-seat proxy/session lifecycle, and drops `done` events that target a session
+which is no longer enabled. `Runtime` retains only the desired state for each
+surface and skips equal updates to avoid redundant protocol commits. The seat
+identity travels in the proxy's dispatch data, so enter/leave/done use a direct
+seat lookup instead of scanning every seat for a matching object.
+
+## Pointer constraints and relative motion
+
+Pointer capture was reviewed against winit main at
+`d84ec647d80d9ef76c5a42b948c852b8e0db9210`, winit 0.30.13, and the
+`pointer-constraints-unstable-v1` / `relative-pointer-unstable-v1`
+specifications. The retained behaviors are persistent whole-surface
+confinement and locking, relative motion with unaccelerated deltas, and a
+locked-pointer restoration hint.
+
+This runtime additionally owns constraint activation state and lifecycle in a
+dedicated per-seat session. It destroys a constraint before moving that pointer
+to another surface, recreates it from declarative per-surface state on enter,
+and exposes compositor locked/unlocked or confined/unconfined transitions.
+Relative-pointer objects are lazy: they exist only while a focused surface has
+subscribed to relative motion or requested a lock, avoiding an unconditional
+second high-frequency pointer stream.
+
 Last reviewed: 2026-07-23.

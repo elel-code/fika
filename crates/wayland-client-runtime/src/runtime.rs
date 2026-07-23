@@ -11,17 +11,20 @@ use crate::event::{
 };
 use crate::fractional_scale::{FractionalScaleHandler, FractionalScaleManager};
 use crate::input::{InputSerial, InputSerialSource};
+use crate::pointer_constraints::{PointerProtocols, SeatPointerSession};
 use crate::shm_format::copy_rgba_to_premultiplied_argb8888;
 use crate::surface::{
     DecorationPreference, Gravity, ManagedBlur, PopupAnchor, PopupPositioner, ProtocolSurface,
     SurfaceHandle, SurfaceId, SurfaceKind, SurfaceShared,
 };
 use crate::toplevel_icon::ToplevelIconManager;
+use crate::text_input::{PendingBatch, SeatTextInput, TextInputHandler, TextInputManager};
 use crate::touch::{TouchData, TouchHandler, TouchPoints};
 use crate::{
     ActivationEvent, ActivationRequestId, ActivationToken, ActivationTokenAttributes, BlurRegion,
-    BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize, PopupAttributes,
-    SuggestedSize, ToplevelAttributes, ToplevelIcon,
+    BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize, PointerCaptureState,
+    PointerConstraint, PopupAttributes, RelativePointerEvent, SuggestedSize, TextInputEvent,
+    TextInputState, ToplevelAttributes, ToplevelIcon,
 };
 use smithay_client_toolkit::background_effect::{
     BackgroundEffectHandler, BackgroundEffectState,
@@ -50,6 +53,10 @@ use smithay_client_toolkit::reexports::client::{Connection, Proxy, QueueHandle};
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::{
     xdg_positioner, xdg_toplevel,
 };
+use smithay_client_toolkit::reexports::protocols::wp::pointer_constraints::zv1::client::zwp_confined_pointer_v1::ZwpConfinedPointerV1;
+use smithay_client_toolkit::reexports::protocols::wp::pointer_constraints::zv1::client::zwp_locked_pointer_v1::ZwpLockedPointerV1;
+use smithay_client_toolkit::reexports::protocols::wp::relative_pointer::zv1::client::zwp_relative_pointer_v1::ZwpRelativePointerV1;
+use smithay_client_toolkit::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
 use smithay_client_toolkit::reexports::protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::Capability as BackgroundEffectCapability;
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
@@ -58,6 +65,10 @@ use smithay_client_toolkit::seat::keyboard::{
 use smithay_client_toolkit::seat::pointer::{
     CursorIcon as SctkCursorIcon, PointerData, PointerEvent as SctkPointerEvent,
     PointerEventKind as SctkPointerEventKind, PointerHandler, ThemeSpec, ThemedPointer,
+};
+use smithay_client_toolkit::seat::pointer_constraints::PointerConstraintsHandler;
+use smithay_client_toolkit::seat::relative_pointer::{
+    RelativeMotionEvent, RelativePointerHandler,
 };
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
@@ -94,6 +105,12 @@ pub struct RuntimeCapabilities {
     pub xdg_activation_v1: bool,
     /// The compositor supports assigning per-toplevel names or pixel icons.
     pub xdg_toplevel_icon_v1: bool,
+    /// The compositor supports seat-scoped text input and input methods.
+    pub text_input_v3: bool,
+    /// The compositor can confine or lock a pointer to a surface.
+    pub pointer_constraints_v1: bool,
+    /// The compositor can report accelerated and unaccelerated relative motion.
+    pub relative_pointer_v1: bool,
     pub popup_reposition: bool,
     /// The compositor currently advertises the ext-background-effect-v1 blur capability.
     pub ext_background_effect: bool,
@@ -140,6 +157,8 @@ pub enum RuntimeError {
     DndOfferNotFound(DndOfferId),
     #[error("the compositor does not support {0}")]
     Unsupported(&'static str),
+    #[error("surface {0:?} has not requested a locked pointer")]
+    PointerNotLocked(SurfaceId),
     #[error("Wayland protocol operation failed: {0}")]
     Protocol(String),
 }
@@ -198,13 +217,23 @@ impl Runtime {
         let background_effect_state = BackgroundEffectState::new(&globals, &queue_handle);
         let xdg_activation = ActivationManager::bind(&globals, &queue_handle).ok();
         let toplevel_icon_manager = ToplevelIconManager::bind(&globals, &queue_handle).ok();
+        let text_input_manager = TextInputManager::bind(&globals, &queue_handle).ok();
         let fractional_scale_manager = FractionalScaleManager::bind(&globals, &queue_handle).ok();
+        let pointer_protocols = PointerProtocols::bind(
+            &globals,
+            &queue_handle,
+            has_global(&globals, "zwp_pointer_constraints_v1"),
+            has_global(&globals, "zwp_relative_pointer_manager_v1"),
+        );
         let data_device_manager = DataDeviceManagerState::bind(&globals, &queue_handle)
             .map_err(|error| RuntimeError::MissingGlobal(error.to_string()))?;
         let capabilities = RuntimeCapabilities {
             xdg_dialog_v1: has_global(&globals, "xdg_wm_dialog_v1"),
             xdg_activation_v1: xdg_activation.is_some(),
             xdg_toplevel_icon_v1: toplevel_icon_manager.is_some(),
+            text_input_v3: text_input_manager.is_some(),
+            pointer_constraints_v1: pointer_protocols.has_constraints(),
+            relative_pointer_v1: pointer_protocols.has_relative_pointer(),
             popup_reposition: xdg_shell.xdg_wm_base().version() >= 3,
             ext_background_effect: false,
             fractional_scale: fractional_scale_manager.is_some(),
@@ -222,7 +251,9 @@ impl Runtime {
             xdg_shell,
             xdg_activation,
             toplevel_icon_manager,
+            text_input_manager,
             fractional_scale_manager,
+            pointer_protocols,
             surfaces: HashMap::new(),
             surface_ids: HashMap::new(),
             children: HashMap::new(),
@@ -610,6 +641,42 @@ impl Runtime {
         Ok(())
     }
 
+    /// Enable, update, or disable text input for a managed surface.
+    ///
+    /// The desired state is retained even while no seat focuses the surface.
+    /// On a text-input-v3 `enter`, it is atomically resent with `enable`; later
+    /// updates are committed without resetting the active input method.
+    pub fn set_text_input_state(
+        &mut self,
+        surface: SurfaceId,
+        state: Option<TextInputState>,
+    ) -> Result<(), RuntimeError> {
+        if self.state.text_input_manager.is_none() {
+            return Err(RuntimeError::Unsupported("zwp-text-input-v3"));
+        }
+        let shared = self.surface_shared(surface)?;
+        {
+            let mut desired = shared
+                .text_input
+                .lock()
+                .expect("surface text input mutex poisoned");
+            if *desired == state {
+                return Ok(());
+            }
+            *desired = state.clone();
+        }
+
+        for text_input in self
+            .state
+            .seats
+            .values_mut()
+            .filter_map(|objects| objects.text_input.as_mut())
+        {
+            text_input.update(surface, state.as_ref());
+        }
+        Ok(())
+    }
+
     pub fn set_min_size(
         &self,
         surface: SurfaceId,
@@ -724,6 +791,120 @@ impl Runtime {
         Ok(())
     }
 
+    /// Retain the pointer constraint and relative-motion policy for a surface.
+    ///
+    /// A constraint is created only for a seat whose pointer currently focuses
+    /// the surface. It is destroyed on leave and recreated from this retained
+    /// state on a later enter, preventing conflicting constraint objects from
+    /// accumulating on the same pointer. Equal states are ignored.
+    pub fn set_pointer_capture_state(
+        &mut self,
+        surface: SurfaceId,
+        state: PointerCaptureState,
+    ) -> Result<(), RuntimeError> {
+        if state.constraint != PointerConstraint::None
+            && !self.state.pointer_protocols.has_constraints()
+        {
+            return Err(RuntimeError::Unsupported("zwp-pointer-constraints-v1"));
+        }
+        if state.relative_motion && !self.state.pointer_protocols.has_relative_pointer() {
+            return Err(RuntimeError::Unsupported("zwp-relative-pointer-v1"));
+        }
+        let shared = self.surface_shared(surface)?;
+        if *shared
+            .pointer_capture
+            .lock()
+            .expect("surface pointer capture mutex poisoned")
+            == state
+        {
+            return Ok(());
+        }
+
+        for objects in self.state.seats.values_mut() {
+            let Some(pointer) = objects.pointer.as_ref() else {
+                continue;
+            };
+            objects.pointer_session.sync_capture(
+                surface,
+                shared.wl_surface(),
+                pointer.pointer(),
+                state,
+                &self.state.pointer_protocols,
+                &self.queue_handle,
+            )?;
+        }
+        *shared
+            .pointer_capture
+            .lock()
+            .expect("surface pointer capture mutex poisoned") = state;
+        Ok(())
+    }
+
+    /// Change only the constraint part of a surface's retained pointer state.
+    pub fn set_pointer_constraint(
+        &mut self,
+        surface: SurfaceId,
+        constraint: PointerConstraint,
+    ) -> Result<(), RuntimeError> {
+        let shared = self.surface_shared(surface)?;
+        let mut state = *shared
+            .pointer_capture
+            .lock()
+            .expect("surface pointer capture mutex poisoned");
+        state.constraint = constraint;
+        self.set_pointer_capture_state(surface, state)
+    }
+
+    /// Subscribe or unsubscribe one focused surface from relative motion.
+    ///
+    /// Relative events are otherwise suppressed to avoid doubling the normal
+    /// pointer event stream. A locked pointer always receives them.
+    pub fn set_relative_pointer_enabled(
+        &mut self,
+        surface: SurfaceId,
+        enabled: bool,
+    ) -> Result<(), RuntimeError> {
+        let shared = self.surface_shared(surface)?;
+        let mut state = *shared
+            .pointer_capture
+            .lock()
+            .expect("surface pointer capture mutex poisoned");
+        state.relative_motion = enabled;
+        self.set_pointer_capture_state(surface, state)
+    }
+
+    /// Set the restoration hint used when a compositor releases a locked pointer.
+    ///
+    /// This does not warp the pointer. The request is double-buffered with the
+    /// target `wl_surface`; call [`Runtime::commit`] to apply it.
+    pub fn set_locked_pointer_position_hint(
+        &self,
+        surface: SurfaceId,
+        position: (f64, f64),
+    ) -> Result<(), RuntimeError> {
+        if !position.0.is_finite() || !position.1.is_finite() {
+            return Err(RuntimeError::Protocol(
+                "locked pointer position hint must be finite".to_string(),
+            ));
+        }
+        let shared = self.surface_shared(surface)?;
+        if shared
+            .pointer_capture
+            .lock()
+            .expect("surface pointer capture mutex poisoned")
+            .constraint
+            != PointerConstraint::Locked
+        {
+            return Err(RuntimeError::PointerNotLocked(surface));
+        }
+        for objects in self.state.seats.values() {
+            objects
+                .pointer_session
+                .set_locked_position_hint(surface, position);
+        }
+        Ok(())
+    }
+
     pub fn set_cursor(&self, icon: CursorIcon) -> Result<(), RuntimeError> {
         for objects in self.state.seats.values() {
             let Some(pointer) = objects.pointer.as_ref() else {
@@ -777,6 +958,8 @@ impl Runtime {
         let shared = Arc::new(SurfaceShared {
             blur: Default::default(),
             fractional_scale,
+            pointer_capture: Default::default(),
+            text_input: Default::default(),
             toplevel_icon: Default::default(),
             protocol,
             parent,
@@ -914,7 +1097,9 @@ struct RuntimeState {
     xdg_shell: XdgShell,
     xdg_activation: Option<ActivationManager>,
     toplevel_icon_manager: Option<ToplevelIconManager>,
+    text_input_manager: Option<TextInputManager>,
     fractional_scale_manager: Option<FractionalScaleManager>,
+    pointer_protocols: PointerProtocols,
     surfaces: HashMap<SurfaceId, Arc<SurfaceShared>>,
     surface_ids: HashMap<ObjectId, SurfaceId>,
     children: HashMap<SurfaceId, Vec<SurfaceId>>,
@@ -930,6 +1115,19 @@ struct RuntimeState {
     next_dnd_id: u64,
     next_button_order: u64,
     next_activation_request_id: u64,
+}
+
+impl Drop for RuntimeState {
+    fn drop(&mut self) {
+        // Protocol leaves must disappear before the resources they reference:
+        // data sources/offers before data devices, pointer constraints and text
+        // inputs before their seats, and seat-scoped objects before surfaces.
+        self.outgoing_dnd.clear();
+        self.incoming_dnd.clear();
+        self.selection_sources.clear();
+        self.seats.clear();
+        self.surfaces.clear();
+    }
 }
 
 struct IncomingDndOffer {
@@ -996,11 +1194,12 @@ impl RuntimeState {
         }
         self.keyboard_focus.retain(|_, focused| *focused != id);
         for objects in self.seats.values_mut() {
-            if objects.pointer_focus == Some(id) {
-                objects.pointer_focus = None;
-            }
+            objects.pointer_session.remove_surface(id);
             if objects.keyboard_focus == Some(id) {
                 objects.keyboard_focus = None;
+            }
+            if let Some(text_input) = objects.text_input.as_mut() {
+                text_input.remove_surface(id);
             }
             objects.touch_points.remove_surface(id);
         }
@@ -1098,8 +1297,9 @@ struct SeatObjects {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<ThemedPointer>,
     touch: Option<wl_touch::WlTouch>,
+    pointer_session: SeatPointerSession,
+    text_input: Option<SeatTextInput>,
     data_device: Option<DataDevice>,
-    pointer_focus: Option<SurfaceId>,
     latest_button_serial: Option<ButtonSerial>,
     latest_selection_serial: Option<SelectionSerial>,
     keyboard_focus: Option<SurfaceId>,
@@ -1108,7 +1308,7 @@ struct SeatObjects {
 
 impl SeatObjects {
     fn has_focus(&self) -> bool {
-        self.pointer_focus.is_some() || self.keyboard_focus.is_some()
+        self.pointer_session.focus().is_some() || self.keyboard_focus.is_some()
     }
 }
 
@@ -1119,12 +1319,14 @@ impl Drop for SeatObjects {
         {
             keyboard.release();
         }
+        self.pointer_session.detach();
         self.pointer.take();
         if let Some(touch) = self.touch.take()
             && touch.version() >= 3
         {
             touch.release();
         }
+        self.text_input.take();
     }
 }
 
@@ -1172,6 +1374,204 @@ impl TouchHandler for RuntimeState {
 
     fn touch_cancelled(&mut self, seat: &wl_seat::WlSeat) {
         self.touch_cancel(seat);
+    }
+}
+
+impl PointerConstraintsHandler for RuntimeState {
+    fn confined(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        confined_pointer: &ZwpConfinedPointerV1,
+        _: &wl_surface::WlSurface,
+        pointer: &wl_pointer::WlPointer,
+    ) {
+        self.pointer_constraint_changed(pointer, |session| {
+            session.confined_changed(confined_pointer, true)
+        });
+    }
+
+    fn unconfined(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        confined_pointer: &ZwpConfinedPointerV1,
+        _: &wl_surface::WlSurface,
+        pointer: &wl_pointer::WlPointer,
+    ) {
+        self.pointer_constraint_changed(pointer, |session| {
+            session.confined_changed(confined_pointer, false)
+        });
+    }
+
+    fn locked(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        locked_pointer: &ZwpLockedPointerV1,
+        _: &wl_surface::WlSurface,
+        pointer: &wl_pointer::WlPointer,
+    ) {
+        self.pointer_constraint_changed(pointer, |session| {
+            session.locked_changed(locked_pointer, true)
+        });
+    }
+
+    fn unlocked(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        locked_pointer: &ZwpLockedPointerV1,
+        _: &wl_surface::WlSurface,
+        pointer: &wl_pointer::WlPointer,
+    ) {
+        self.pointer_constraint_changed(pointer, |session| {
+            session.locked_changed(locked_pointer, false)
+        });
+    }
+}
+
+impl RelativePointerHandler for RuntimeState {
+    fn relative_pointer_motion(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        relative_pointer: &ZwpRelativePointerV1,
+        pointer: &wl_pointer::WlPointer,
+        event: RelativeMotionEvent,
+    ) {
+        let Some(data) = pointer.data::<PointerData<()>>() else {
+            return;
+        };
+        let seat_id = data.seat().id().protocol_id();
+        let Some(session) = self
+            .seats
+            .get(&seat_id)
+            .map(|objects| &objects.pointer_session)
+            .filter(|session| session.relative_matches(relative_pointer))
+        else {
+            return;
+        };
+        let Some(surface) = session.focus() else {
+            return;
+        };
+        let capture = self
+            .surfaces
+            .get(&surface)
+            .map(|shared| {
+                *shared
+                    .pointer_capture
+                    .lock()
+                    .expect("surface pointer capture mutex poisoned")
+            })
+            .unwrap_or_default();
+        if !session.should_emit_relative(capture) {
+            return;
+        }
+        self.events
+            .push_back(Event::RelativePointer(RelativePointerEvent {
+                surface,
+                time_micros: event.utime,
+                delta: event.delta,
+                delta_unaccelerated: event.delta_unaccel,
+            }));
+    }
+}
+
+impl RuntimeState {
+    fn pointer_constraint_changed(
+        &mut self,
+        pointer: &wl_pointer::WlPointer,
+        update: impl FnOnce(&mut SeatPointerSession) -> Option<crate::PointerConstraintEvent>,
+    ) {
+        let Some(data) = pointer.data::<PointerData<()>>() else {
+            return;
+        };
+        let seat_id = data.seat().id().protocol_id();
+        let Some(event) = self
+            .seats
+            .get_mut(&seat_id)
+            .and_then(|objects| update(&mut objects.pointer_session))
+        else {
+            return;
+        };
+        self.events.push_back(Event::PointerConstraint(event));
+    }
+}
+
+impl TextInputHandler for RuntimeState {
+    fn text_input_entered(
+        &mut self,
+        seat_id: u32,
+        text_input: &ZwpTextInputV3,
+        surface: &wl_surface::WlSurface,
+    ) {
+        let Some(surface) = self.surface_id(surface) else {
+            return;
+        };
+        let desired = self.surfaces.get(&surface).and_then(|shared| {
+            shared
+                .text_input
+                .lock()
+                .expect("surface text input mutex poisoned")
+                .clone()
+        });
+        let Some(session) = self
+            .seats
+            .get_mut(&seat_id)
+            .and_then(|objects| objects.text_input.as_mut())
+            .filter(|session| session.matches(text_input))
+        else {
+            return;
+        };
+        session.enter(surface, desired.as_ref());
+        self.events
+            .push_back(Event::TextInput(TextInputEvent::Entered { surface }));
+    }
+
+    fn text_input_left(
+        &mut self,
+        seat_id: u32,
+        text_input: &ZwpTextInputV3,
+        surface: &wl_surface::WlSurface,
+    ) {
+        let surface = self.surface_id(surface);
+        let Some(session) = self
+            .seats
+            .get_mut(&seat_id)
+            .and_then(|objects| objects.text_input.as_mut())
+            .filter(|session| session.matches(text_input))
+        else {
+            return;
+        };
+        session.leave();
+        if let Some(surface) = surface {
+            self.events
+                .push_back(Event::TextInput(TextInputEvent::Left { surface }));
+        }
+    }
+
+    fn text_input_done(
+        &mut self,
+        seat_id: u32,
+        text_input: &ZwpTextInputV3,
+        surface: &wl_surface::WlSurface,
+        serial: u32,
+        batch: PendingBatch,
+    ) {
+        let Some(surface) = self.surface_id(surface) else {
+            return;
+        };
+        let enabled = self
+            .seats
+            .get(&seat_id)
+            .and_then(|objects| objects.text_input.as_ref())
+            .is_some_and(|session| session.accepts_done(text_input, surface));
+        if enabled {
+            self.events.push_back(Event::TextInput(TextInputEvent::Done(
+                batch.into_done(surface, serial),
+            )));
+        }
     }
 }
 

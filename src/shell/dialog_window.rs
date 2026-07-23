@@ -142,6 +142,10 @@ impl ShellDetachedDialogWindow {
         self.window.id()
     }
 
+    pub(crate) fn window(&self) -> &WaylandWindow {
+        self.window.as_ref()
+    }
+
     pub(crate) fn renderer_size(&self) -> PhysicalSize<u32> {
         self.renderer.size
     }

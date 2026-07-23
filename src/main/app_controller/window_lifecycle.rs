@@ -28,6 +28,7 @@ impl FikaWgpuApp {
             outgoing_dnd_start_failed: false,
             renderer: None,
             dialog_windows: ShellDialogWindows::default(),
+            text_input: FikaTextInputRuntime::default(),
             settings_dialog: ShellSettingsDialogState::default(),
             clipboard: None,
             window: None,

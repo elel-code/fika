@@ -1,7 +1,8 @@
 use bitflags::bitflags;
 
 use crate::{
-    ActivationEvent, DndEvent, InputSerial, LogicalPosition, LogicalSize, SuggestedSize, SurfaceId,
+    ActivationEvent, DndEvent, InputSerial, LogicalPosition, LogicalSize, PointerConstraintEvent,
+    RelativePointerEvent, SuggestedSize, SurfaceId, TextInputEvent,
 };
 
 bitflags! {
@@ -178,7 +179,10 @@ pub enum Event {
     Surface(SurfaceEvent),
     Activation(ActivationEvent),
     Pointer(PointerEvent),
+    PointerConstraint(PointerConstraintEvent),
+    RelativePointer(RelativePointerEvent),
     Keyboard(KeyboardEvent),
+    TextInput(TextInputEvent),
     Touch(TouchEvent),
     Dnd(DndEvent),
 }

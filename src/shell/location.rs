@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::shell::metrics::PATH_HISTORY_LIMIT;
 use crate::shell::pane::ShellPaneId;
+use crate::shell::text_input::ShellTextPreedit;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PathHistory {
@@ -28,6 +29,7 @@ pub(crate) struct LocationDraft {
     pub(crate) value: String,
     pub(crate) cursor: usize,
     pub(crate) replace_on_insert: bool,
+    pub(crate) preedit: Option<ShellTextPreedit>,
 }
 
 impl LocationDraft {
@@ -36,16 +38,19 @@ impl LocationDraft {
             cursor: value.len(),
             value,
             replace_on_insert: true,
+            preedit: None,
         }
     }
 
     pub(crate) fn insert(&mut self, value: &str) {
+        self.preedit = None;
         self.prepare_for_edit();
         self.value.insert_str(self.cursor, value);
         self.cursor += value.len();
     }
 
     pub(crate) fn backspace(&mut self) {
+        self.preedit = None;
         if self.replace_on_insert {
             self.value.clear();
             self.cursor = 0;
@@ -60,6 +65,7 @@ impl LocationDraft {
     }
 
     pub(crate) fn delete(&mut self) {
+        self.preedit = None;
         self.replace_on_insert = false;
         let cursor = normalized_text_cursor(&self.value, self.cursor);
         let Some(next) = next_char_boundary(&self.value, cursor) else {
@@ -71,6 +77,7 @@ impl LocationDraft {
     }
 
     pub(crate) fn move_left(&mut self) {
+        self.preedit = None;
         self.replace_on_insert = false;
         if let Some(previous) = previous_char_boundary(&self.value, self.cursor) {
             self.cursor = previous;
@@ -78,6 +85,7 @@ impl LocationDraft {
     }
 
     pub(crate) fn move_right(&mut self) {
+        self.preedit = None;
         self.replace_on_insert = false;
         if let Some(next) = next_char_boundary(&self.value, self.cursor) {
             self.cursor = next;
@@ -85,16 +93,19 @@ impl LocationDraft {
     }
 
     pub(crate) fn move_home(&mut self) {
+        self.preedit = None;
         self.replace_on_insert = false;
         self.cursor = 0;
     }
 
     pub(crate) fn move_end(&mut self) {
+        self.preedit = None;
         self.replace_on_insert = false;
         self.cursor = self.value.len();
     }
 
     pub(crate) fn set_cursor(&mut self, cursor: usize) -> bool {
+        self.preedit = None;
         let cursor = normalized_text_cursor(&self.value, cursor);
         let changed = self.cursor != cursor || self.replace_on_insert;
         self.cursor = cursor;
@@ -103,6 +114,7 @@ impl LocationDraft {
     }
 
     pub(crate) fn set_completed(&mut self, value: String) {
+        self.preedit = None;
         self.value = value;
         self.cursor = self.value.len();
         self.replace_on_insert = false;

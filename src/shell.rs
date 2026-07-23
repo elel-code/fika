@@ -38,6 +38,7 @@ pub(crate) mod settings;
 pub(crate) mod shortcuts;
 pub(crate) mod status;
 pub(crate) mod tasks;
+pub(crate) mod text_input;
 pub(crate) mod theme;
 pub(crate) mod toolbar;
 pub(crate) mod transfer;

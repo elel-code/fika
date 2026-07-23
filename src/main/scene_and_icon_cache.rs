@@ -89,6 +89,7 @@ include!("scene_runtime/places_drag_drop.rs");
 include!("scene_runtime/context_and_service_menu.rs");
 include!("scene_runtime/appearance.rs");
 include!("scene_runtime/open_with.rs");
+include!("scene_runtime/text_input.rs");
 include!("scene_runtime/task_status.rs");
 include!("scene_runtime/selection_and_paths.rs");
 include!("scene_runtime/properties_overlay.rs");

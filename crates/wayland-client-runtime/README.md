@@ -24,6 +24,8 @@ general-purpose and contains no Fika-specific model or renderer dependency.
 | Data transfer | Clipboard and DnD share one MIME-content model, runtime connection, seat/serial state, data devices and pipe I/O; application-specific formats stay in the application |
 | Drag and drop | Handles incoming/outgoing offers, action negotiation and lifecycle events; optional RGBA previews use owned SHM drag-icon surfaces |
 | Input | Translates framed multi-touch, keyboard, and pointer events into crate-owned values; uses cursor-shape when available and automatically falls back to the system cursor theme |
+| Pointer capture | Implements `zwp_pointer_constraints_v1` confinement/locking and lazily creates `zwp_relative_pointer_v1` only for subscribed or locked surfaces |
+| Text input | Implements seat-scoped `zwp_text_input_v3`, atomic preedit/commit/delete batches, retained editor state, UTF-8 byte offsets, content hints and cursor rectangles |
 
 ## Basic use
 
@@ -110,6 +112,29 @@ last-up fallback. Down/up serials remain seat-scoped, active touch-down serials
 can request popup grabs, and cancel/capability-removal events clear every
 affected surface without leaving stale touch IDs behind.
 
+## Pointer constraints and relative motion
+
+`Runtime::set_pointer_constraint` retains `None`, `Confined`, or `Locked` for
+one surface. A seat-scoped constraint object is created when its pointer enters
+that surface, destroyed before focus moves elsewhere, and recreated from the
+retained state on a later enter. This preserves the protocol's one-constraint
+rule without leaking seat or proxy identities into application code.
+
+`PointerConstraintEvent` reports whether the compositor has activated or
+deactivated the requested lock/confinement. When `relative_pointer_v1` is
+available, locked surfaces receive `RelativePointerEvent` automatically. An
+unlocked surface can opt in with
+`Runtime::set_relative_pointer_enabled`; opting out destroys the per-seat
+relative-pointer object instead of merely dropping its high-frequency events.
+Both accelerated and unaccelerated deltas and the compositor's microsecond
+timestamp are preserved.
+
+`Runtime::set_locked_pointer_position_hint` supplies the logical restoration
+position used when a lock ends. It is a hint rather than a pointer warp and is
+double-buffered with `wl_surface`, so apply it with the next
+`Runtime::commit`. Inspect `pointer_constraints_v1` and `relative_pointer_v1`
+in `RuntimeCapabilities` before enabling optional behavior.
+
 ## Fractional scaling
 
 Fractional scaling is enabled only when both `wp-fractional-scale-v1` and
@@ -167,14 +192,41 @@ Icon assignment is double-buffered. Call `Runtime::commit` after
 destroyed immediately; the compositor keeps the assigned icon until it is
 explicitly replaced or cleared.
 
+## Text input v3
+
+When `Runtime::capabilities().text_input_v3` is true, call
+`Runtime::set_text_input_state(surface, Some(state))` for the active editor.
+The runtime retains that complete state while the surface is unfocused and
+resends it together with `enable` on the next seat-specific `enter`. Passing
+`None` disables the focused session. Equal states are ignored, so a
+declarative UI may synchronize editor state without generating redundant
+protocol commits.
+
+`TextInputSurroundingText` uses UTF-8 byte offsets, rejects offsets inside a
+codepoint or strings containing NUL, and enforces the protocol's 4000-byte
+limit. Cursor rectangles are surface-logical coordinates. Client requests are
+double-buffered and become visible to the compositor with one text-input
+`commit`; they do not require a `wl_surface.commit`.
+
+Compositor `preedit_string`, `commit_string`, and
+`delete_surrounding_text` events are accumulated until `done` and emitted as
+one `TextInputEvent::Done` value. Apply that batch in protocol order: replace
+the old preedit, delete committed surrounding text, insert the commit string,
+publish the updated surrounding state, then render the new preedit separately
+from committed text. A `leave` clears the pending batch and disables the seat
+session, so the next `enter` always starts from a complete state.
+
 ## Internal module boundary
 
 Protocol-specific ownership and dispatch are kept in focused modules:
-`activation`, `fractional_scale`, `toplevel_icon`, `touch`, and the shared SHM
-pixel formatter. `Runtime` binds those modules and translates their callbacks
-into crate-owned events, while `SurfaceShared` only retains per-surface protocol
-resources. This keeps generated Wayland proxy details out of the public API and
-prevents application policy from leaking into reusable protocol code.
+`activation`, `fractional_scale`, `pointer_constraints`, `text_input`,
+`toplevel_icon`, `touch`, and the shared SHM pixel formatter. `Runtime` binds
+those modules and translates their callbacks into crate-owned events, while
+`SurfaceShared` only retains declarative per-surface state and protocol
+resources. Pointer constraints and text input each own their per-seat proxies,
+state machines, and destruction paths. This keeps generated Wayland proxy
+details out of the public API and prevents application policy from leaking
+into reusable protocol code.
 
 ## Protocol lifetime rule
 

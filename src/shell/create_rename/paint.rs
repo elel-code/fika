@@ -12,11 +12,13 @@ use crate::shell::metrics::{
     CREATE_DIALOG_TITLE_HEIGHT, RENAME_DIALOG_TITLE_HEIGHT, scaled_dialog_metric,
 };
 use crate::shell::popup::style::PopupTheme;
+use crate::shell::text_input::{cursor_with_preedit, text_with_preedit};
 use crate::{
     LabelAlignment, LabelWrap, QuadVertex, TextFrameBuilder, push_clipped_rect_outline,
     push_clipped_rounded_rect, push_rect,
 };
 
+#[derive(Clone, Copy)]
 struct DialogPaintContext {
     theme: PopupTheme,
     clip: ViewRect,
@@ -27,6 +29,12 @@ struct DialogPaintContext {
 struct DialogButtonState {
     active: bool,
     privileged: bool,
+}
+
+struct DialogInputText<'a> {
+    value: &'a str,
+    cursor: usize,
+    rect: ViewRect,
 }
 
 pub(crate) fn push_create_dialog(
@@ -144,7 +152,39 @@ fn push_create_dialog_surface(
         size,
     );
     push_clipped_rect_outline(vertices, input, rect, 1.0, theme.field_focus, size);
-    push_dialog_input_text(vertices, text, &dialog.name, input, theme, scale, size);
+    let anchor = if dialog.replace_on_insert {
+        0
+    } else {
+        dialog.name.len()
+    };
+    let display_name = text_with_preedit(
+        &dialog.name,
+        dialog.name.len(),
+        anchor,
+        dialog.preedit.as_ref(),
+    );
+    let display_cursor = cursor_with_preedit(
+        &dialog.name,
+        dialog.name.len(),
+        anchor,
+        dialog.preedit.as_ref(),
+    );
+    let paint = DialogPaintContext {
+        theme,
+        clip: rect,
+        scale,
+        size,
+    };
+    push_dialog_input_text(
+        vertices,
+        text,
+        DialogInputText {
+            value: &display_name,
+            cursor: display_cursor,
+            rect: input,
+        },
+        &paint,
+    );
 
     if let Some(error) = dialog.error.as_ref() {
         text.push_label(
@@ -162,12 +202,6 @@ fn push_create_dialog_surface(
 
     let cancel = create_dialog_cancel_button_rect_scaled(rect, scale);
     let commit = create_dialog_commit_button_rect_scaled(rect, scale);
-    let paint = DialogPaintContext {
-        theme,
-        clip: rect,
-        scale,
-        size,
-    };
     for (label, button, active) in [("Cancel", cancel, false), ("Create", commit, true)] {
         push_dialog_button(
             vertices,
@@ -265,7 +299,39 @@ fn push_rename_dialog_surface(
         size,
     );
     push_clipped_rect_outline(vertices, input, rect, 1.0, theme.field_focus, size);
-    push_dialog_input_text(vertices, text, &dialog.name, input, theme, scale, size);
+    let anchor = if dialog.replace_on_insert {
+        0
+    } else {
+        dialog.name.len()
+    };
+    let display_name = text_with_preedit(
+        &dialog.name,
+        dialog.name.len(),
+        anchor,
+        dialog.preedit.as_ref(),
+    );
+    let display_cursor = cursor_with_preedit(
+        &dialog.name,
+        dialog.name.len(),
+        anchor,
+        dialog.preedit.as_ref(),
+    );
+    let paint = DialogPaintContext {
+        theme,
+        clip: rect,
+        scale,
+        size,
+    };
+    push_dialog_input_text(
+        vertices,
+        text,
+        DialogInputText {
+            value: &display_name,
+            cursor: display_cursor,
+            rect: input,
+        },
+        &paint,
+    );
 
     if let Some(error) = dialog.error.as_ref() {
         text.push_label(
@@ -283,12 +349,6 @@ fn push_rename_dialog_surface(
 
     let cancel = rename_dialog_cancel_button_rect_scaled(rect, scale);
     let commit = rename_dialog_commit_button_rect_scaled(rect, scale);
-    let paint = DialogPaintContext {
-        theme,
-        clip: rect,
-        scale,
-        size,
-    };
     for (label, button, active) in [("Cancel", cancel, false), ("Rename", commit, true)] {
         push_dialog_button(
             vertices,
@@ -307,12 +367,17 @@ fn push_rename_dialog_surface(
 fn push_dialog_input_text(
     vertices: &mut Vec<QuadVertex>,
     text: &mut TextFrameBuilder<'_>,
-    value: &str,
-    input: ViewRect,
-    theme: PopupTheme,
-    scale: f32,
-    size: PhysicalSize<u32>,
+    input: DialogInputText<'_>,
+    paint: &DialogPaintContext,
 ) {
+    let DialogInputText {
+        value,
+        cursor,
+        rect: input,
+    } = input;
+    let DialogPaintContext {
+        theme, scale, size, ..
+    } = *paint;
     let text_rect = ViewRect {
         x: input.x + scaled_dialog_metric(10.0, scale),
         y: input.y + (input.height - scaled_dialog_metric(18.0, scale)) / 2.0,
@@ -329,7 +394,7 @@ fn push_dialog_input_text(
     let cursor_x = text.measure_label_cursor_x(
         value,
         text_rect,
-        value.len(),
+        cursor,
         LabelAlignment::Start,
         LabelWrap::None,
     );

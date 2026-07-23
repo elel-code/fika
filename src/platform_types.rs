@@ -405,6 +405,7 @@ pub enum WindowEvent {
         event: KeyEvent,
         is_synthetic: bool,
     },
+    Ime(ImeEvent),
     PointerMoved {
         position: PhysicalPosition<f64>,
     },

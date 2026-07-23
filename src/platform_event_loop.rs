@@ -106,6 +106,20 @@ impl EventLoop {
                         RuntimeError::Unsupported(_) => Ok(()),
                         error => Err(error),
                     }),
+                RuntimeCommand::SetIme(surface, state) => state
+                    .map(|state| {
+                        let scale_factor = self
+                            .window(surface)
+                            .map(|window| window.scale_factor())
+                            .unwrap_or(1.0);
+                        runtime_text_input_state(state, scale_factor)
+                    })
+                    .transpose()
+                    .and_then(|state| runtime.set_text_input_state(surface, state))
+                    .or_else(|error| match error {
+                        RuntimeError::Unsupported(_) => Ok(()),
+                        error => Err(error),
+                    }),
                 RuntimeCommand::RequestUserAttention(surface) => runtime
                     .request_user_attention(surface)
                     .or_else(|error| match error {
@@ -136,6 +150,11 @@ impl EventLoop {
         match event {
             Event::Surface(event) => self.dispatch_surface_event(app, event),
             Event::Activation(_) => Ok(()),
+            Event::PointerConstraint(_) | Event::RelativePointer(_) => Ok(()),
+            Event::TextInput(event) => {
+                self.dispatch_text_input_event(app, event);
+                Ok(())
+            }
             Event::Pointer(event) => {
                 let Some(window) = self.window(event.surface) else {
                     return Ok(());
@@ -213,6 +232,37 @@ impl EventLoop {
                 self.dispatch_dnd_event(app, event);
                 Ok(())
             }
+        }
+    }
+
+    fn dispatch_text_input_event<A: ApplicationHandler>(
+        &self,
+        app: &mut A,
+        event: RuntimeTextInputEvent,
+    ) {
+        let (surface, event) = match event {
+            RuntimeTextInputEvent::Entered { surface } => (surface, ImeEvent::Enabled),
+            RuntimeTextInputEvent::Left { surface } => (surface, ImeEvent::Disabled),
+            RuntimeTextInputEvent::Done(done) => (
+                done.surface,
+                ImeEvent::Done {
+                    serial: done.serial,
+                    delete_surrounding: done.delete_surrounding.map(|delete| {
+                        ImeDeleteSurrounding {
+                            before_bytes: delete.before_bytes,
+                            after_bytes: delete.after_bytes,
+                        }
+                    }),
+                    commit: done.commit,
+                    preedit: done.preedit.map(|preedit| ImePreedit {
+                        text: preedit.text,
+                        cursor_range: preedit.cursor_range,
+                    }),
+                },
+            ),
+        };
+        if self.window(surface).is_some() {
+            app.window_event(&self.active, surface, WindowEvent::Ime(event));
         }
     }
 

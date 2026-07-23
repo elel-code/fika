@@ -15,6 +15,7 @@ use crate::shell::open_with::geometry::{
 };
 use crate::shell::open_with::{OpenWithTreeRow, ShellOpenWithChooser};
 use crate::shell::popup::style::PopupTheme;
+use crate::shell::text_input::{cursor_with_preedit, text_with_preedit};
 use crate::shell::ui_chrome::push_scrollbar;
 use crate::{
     IconDrawLayer, IconFrameBuilder, LabelAlignment, LabelWrap, QuadVertex, RoundedHighlightStyle,
@@ -189,7 +190,19 @@ fn push_open_with_chooser_surface(
         push_open_with_search_icon(vertices, search_icon, query, theme, scale, size);
     }
     let query_text_rect = open_with_chooser_query_text_rect_scaled(rect, scale);
-    if chooser.query.is_empty() {
+    let display_query = text_with_preedit(
+        &chooser.query,
+        chooser.query_cursor,
+        chooser.query_cursor,
+        chooser.preedit.as_ref(),
+    );
+    let display_cursor = cursor_with_preedit(
+        &chooser.query,
+        chooser.query_cursor,
+        chooser.query_cursor,
+        chooser.preedit.as_ref(),
+    );
+    if display_query.is_empty() {
         text.push_label_aligned_no_wrap(
             "Search applications",
             query_text_rect,
@@ -199,7 +212,7 @@ fn push_open_with_chooser_surface(
         );
     } else {
         text.push_label_aligned_no_wrap(
-            &chooser.query,
+            &display_query,
             query_text_rect,
             query,
             theme.body_text,
@@ -208,9 +221,9 @@ fn push_open_with_chooser_surface(
     }
     if caret_visible {
         let cursor_x = text.measure_label_cursor_x(
-            &chooser.query,
+            &display_query,
             query_text_rect,
-            chooser.query_cursor,
+            display_cursor,
             LabelAlignment::Start,
             LabelWrap::None,
         );

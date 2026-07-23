@@ -31,8 +31,9 @@ use shell::create_rename::geometry::{
 };
 use shell::create_rename::geometry::{
     create_dialog_cancel_button_rect_scaled, create_dialog_commit_button_rect_scaled,
-    create_dialog_rect_scaled, create_dialog_window_size_scaled, create_kind_button_rect_scaled,
-    rename_dialog_cancel_button_rect_scaled, rename_dialog_commit_button_rect_scaled,
+    create_dialog_input_rect_scaled, create_dialog_rect_scaled, create_dialog_window_size_scaled,
+    create_kind_button_rect_scaled, rename_dialog_cancel_button_rect_scaled,
+    rename_dialog_commit_button_rect_scaled, rename_dialog_input_rect_scaled,
     rename_dialog_rect_scaled, rename_dialog_window_size_scaled,
 };
 use shell::create_rename::{
@@ -116,14 +117,14 @@ use shell::open_with::OpenWithTreeRow;
 use shell::open_with::geometry::{
     open_with_chooser_click_at_point, open_with_chooser_list_rect_scaled,
     open_with_chooser_pointer_role_at_point, open_with_chooser_rect_scaled,
+    open_with_chooser_query_text_rect_scaled,
     open_with_chooser_scrollbar_rects_scaled, open_with_chooser_visible_row_count,
     open_with_chooser_window_size_scaled, open_with_scroll_delta_rows,
 };
 #[cfg(test)]
 use shell::open_with::geometry::{
     open_with_chooser_default_checkbox_rect, open_with_chooser_list_rect,
-    open_with_chooser_open_button_rect, open_with_chooser_query_rect_scaled,
-    open_with_chooser_query_text_rect_scaled, open_with_chooser_rect,
+    open_with_chooser_open_button_rect, open_with_chooser_query_rect_scaled, open_with_chooser_rect,
 };
 use shell::open_with::launch::{
     chooser_for_context_target, launch_request_for_chooser, launch_request_for_context_application,
@@ -237,6 +238,10 @@ use shell::tasks::geometry::{
 #[cfg(test)]
 use shell::tasks::geometry::task_detail_dialog_rect_scaled;
 use shell::tasks::{ShellTaskDetailDialog, ShellTaskId, ShellTaskStatus, TaskDetailDialogClick};
+use shell::text_input::{
+    ShellTextDelete, ShellTextInputBatch, ShellTextInputOutcome, ShellTextPreedit,
+    ShellTextSelection, apply_text_input_batch, cursor_with_preedit, text_with_preedit,
+};
 use shell::theme::ShellTheme;
 use shell::toolbar::{
     ShellToolbarLayout, ShellToolbarViewModeSegment, app_toolbar_layout as build_app_toolbar_layout,

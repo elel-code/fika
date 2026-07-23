@@ -216,6 +216,7 @@ impl SeatHandler for RuntimeState {
 
     fn new_seat(&mut self, _: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
         self.ensure_seat_data_device(qh, &seat);
+        self.ensure_seat_text_input(qh, &seat);
     }
 
     fn new_capability(
@@ -230,6 +231,7 @@ impl SeatHandler for RuntimeState {
         // invoking new_seat. Capability callbacks are therefore also an
         // initialization path for per-seat data devices.
         self.ensure_seat_data_device(qh, &seat);
+        self.ensure_seat_text_input(qh, &seat);
         let objects = self.seats.entry(seat_id).or_default();
         match capability {
             Capability::Keyboard if objects.keyboard.is_none() => {
@@ -247,6 +249,9 @@ impl SeatHandler for RuntimeState {
                         ThemeSpec::System,
                     )
                     .ok();
+                if objects.pointer.is_some() {
+                    objects.pointer_session.attach();
+                }
             }
             Capability::Touch if objects.touch.is_none() => {
                 objects.touch = Some(seat.get_touch(qh, TouchData::new(seat.clone())));
@@ -277,8 +282,8 @@ impl SeatHandler for RuntimeState {
                 }
             }
             Capability::Pointer => {
+                objects.pointer_session.detach();
                 objects.pointer.take();
-                objects.pointer_focus = None;
                 objects.latest_button_serial = None;
             }
             Capability::Touch => {
@@ -319,6 +324,27 @@ impl SeatHandler for RuntimeState {
 }
 
 impl RuntimeState {
+    fn ensure_seat_text_input(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        seat: &wl_seat::WlSeat,
+    ) {
+        let seat_id = seat.id().protocol_id();
+        if self
+            .seats
+            .get(&seat_id)
+            .is_some_and(|objects| objects.text_input.is_some())
+        {
+            return;
+        }
+        let Some(manager) = self.text_input_manager.as_ref() else {
+            return;
+        };
+        let text_input = manager.get_text_input(seat, qh);
+        self.seats.entry(seat_id).or_default().text_input =
+            Some(SeatTextInput::new(text_input));
+    }
+
     fn ensure_seat_data_device(
         &mut self,
         qh: &QueueHandle<Self>,
@@ -346,7 +372,7 @@ impl PointerHandler for RuntimeState {
     fn pointer_frame(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         pointer: &wl_pointer::WlPointer,
         events: &[SctkPointerEvent],
     ) {
@@ -362,8 +388,25 @@ impl PointerHandler for RuntimeState {
             let kind = match &event.kind {
                 SctkPointerEventKind::Enter { serial } => {
                     self.record_selection_serial(seat_id, *serial);
+                    let capture = self
+                        .surfaces
+                        .get(&surface)
+                        .map(|shared| {
+                            *shared
+                                .pointer_capture
+                                .lock()
+                                .expect("surface pointer capture mutex poisoned")
+                        })
+                        .unwrap_or_default();
                     if let Some(objects) = self.seats.get_mut(&seat_id) {
-                        objects.pointer_focus = Some(surface);
+                        let _ = objects.pointer_session.enter(
+                            surface,
+                            &event.surface,
+                            pointer,
+                            capture,
+                            &self.pointer_protocols,
+                            qh,
+                        );
                     }
                     PointerEventKind::Enter {
                         serial: InputSerial::new(
@@ -374,10 +417,8 @@ impl PointerHandler for RuntimeState {
                     }
                 }
                 SctkPointerEventKind::Leave { .. } => {
-                    if let Some(objects) = self.seats.get_mut(&seat_id)
-                        && objects.pointer_focus == Some(surface)
-                    {
-                        objects.pointer_focus = None;
+                    if let Some(objects) = self.seats.get_mut(&seat_id) {
+                        objects.pointer_session.leave(surface);
                     }
                     PointerEventKind::Leave
                 }

@@ -7,6 +7,7 @@ use fika_core::{DesktopLaunchPlan, MimeApplication, MimeApplicationCache};
 use crate::shell::file_item_view::text::estimated_text_cursor_for_offset;
 use crate::shell::metrics::OPEN_WITH_CHOOSER_MAX_ROWS;
 use crate::shell::shortcuts::OpenWithCommand;
+use crate::shell::text_input::ShellTextPreedit;
 
 #[path = "open_with/geometry.rs"]
 pub(crate) mod geometry;
@@ -24,6 +25,7 @@ pub(crate) struct ShellOpenWithChooser {
     pub(crate) expanded_categories: BTreeSet<OpenWithCategoryKey>,
     pub(crate) query: String,
     pub(crate) query_cursor: usize,
+    pub(crate) preedit: Option<ShellTextPreedit>,
     pub(crate) selected_index: usize,
     pub(crate) scroll_row: usize,
     pub(crate) set_as_default: bool,
@@ -49,6 +51,7 @@ impl ShellOpenWithChooser {
             expanded_categories: BTreeSet::new(),
             query: String::new(),
             query_cursor: 0,
+            preedit: None,
             scroll_row: 0,
             set_as_default: false,
             error: None,
@@ -132,6 +135,18 @@ impl ShellOpenWithChooser {
 
     pub(crate) fn apply_command(&mut self, command: OpenWithCommand) -> bool {
         let old = self.clone();
+        if matches!(
+            &command,
+            OpenWithCommand::Insert(_)
+                | OpenWithCommand::Backspace
+                | OpenWithCommand::Delete
+                | OpenWithCommand::MoveLeft
+                | OpenWithCommand::MoveRight
+                | OpenWithCommand::MoveHome
+                | OpenWithCommand::MoveEnd
+        ) {
+            self.preedit = None;
+        }
         match command {
             OpenWithCommand::Insert(value) => {
                 self.insert_query_text(&value);
@@ -177,6 +192,7 @@ impl ShellOpenWithChooser {
     }
 
     pub(crate) fn set_query_cursor(&mut self, cursor: usize) -> bool {
+        self.preedit = None;
         let cursor = normalized_open_with_query_cursor(&self.query, cursor);
         if self.query_cursor == cursor {
             return false;
@@ -286,7 +302,7 @@ impl ShellOpenWithChooser {
         }
     }
 
-    fn query_text_changed(&mut self) {
+    pub(crate) fn query_text_changed(&mut self) {
         self.scroll_row = 0;
         self.error = None;
         self.selected_index = self.first_application_row().unwrap_or(0);

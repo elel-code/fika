@@ -15,7 +15,7 @@ impl Runtime {
         let candidates = self.state.seats.iter().map(|(seat_id, objects)| {
             (
                 *seat_id,
-                objects.pointer_focus,
+                objects.pointer_session.focus(),
                 objects.data_device.is_some(),
                 objects.latest_button_serial,
             )

@@ -329,7 +329,17 @@ impl ShellScene {
             .as_ref()
             .filter(|draft| self.normalized_pane_id(draft.pane) == self.normalized_pane_id(pane))
         {
-            return draft.draft.value.clone();
+            return text_with_preedit(
+                &draft.draft.value,
+                draft.draft.cursor,
+                if draft.draft.replace_on_insert {
+                    0
+                } else {
+                    draft.draft.cursor
+                },
+                draft.draft.preedit.as_ref(),
+            )
+            .into_owned();
         }
         self.pane_state(pane)
             .map(|pane| pane.path.display().to_string())
@@ -340,7 +350,18 @@ impl ShellScene {
         self.location_draft
             .as_ref()
             .filter(|draft| self.normalized_pane_id(draft.pane) == self.normalized_pane_id(pane))
-            .map(|draft| draft.draft.cursor)
+            .map(|draft| {
+                cursor_with_preedit(
+                    &draft.draft.value,
+                    draft.draft.cursor,
+                    if draft.draft.replace_on_insert {
+                        0
+                    } else {
+                        draft.draft.cursor
+                    },
+                    draft.draft.preedit.as_ref(),
+                )
+            })
     }
 
     fn location_text_rect_for_path_bar_rect(&self, rect: ViewRect) -> ViewRect {

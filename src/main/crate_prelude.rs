@@ -40,12 +40,13 @@ use fika_core::{
 };
 use platform::{
     ActiveEventLoop, ApplicationHandler, AsyncRequestSerial, ControlFlow, CursorIcon,
-    DataTransferId, ElementState, EventLoop, EventLoopProxy, Modifiers, MouseButton,
-    MouseScrollDelta, PhysicalPosition, PhysicalSize, Theme, WaylandWindow, WindowAttributes,
-    WindowEvent, WindowId,
+    DataTransferId, ElementState, EventLoop, EventLoopProxy, ImeChangeCause, ImeCursorArea,
+    ImeEvent, ImeState, Key, Modifiers, MouseButton, MouseScrollDelta, NamedKey, PhysicalPosition,
+    PhysicalSize, Theme, WaylandWindow, WindowAttributes, WindowEvent, WindowId,
 };
 #[cfg(test)]
-use platform::{Key, KeyCode, NamedKey, NativeKey, NativeKeyCode, PhysicalKey};
+use platform::{KeyCode, NativeKey, NativeKeyCode, PhysicalKey};
+use wayland_client_runtime::{TextInputContentHint, TextInputContentPurpose};
 macro_rules! fika_log {
     ($($arg:tt)*) => {{
         if crate::fika_log_enabled() {
@@ -103,6 +104,7 @@ fn window_event_label(event: &WindowEvent) -> &'static str {
         WindowEvent::OutgoingDragDropped { .. } => "OutgoingDragDropped",
         WindowEvent::OutgoingDragCanceled { .. } => "OutgoingDragCanceled",
         WindowEvent::KeyboardInput { .. } => "KeyboardInput",
+        WindowEvent::Ime(_) => "Ime",
         WindowEvent::ModifiersChanged(_) => "ModifiersChanged",
         WindowEvent::PointerMoved { .. } => "PointerMoved",
         WindowEvent::PointerLeft { .. } => "PointerLeft",

@@ -14,9 +14,11 @@ mod event;
 mod fractional_scale;
 mod geometry;
 mod input;
+mod pointer_constraints;
 mod runtime;
 mod shm_format;
 mod surface;
+mod text_input;
 mod toplevel_icon;
 mod touch;
 
@@ -34,9 +36,17 @@ pub use event::{
 };
 pub use geometry::{LogicalPosition, LogicalRect, LogicalSize, SuggestedSize};
 pub use input::{CursorIcon, InputSerial, InputSerialSource};
+pub use pointer_constraints::{
+    PointerCaptureState, PointerConstraint, PointerConstraintEvent, RelativePointerEvent,
+};
 pub use runtime::{Runtime, RuntimeCapabilities, RuntimeError, RuntimeOptions, WakeHandle};
 pub use surface::{
     ConstraintAdjustments, DecorationPreference, DialogAttributes, Gravity, PopupAnchor,
     PopupAttributes, PopupPositioner, SurfaceHandle, SurfaceId, SurfaceKind, ToplevelAttributes,
+};
+pub use text_input::{
+    TextInputChangeCause, TextInputContentHint, TextInputContentPurpose, TextInputContentType,
+    TextInputDeleteSurrounding, TextInputDone, TextInputError, TextInputEvent, TextInputPreedit,
+    TextInputState, TextInputSurroundingText,
 };
 pub use toplevel_icon::{ToplevelIcon, ToplevelIconBuffer, ToplevelIconError};

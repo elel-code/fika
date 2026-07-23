@@ -174,6 +174,7 @@ impl ShellScene {
                     dialog.name.clear();
                     dialog.replace_on_insert = false;
                 }
+                dialog.preedit = None;
                 dialog.name.push_str(&value);
                 dialog.error = None;
             }
@@ -187,6 +188,7 @@ impl ShellScene {
                 } else {
                     dialog.name.pop();
                 }
+                dialog.preedit = None;
                 dialog.error = None;
             }
             CreateCommand::Cancel => {
@@ -203,6 +205,7 @@ impl ShellScene {
                 dialog.name = unique_child_name(&dialog.parent, kind.default_name());
                 dialog.error = None;
                 dialog.replace_on_insert = true;
+                dialog.preedit = None;
             }
             CreateCommand::Commit | CreateCommand::Ignore => return false,
         }
@@ -410,6 +413,7 @@ impl ShellScene {
                     dialog.name.clear();
                     dialog.replace_on_insert = false;
                 }
+                dialog.preedit = None;
                 dialog.name.push_str(&value);
                 dialog.error = None;
             }
@@ -423,6 +427,7 @@ impl ShellScene {
                 } else {
                     dialog.name.pop();
                 }
+                dialog.preedit = None;
                 dialog.error = None;
             }
             RenameCommand::Cancel => {

@@ -17,6 +17,7 @@ struct FikaWgpuApp {
     // Drop order matters: renderer owns a surface tied to the window handle.
     renderer: Option<WgpuState>,
     dialog_windows: ShellDialogWindows,
+    text_input: FikaTextInputRuntime,
     settings_dialog: ShellSettingsDialogState,
     clipboard: Option<ShellClipboard>,
     window: Option<Arc<WaylandWindow>>,
@@ -73,6 +74,7 @@ struct OutgoingDndTransfer {
 }
 include!("app_controller/window_lifecycle.rs");
 include!("app_controller/dialog_windows.rs");
+include!("app_controller/text_input.rs");
 include!("app_controller/async_tasks.rs");
 include!("app_controller/settings_window.rs");
 impl ApplicationHandler for FikaWgpuApp {
@@ -142,6 +144,7 @@ impl ApplicationHandler for FikaWgpuApp {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.drive_directory_watchers(event_loop);
         self.drain_async_task_results(event_loop);
+        self.sync_text_input_states();
         let progress_changed = self.refresh_active_task_progress();
         let animation_pruned = self.scene.prune_finished_animations();
         if (progress_changed || animation_pruned)
@@ -251,6 +254,10 @@ impl ApplicationHandler for FikaWgpuApp {
         event: WindowEvent,
     ) {
         self.trace_window_event(window_id, &event);
+        if let WindowEvent::Ime(event) = &event {
+            self.handle_text_input_event(window_id, event.clone());
+            return;
+        }
         if let Some(kind) = self.dialog_windows.window_kind_for_id(window_id) {
             match kind {
                 ShellDialogWindowKind::Create => {

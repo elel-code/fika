@@ -61,6 +61,13 @@ impl FikaWgpuApp {
                 if event.state != ElementState::Pressed {
                     return;
                 }
+                if self
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::Create)
+                    .is_some_and(|window| self.text_input_consumes_key(window.window_id(), &event))
+                {
+                    return;
+                }
                 let size = self
                     .dialog_windows
                     .layout_size(ShellDialogWindowKind::Create)
@@ -144,6 +151,13 @@ impl FikaWgpuApp {
                 if event.state != ElementState::Pressed {
                     return;
                 }
+                if self
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::Rename)
+                    .is_some_and(|window| self.text_input_consumes_key(window.window_id(), &event))
+                {
+                    return;
+                }
                 let shortcut =
                     self.modifiers.state().control_key() || self.modifiers.state().meta_key();
                 match rename_command_for_key_event(&event, shortcut) {
@@ -217,6 +231,13 @@ impl FikaWgpuApp {
                 ..
             } => {
                 if event.state != ElementState::Pressed {
+                    return;
+                }
+                if self
+                    .dialog_windows
+                    .get(ShellDialogWindowKind::OpenWith)
+                    .is_some_and(|window| self.text_input_consumes_key(window.window_id(), &event))
+                {
                     return;
                 }
                 let shortcut =
