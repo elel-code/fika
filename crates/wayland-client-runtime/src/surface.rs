@@ -16,6 +16,8 @@ use smithay_client_toolkit::shell::xdg::dialog::Dialog;
 use smithay_client_toolkit::shell::xdg::popup::Popup;
 use smithay_client_toolkit::shell::xdg::window::Window;
 
+use crate::fractional_scale::FractionalScaleSurface;
+use crate::toplevel_icon::AppliedToplevelIcon;
 use crate::{InputSerial, LogicalPosition, LogicalRect, LogicalSize};
 
 /// Stable runtime identifier for a Wayland surface role.
@@ -200,6 +202,8 @@ impl Drop for ManagedBlur {
 pub(crate) struct SurfaceShared {
     // Destruction order matters: extension role, xdg role, then parent.
     pub(crate) blur: Mutex<Option<ManagedBlur>>,
+    pub(crate) fractional_scale: Option<FractionalScaleSurface>,
+    pub(crate) toplevel_icon: Mutex<Option<AppliedToplevelIcon>>,
     pub(crate) protocol: ProtocolSurface,
     pub(crate) parent: Option<Arc<SurfaceShared>>,
     pub(crate) connection: Connection,

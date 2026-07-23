@@ -80,4 +80,71 @@ Cursor selection uses SCTK's themed-pointer path. It prefers
 `wp_cursor_shape_manager_v1` and falls back to the system XCursor theme without
 changing the crate-owned cursor vocabulary.
 
+## Touch input
+
+Touch behavior follows winit main at
+`d84ec647d80d9ef76c5a42b948c852b8e0db9210`: surface-local down and motion,
+seat-scoped down/up serials, multi-point identity, and cancellation are exposed
+without leaking protocol objects. Shape and orientation are preserved instead
+of being discarded.
+
+The runtime owns the `wl_touch` frame buffer because SCTK 0.21's generic
+`TouchData`/`Dispatch2` bounds are recursive in a catch-all Dispatch2 client.
+It matches SCTK's ordering and its workaround for compositors that omit the
+final frame after the last touch-up. Surface destruction, touch capability
+removal, and seat removal all clear tracked points; cancellations are emitted
+once per affected surface. Raw frame batching and seat-local point/serial
+tracking live in a dedicated `touch` module; the core runtime only translates
+completed frames into crate-owned events.
+
+## Fractional scaling and viewporter
+
+Fractional scaling follows winit main at
+`d84ec647d80d9ef76c5a42b948c852b8e0db9210` and the
+`wp-fractional-scale-v1` protocol: the manager is usable only together with
+`wp-viewporter`, preferred numerators use a denominator of 120, and legacy
+integer output-scale updates are suppressed once a surface has a fractional
+scale object.
+
+The runtime owns both per-surface extension objects and destroys them before
+the xdg/wl surface roles. Its public boundary keeps preferred scale as `f64`,
+requires fractional clients to leave `wl_surface.buffer_scale` at one, and
+exposes the logical viewport destination as explicit double-buffered surface
+state. Fika rounds logical to physical toplevel dimensions halfway away from
+zero, matching Wayland and winit rather than the usual floor conversion.
+
+## XDG activation
+
+Activation behavior follows winit main at
+`d84ec647d80d9ef76c5a42b948c852b8e0db9210`: callers can asynchronously obtain
+an opaque token for IPC, apply an externally supplied token to a toplevel, or
+request user attention by obtaining a surface-associated token and activating
+that same surface when the compositor replies.
+
+The runtime additionally exposes all optional version-1 request context:
+target app ID and a seat-scoped input/focus serial. Foreign-connection serials
+are rejected before a protocol request is sent. Exported responses carry a
+runtime request ID, user-attention requests are coalesced per surface, and each
+`xdg_activation_token_v1` object is explicitly destroyed after `done`.
+
+## XDG toplevel icons
+
+Toplevel icon behavior was reviewed against winit main at
+`d84ec647d80d9ef76c5a42b948c852b8e0db9210` and the staging
+`xdg-toplevel-icon-v1` specification. The runtime supports more of the protocol
+surface than winit's current single-RGBA path: XDG theme names, multiple pixel
+representations and integer scales, compositor `icon_size`/`done` preferences,
+and simultaneous name plus pixel fallback data.
+
+Every pixel representation is validated as square SHM-compatible data and
+copied from straight RGBA to immutable premultiplied native-endian ARGB8888.
+The temporary icon object is destroyed after `set_icon`, and applied SHM
+storage is retained with its toplevel until replacement or teardown. Assignment
+and clearing retain the protocol's next-`wl_surface.commit` semantics.
+
+The implementation lives in a self-contained `toplevel_icon` module. The core
+runtime owns only the optional manager and the public orchestration methods;
+surface state retains only the applied storage. The same `shm_format` module is
+used by toplevel and drag icons so alpha conversion cannot diverge.
+
 Last reviewed: 2026-07-23.

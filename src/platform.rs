@@ -19,8 +19,8 @@ use wayland_client_runtime::{
     DndAction as RuntimeDndAction, DndActions as RuntimeDndActions, DndEvent,
     DndIcon as RuntimeDndIcon, DndOfferId, DndSourceId, Event, KeyState, KeyboardEvent,
     LogicalPosition, LogicalSize, MimePayload, PointerEventKind, Runtime, RuntimeError,
-    RuntimeOptions, SurfaceEvent, SurfaceHandle, SurfaceId, ToplevelAttributes, TransferContent,
-    WakeHandle,
+    RuntimeOptions, SurfaceEvent, SurfaceHandle, SurfaceId, ToplevelAttributes,
+    ToplevelIcon as RuntimeToplevelIcon, TransferContent, WakeHandle,
 };
 include!("platform_types.rs");
 include!("platform_clipboard.rs");
@@ -99,7 +99,7 @@ impl WindowAttributes {
 struct WindowState {
     logical_size: LogicalSize,
     physical_size: PhysicalSize<u32>,
-    scale_factor: i32,
+    scale_factor: f64,
     configured: bool,
     redraw_requested: bool,
     frame_pending: bool,
@@ -111,6 +111,7 @@ enum RuntimeCommand {
     SetMaxSize(SurfaceId, Option<LogicalSize>),
     SetBlur(SurfaceId, BlurState),
     SetCursor(CursorIcon),
+    RequestUserAttention(SurfaceId),
     ArmFrame(SurfaceId),
     Destroy(SurfaceId),
 }
@@ -181,7 +182,7 @@ impl WaylandWindow {
         self.state
             .lock()
             .expect("Wayland window state mutex poisoned")
-            .scale_factor as f64
+            .scale_factor
     }
 
     pub fn request_redraw(&self) {
@@ -247,11 +248,7 @@ impl WaylandWindow {
             .state
             .lock()
             .expect("Wayland window state mutex poisoned");
-        let factor = state.scale_factor.max(1) as u32;
-        state.logical_size = LogicalSize::new(
-            size.width.saturating_add(factor - 1) / factor,
-            size.height.saturating_add(factor - 1) / factor,
-        );
+        state.logical_size = physical_to_logical_rounded(size, state.scale_factor);
         state.physical_size = size;
         Some(size)
     }
@@ -266,7 +263,10 @@ impl WaylandWindow {
 
     pub fn focus_window(&self) {}
 
-    pub fn request_user_attention(&self) {}
+    pub fn request_user_attention(&self) {
+        self.shared
+            .push(RuntimeCommand::RequestUserAttention(self.id));
+    }
 }
 
 impl Drop for WaylandWindow {
@@ -315,27 +315,35 @@ impl ActiveEventLoop {
         &self,
         attributes: WindowAttributes,
     ) -> Result<Arc<WaylandWindow>, RuntimeError> {
-        let logical_size = physical_to_logical(attributes.surface_size);
-        let min_size = attributes.min_surface_size.map(physical_to_logical);
-        let max_size = attributes.max_surface_size.map(physical_to_logical);
+        let WindowAttributes {
+            title,
+            app_id,
+            surface_size,
+            min_surface_size,
+            max_surface_size,
+            decorations,
+            dialog,
+            modal,
+        } = attributes;
+        let window_icon = RuntimeToplevelIcon::from_name(app_id.clone())
+            .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
+        let logical_size = physical_to_logical(surface_size);
+        let min_size = min_surface_size.map(physical_to_logical);
+        let max_size = max_surface_size.map(physical_to_logical);
         let toplevel = ToplevelAttributes {
-            title: attributes.title,
-            app_id: attributes.app_id,
+            title,
+            app_id,
             min_size,
             max_size,
-            decorations: attributes.decorations,
+            decorations,
         };
-        let id = if attributes.dialog {
+        let id = if dialog {
             let parent = self.primary_surface.get().ok_or_else(|| {
                 RuntimeError::Protocol("dialog has no parent surface".to_string())
             })?;
-            self.runtime.borrow_mut().create_dialog(
-                parent,
-                DialogAttributes {
-                    toplevel,
-                    modal: attributes.modal,
-                },
-            )?
+            self.runtime
+                .borrow_mut()
+                .create_dialog(parent, DialogAttributes { toplevel, modal })?
         } else {
             let id = self.runtime.borrow_mut().create_toplevel(toplevel)?;
             if self.primary_surface.get().is_none() {
@@ -343,6 +351,14 @@ impl ActiveEventLoop {
             }
             id
         };
+        match self
+            .runtime
+            .borrow()
+            .set_toplevel_icon(id, Some(window_icon))
+        {
+            Ok(()) | Err(RuntimeError::Unsupported(_)) => {}
+            Err(error) => return Err(error),
+        }
         let handle = self
             .runtime
             .borrow()
@@ -353,8 +369,8 @@ impl ActiveEventLoop {
             handle,
             state: Mutex::new(WindowState {
                 logical_size,
-                physical_size: attributes.surface_size,
-                scale_factor: 1,
+                physical_size: surface_size,
+                scale_factor: 1.0,
                 configured: false,
                 redraw_requested: true,
                 frame_pending: false,
@@ -510,6 +526,42 @@ fn physical_to_logical(size: PhysicalSize<u32>) -> LogicalSize {
     LogicalSize::new(size.width.max(1), size.height.max(1))
 }
 
+fn normalize_wayland_scale_factor(scale_factor: f64) -> f64 {
+    if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    }
+}
+
+fn logical_to_physical_rounded(size: LogicalSize, scale_factor: f64) -> PhysicalSize<u32> {
+    let scale_factor = normalize_wayland_scale_factor(scale_factor);
+    PhysicalSize::new(
+        scaled_dimension(size.width, scale_factor),
+        scaled_dimension(size.height, scale_factor),
+    )
+}
+
+fn physical_to_logical_rounded(size: PhysicalSize<u32>, scale_factor: f64) -> LogicalSize {
+    let scale_factor = normalize_wayland_scale_factor(scale_factor);
+    LogicalSize::new(
+        scaled_dimension(size.width, scale_factor.recip()),
+        scaled_dimension(size.height, scale_factor.recip()),
+    )
+}
+
+fn scaled_dimension(value: u32, scale_factor: f64) -> u32 {
+    (f64::from(value) * scale_factor)
+        .round()
+        .clamp(1.0, f64::from(u32::MAX)) as u32
+}
+
+fn integer_buffer_scale(scale_factor: f64) -> i32 {
+    normalize_wayland_scale_factor(scale_factor)
+        .round()
+        .clamp(1.0, f64::from(i32::MAX)) as i32
+}
+
 fn scale_dnd_position(position: LogicalPosition, scale: f64) -> PhysicalPosition<f64> {
     PhysicalPosition::new(position.x as f64 * scale, position.y as f64 * scale)
 }
@@ -658,4 +710,39 @@ fn physical_key(raw_code: u32) -> PhysicalKey {
         _ => return PhysicalKey::Unidentified(NativeKeyCode::Unidentified),
     };
     PhysicalKey::Code(code)
+}
+
+#[cfg(test)]
+mod scaling_tests {
+    use super::*;
+
+    #[test]
+    fn fractional_scale_rounds_toplevel_sizes_half_away_from_zero() {
+        let logical = LogicalSize::new(801, 641);
+
+        assert_eq!(
+            logical_to_physical_rounded(logical, 1.25),
+            PhysicalSize::new(1001, 801)
+        );
+        assert_eq!(
+            logical_to_physical_rounded(logical, 1.5),
+            PhysicalSize::new(1202, 962)
+        );
+        assert_eq!(
+            logical_to_physical_rounded(LogicalSize::new(800, 640), 0.75),
+            PhysicalSize::new(600, 480)
+        );
+    }
+
+    #[test]
+    fn physical_size_requests_use_the_fractional_scale() {
+        assert_eq!(
+            physical_to_logical_rounded(PhysicalSize::new(1001, 801), 1.25),
+            LogicalSize::new(801, 641)
+        );
+        assert_eq!(
+            physical_to_logical_rounded(PhysicalSize::new(1202, 962), 1.5),
+            LogicalSize::new(801, 641)
+        );
+    }
 }

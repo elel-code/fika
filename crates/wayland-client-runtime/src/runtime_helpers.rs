@@ -143,25 +143,6 @@ fn prepare_dnd_icon_surface(
     })
 }
 
-fn copy_rgba_to_premultiplied_argb8888(rgba: &[u8], argb: &mut [u8]) {
-    for (source, destination) in rgba.chunks_exact(4).zip(argb.chunks_exact_mut(4)) {
-        let alpha = source[3];
-        let red = premultiply_alpha(source[0], alpha);
-        let green = premultiply_alpha(source[1], alpha);
-        let blue = premultiply_alpha(source[2], alpha);
-        let native_argb = (u32::from(alpha) << 24
-            | u32::from(red) << 16
-            | u32::from(green) << 8
-            | u32::from(blue))
-        .to_ne_bytes();
-        destination.copy_from_slice(&native_argb);
-    }
-}
-
-fn premultiply_alpha(component: u8, alpha: u8) -> u8 {
-    ((u16::from(component) * u16::from(alpha) + 127) / 255) as u8
-}
-
 fn map_anchor(value: PopupAnchor) -> xdg_positioner::Anchor {
     match value {
         PopupAnchor::None => xdg_positioner::Anchor::None,

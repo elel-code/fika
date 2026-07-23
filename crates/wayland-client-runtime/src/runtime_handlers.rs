@@ -33,10 +33,17 @@ impl CompositorHandler for RuntimeState {
         factor: i32,
     ) {
         if let Some(surface) = self.surface_id(surface) {
+            if self
+                .surfaces
+                .get(&surface)
+                .is_some_and(|shared| shared.fractional_scale.is_some())
+            {
+                return;
+            }
             self.events
                 .push_back(Event::Surface(SurfaceEvent::ScaleFactorChanged {
                     surface,
-                    factor,
+                    factor: f64::from(factor),
                 }));
         }
     }
@@ -241,7 +248,9 @@ impl SeatHandler for RuntimeState {
                     )
                     .ok();
             }
-            Capability::Touch => {}
+            Capability::Touch if objects.touch.is_none() => {
+                objects.touch = Some(seat.get_touch(qh, TouchData::new(seat.clone())));
+            }
             _ => {}
         }
     }
@@ -253,6 +262,7 @@ impl SeatHandler for RuntimeState {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        let mut cancelled_touch_surfaces = Vec::new();
         let Some(objects) = self.seats.get_mut(&seat.id().protocol_id()) else {
             return;
         };
@@ -271,14 +281,35 @@ impl SeatHandler for RuntimeState {
                 objects.pointer_focus = None;
                 objects.latest_button_serial = None;
             }
-            Capability::Touch => {}
+            Capability::Touch => {
+                if let Some(touch) = objects.touch.take()
+                    && touch.version() >= 3
+                {
+                    touch.release();
+                }
+                cancelled_touch_surfaces = objects.touch_points.drain_surfaces();
+            }
             _ => {}
+        }
+        for surface in cancelled_touch_surfaces {
+            self.events.push_back(Event::Touch(TouchEvent {
+                surface: Some(surface),
+                kind: TouchEventKind::Cancelled,
+            }));
         }
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
-        if let Some(objects) = self.seats.remove(&seat.id().protocol_id())
-            && let Some(device) = objects.data_device.as_ref()
+        let Some(mut objects) = self.seats.remove(&seat.id().protocol_id()) else {
+            return;
+        };
+        for surface in objects.touch_points.drain_surfaces() {
+            self.events.push_back(Event::Touch(TouchEvent {
+                surface: Some(surface),
+                kind: TouchEventKind::Cancelled,
+            }));
+        }
+        if let Some(device) = objects.data_device.as_ref()
             && let Some(offer) = self.active_dnd_by_device.remove(&device.inner().id())
             && let Some(record) = self.incoming_dnd.remove(&offer)
         {
@@ -398,6 +429,169 @@ impl PointerHandler for RuntimeState {
                 surface,
                 position: event.position,
                 kind,
+            }));
+        }
+    }
+}
+
+impl RuntimeState {
+    fn dispatch_touch_event(&mut self, seat: &wl_seat::WlSeat, event: wl_touch::Event) {
+        match event {
+            wl_touch::Event::Down {
+                serial,
+                time,
+                surface,
+                id,
+                x,
+                y,
+            } => self.touch_down(seat, serial, time, surface, id, (x, y)),
+            wl_touch::Event::Up { serial, time, id } => {
+                self.touch_up(seat, serial, time, id)
+            }
+            wl_touch::Event::Motion { time, id, x, y } => {
+                self.touch_motion(seat, time, id, (x, y))
+            }
+            wl_touch::Event::Shape { id, major, minor } => {
+                self.touch_shape(seat, id, major, minor)
+            }
+            wl_touch::Event::Orientation { id, orientation } => {
+                self.touch_orientation(seat, id, orientation)
+            }
+            _ => {}
+        }
+    }
+
+    fn touch_down(
+        &mut self,
+        seat: &wl_seat::WlSeat,
+        serial: u32,
+        time: u32,
+        surface: wl_surface::WlSurface,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        let Some(surface) = self.surface_id(&surface) else {
+            return;
+        };
+        let seat_id = seat.id().protocol_id();
+        self.record_selection_serial(seat_id, serial);
+        let Some(objects) = self.seats.get_mut(&seat_id) else {
+            return;
+        };
+        objects.touch_points.insert(id, surface, serial);
+        self.events.push_back(Event::Touch(TouchEvent {
+            surface: Some(surface),
+            kind: TouchEventKind::Down {
+                time,
+                id,
+                position,
+                serial: InputSerial::new(seat.clone(), serial, InputSerialSource::TouchDown),
+            },
+        }));
+    }
+
+    fn touch_up(
+        &mut self,
+        seat: &wl_seat::WlSeat,
+        serial: u32,
+        time: u32,
+        id: i32,
+    ) {
+        let seat_id = seat.id().protocol_id();
+        self.record_selection_serial(seat_id, serial);
+        let surface = self
+            .seats
+            .get_mut(&seat_id)
+            .and_then(|objects| objects.touch_points.remove(id));
+        self.events.push_back(Event::Touch(TouchEvent {
+            surface,
+            kind: TouchEventKind::Up {
+                time,
+                id,
+                serial: InputSerial::new(seat.clone(), serial, InputSerialSource::TouchUp),
+            },
+        }));
+    }
+
+    fn touch_motion(
+        &mut self,
+        seat: &wl_seat::WlSeat,
+        time: u32,
+        id: i32,
+        position: (f64, f64),
+    ) {
+        let Some(surface) = self
+            .seats
+            .get(&seat.id().protocol_id())
+            .and_then(|objects| objects.touch_points.surface(id))
+        else {
+            return;
+        };
+        self.events.push_back(Event::Touch(TouchEvent {
+            surface: Some(surface),
+            kind: TouchEventKind::Motion {
+                time,
+                id,
+                position,
+            },
+        }));
+    }
+
+    fn touch_shape(
+        &mut self,
+        seat: &wl_seat::WlSeat,
+        id: i32,
+        major: f64,
+        minor: f64,
+    ) {
+        let Some(surface) = self
+            .seats
+            .get(&seat.id().protocol_id())
+            .and_then(|objects| objects.touch_points.surface(id))
+        else {
+            return;
+        };
+        self.events.push_back(Event::Touch(TouchEvent {
+            surface: Some(surface),
+            kind: TouchEventKind::Shape { id, major, minor },
+        }));
+    }
+
+    fn touch_orientation(
+        &mut self,
+        seat: &wl_seat::WlSeat,
+        id: i32,
+        degrees: f64,
+    ) {
+        let Some(surface) = self
+            .seats
+            .get(&seat.id().protocol_id())
+            .and_then(|objects| objects.touch_points.surface(id))
+        else {
+            return;
+        };
+        self.events.push_back(Event::Touch(TouchEvent {
+            surface: Some(surface),
+            kind: TouchEventKind::Orientation { id, degrees },
+        }));
+    }
+
+    fn touch_cancel(&mut self, seat: &wl_seat::WlSeat) {
+        let Some(objects) = self.seats.get_mut(&seat.id().protocol_id()) else {
+            return;
+        };
+        let surfaces = objects.touch_points.drain_surfaces();
+        if surfaces.is_empty() {
+            self.events.push_back(Event::Touch(TouchEvent {
+                surface: None,
+                kind: TouchEventKind::Cancelled,
+            }));
+            return;
+        }
+        for surface in surfaces {
+            self.events.push_back(Event::Touch(TouchEvent {
+                surface: Some(surface),
+                kind: TouchEventKind::Cancelled,
             }));
         }
     }

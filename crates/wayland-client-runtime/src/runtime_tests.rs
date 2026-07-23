@@ -48,6 +48,74 @@ mod tests {
     }
 
     #[test]
+    fn fractional_scale_keeps_wl_surface_buffer_scale_at_one() {
+        assert!(validate_buffer_scale(1, true).is_ok());
+        assert!(validate_buffer_scale(2, false).is_ok());
+        assert!(validate_buffer_scale(0, false).is_err());
+        assert!(validate_buffer_scale(2, true).is_err());
+    }
+
+    #[test]
+    fn viewport_destination_rejects_zero_sized_axes() {
+        assert!(validate_viewport_destination(None).is_ok());
+        assert!(validate_viewport_destination(Some(LogicalSize::new(1, 1))).is_ok());
+        assert!(validate_viewport_destination(Some(LogicalSize::new(0, 1))).is_err());
+        assert!(validate_viewport_destination(Some(LogicalSize::new(1, 0))).is_err());
+    }
+
+    #[test]
+    fn activation_targets_are_limited_to_toplevel_roles() {
+        let surface = SurfaceId(8);
+        assert!(validate_activation_target(surface, SurfaceKind::Toplevel).is_ok());
+        assert!(validate_activation_target(surface, SurfaceKind::Dialog).is_ok());
+        assert!(matches!(
+            validate_activation_target(surface, SurfaceKind::Popup),
+            Err(RuntimeError::InvalidActivationTarget(id)) if id == surface
+        ));
+    }
+
+    #[test]
+    fn activation_request_ids_are_nonzero_and_wrap_safely() {
+        let mut next = 1;
+        assert_eq!(take_activation_request_id(&mut next).get(), 1);
+        assert_eq!(take_activation_request_id(&mut next).get(), 2);
+
+        next = u64::MAX;
+        assert_eq!(take_activation_request_id(&mut next).get(), u64::MAX);
+        assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn user_attention_requests_coalesce_per_surface() {
+        let first = SurfaceId(3);
+        let second = SurfaceId(7);
+        let mut pending = HashSet::new();
+
+        assert!(begin_attention_request(&mut pending, first));
+        assert!(!begin_attention_request(&mut pending, first));
+        assert!(begin_attention_request(&mut pending, second));
+        assert_eq!(pending, HashSet::from([first, second]));
+    }
+
+    #[test]
+    fn popup_touch_grab_expires_when_its_touch_point_ends() {
+        let mut objects = SeatObjects::default();
+        objects.touch_points.insert(5, SurfaceId(2), 55);
+
+        assert!(is_current_popup_grab(
+            &objects,
+            InputSerialSource::TouchDown,
+            55
+        ));
+        objects.touch_points.remove(5);
+        assert!(!is_current_popup_grab(
+            &objects,
+            InputSerialSource::TouchDown,
+            55
+        ));
+    }
+
+    #[test]
     fn nested_popups_are_removed_before_their_parents() {
         let root = SurfaceId(1);
         let popup = SurfaceId(2);
@@ -79,18 +147,6 @@ mod tests {
             map_cursor_icon(CursorIcon::ColResize),
             SctkCursorIcon::ColResize
         );
-    }
-
-    #[test]
-    fn drag_icon_rgba_is_premultiplied_and_encoded_as_native_argb() {
-        let mut encoded = [0; 8];
-        copy_rgba_to_premultiplied_argb8888(
-            &[200, 100, 50, 128, 255, 200, 100, 0],
-            &mut encoded,
-        );
-
-        assert_eq!(u32::from_ne_bytes(encoded[..4].try_into().unwrap()), 0x8064_3219);
-        assert_eq!(u32::from_ne_bytes(encoded[4..].try_into().unwrap()), 0);
     }
 
     #[test]

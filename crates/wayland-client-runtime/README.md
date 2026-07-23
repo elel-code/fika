@@ -14,16 +14,16 @@ general-purpose and contains no Fika-specific model or renderer dependency.
 | Connection/event loop | Owns the Wayland connection, event queue and calloop dispatcher; exposes an owned event queue and cross-thread wake handle |
 | Toplevels | Creates xdg-toplevel surfaces and reports configure/close/frame/scale events |
 | Dialogs | Creates parented xdg-dialog-v1 surfaces with modality; falls back to a parented xdg-toplevel when unsupported |
+| Activation | Exports and consumes `xdg-activation-v1` tokens, carries optional app/seat/serial context, and supports coalesced user-attention requests |
+| Toplevel icons | Uses `xdg-toplevel-icon-v1` with XDG theme names, one or more immutable SHM pixel fallbacks, compositor-preferred sizes, and explicit commit semantics |
 | Popups | Exposes the complete xdg-positioner anchor, gravity, constraint, offset, reactive and reposition state; accepts only opaque press/down serials for grabs |
 | Lifetimes | Owns a surface tree, removes descendants child-first, and makes every renderer lease retain its ancestors |
 | Rendering | `SurfaceHandle` implements raw-window-handle 0.6 for both wgpu and direct Vulkan use |
+| Scaling | Uses `wp-fractional-scale-v1` together with `wp-viewporter`, reports `f64` preferred scales, and retains integer output-scale fallback |
 | Blur | Uses `ext-background-effect-v1` and preserves complete-surface or arbitrary surface-local rectangle regions |
 | Data transfer | Clipboard and DnD share one MIME-content model, runtime connection, seat/serial state, data devices and pipe I/O; application-specific formats stay in the application |
 | Drag and drop | Handles incoming/outgoing offers, action negotiation and lifecycle events; optional RGBA previews use owned SHM drag-icon surfaces |
-| Input | Translates keyboard and pointer events into crate-owned values; uses cursor-shape when available and automatically falls back to the system cursor theme |
-
-Touch event types are reserved in the API, while touch dispatch will be enabled
-once its SCTK 0.21 dispatch integration is finalized.
+| Input | Translates framed multi-touch, keyboard, and pointer events into crate-owned values; uses cursor-shape when available and automatically falls back to the system cursor theme |
 
 ## Basic use
 
@@ -104,6 +104,77 @@ finishes them.
 `Runtime::set_cursor` uses `wp_cursor_shape_manager_v1` when advertised. On
 older compositors, SCTK loads the same semantic cursor from the configured
 system XCursor theme; applications do not need a separate fallback path.
+
+Touch dispatch preserves Wayland frame ordering and the Weston-compatible
+last-up fallback. Down/up serials remain seat-scoped, active touch-down serials
+can request popup grabs, and cancel/capability-removal events clear every
+affected surface without leaving stale touch IDs behind.
+
+## Fractional scaling
+
+Fractional scaling is enabled only when both `wp-fractional-scale-v1` and
+`wp-viewporter` are available. Each managed surface then owns one fractional
+scale object and one viewport for its complete lifetime. Preferred scale
+numerators are divided by the protocol denominator of 120 and emitted as
+`SurfaceEvent::ScaleFactorChanged { factor: f64, .. }`; legacy integer output
+scale events are ignored for those surfaces.
+
+Render buffers at `round(logical_size * factor)`, keep
+`wl_surface.buffer_scale` at one, and call
+`Runtime::set_viewport_destination(surface, Some(logical_size))` before the
+commit that attaches the resized buffer. The viewport destination is
+double-buffered with the surface. Without the paired globals, use the integer
+scale event and `Runtime::set_buffer_scale` instead.
+
+## Surface activation
+
+When `Runtime::capabilities().xdg_activation_v1` is true,
+`Runtime::request_activation_token` starts an asynchronous token request. Its
+`ActivationTokenAttributes` can carry the target app ID and the opaque
+`InputSerial` from the input or focus event that initiated the request. The
+result arrives as `Event::Activation(ActivationEvent::TokenDone { .. })` with
+a stable `ActivationRequestId`, so multiple outstanding requests remain
+distinguishable.
+
+Forward the resulting `ActivationToken` to another process using
+`XDG_ACTIVATION_TOKEN`, D-Bus platform data, or another IPC channel. A receiving
+client wraps that string with `ActivationToken::from_raw` and calls
+`Runtime::activate_surface`. `Runtime::request_user_attention` implements the
+winit behavior directly by requesting a surface-associated token and applying
+it back to the same toplevel; duplicate requests are coalesced until the
+compositor completes the first one. Token protocol objects are destroyed after
+their one `done` event.
+
+## Toplevel icons
+
+When `Runtime::capabilities().xdg_toplevel_icon_v1` is true,
+`Runtime::set_toplevel_icon` assigns an icon to a toplevel or dialog. A
+`ToplevelIcon` may contain an XDG icon-theme name, multiple square RGBA buffers,
+or both. Supplying both lets the compositor resolve the current theme first and
+use the pixel representations as fallbacks. `Runtime::preferred_toplevel_icon_sizes`
+returns the sorted, deduplicated logical sizes announced by the compositor; an
+empty list means it has no preference (or the protocol is unavailable).
+
+Pixel representations carry their own integer scale and are validated before
+any protocol request is sent. The runtime copies straight RGBA into immutable,
+premultiplied native-endian ARGB8888 SHM storage and keeps that storage alive
+for the applied icon. Replacing the icon releases the previous storage. Passing
+`None` restores the compositor's default icon.
+
+Icon assignment is double-buffered. Call `Runtime::commit` after
+`set_toplevel_icon`, or let the next renderer commit apply it. The temporary
+`xdg_toplevel_icon_v1` object becomes immutable after assignment and is
+destroyed immediately; the compositor keeps the assigned icon until it is
+explicitly replaced or cleared.
+
+## Internal module boundary
+
+Protocol-specific ownership and dispatch are kept in focused modules:
+`activation`, `fractional_scale`, `toplevel_icon`, `touch`, and the shared SHM
+pixel formatter. `Runtime` binds those modules and translates their callbacks
+into crate-owned events, while `SurfaceShared` only retains per-surface protocol
+resources. This keeps generated Wayland proxy details out of the public API and
+prevents application policy from leaking into reusable protocol code.
 
 ## Protocol lifetime rule
 

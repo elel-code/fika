@@ -1,21 +1,27 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::activation::{ActivationHandler, ActivationManager, ActivationTokenPurpose};
 use crate::data_transfer::{TransferContent, TransferReadPipe};
 use crate::dnd::{DndAction, DndActions, DndEvent, DndIcon, DndOfferId, DndReadPipe, DndSourceId};
 use crate::event::{
     Event, KeyState, KeyboardEvent, Modifiers, PointerEvent, PointerEventKind, PopupConfigureKind,
-    SurfaceEvent, ToplevelState,
+    SurfaceEvent, ToplevelState, TouchEvent, TouchEventKind,
 };
+use crate::fractional_scale::{FractionalScaleHandler, FractionalScaleManager};
 use crate::input::{InputSerial, InputSerialSource};
+use crate::shm_format::copy_rgba_to_premultiplied_argb8888;
 use crate::surface::{
     DecorationPreference, Gravity, ManagedBlur, PopupAnchor, PopupPositioner, ProtocolSurface,
     SurfaceHandle, SurfaceId, SurfaceKind, SurfaceShared,
 };
+use crate::toplevel_icon::ToplevelIconManager;
+use crate::touch::{TouchData, TouchHandler, TouchPoints};
 use crate::{
-    BlurRegion, BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize,
-    PopupAttributes, SuggestedSize, ToplevelAttributes,
+    ActivationEvent, ActivationRequestId, ActivationToken, ActivationTokenAttributes, BlurRegion,
+    BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize, PopupAttributes,
+    SuggestedSize, ToplevelAttributes, ToplevelIcon,
 };
 use smithay_client_toolkit::background_effect::{
     BackgroundEffectHandler, BackgroundEffectState,
@@ -38,6 +44,7 @@ use smithay_client_toolkit::reexports::client::globals::{GlobalList, registry_qu
 use smithay_client_toolkit::reexports::client::protocol::wl_data_device_manager::DndAction as WlDndAction;
 use smithay_client_toolkit::reexports::client::protocol::{
     wl_data_device, wl_data_source, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface,
+    wl_touch,
 };
 use smithay_client_toolkit::reexports::client::{Connection, Proxy, QueueHandle};
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::{
@@ -83,9 +90,15 @@ impl Default for RuntimeOptions {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RuntimeCapabilities {
     pub xdg_dialog_v1: bool,
+    /// The compositor supports exporting and consuming xdg activation tokens.
+    pub xdg_activation_v1: bool,
+    /// The compositor supports assigning per-toplevel names or pixel icons.
+    pub xdg_toplevel_icon_v1: bool,
     pub popup_reposition: bool,
     /// The compositor currently advertises the ext-background-effect-v1 blur capability.
     pub ext_background_effect: bool,
+    /// Fractional scale is usable only when both protocol globals are present.
+    pub fractional_scale: bool,
     pub cursor_shape: bool,
 }
 
@@ -109,6 +122,12 @@ pub enum RuntimeError {
     InvalidPopupGrab,
     #[error("popup grab serial belongs to another Wayland connection or is no longer current")]
     ForeignOrStalePopupGrab,
+    #[error("activation serial belongs to another Wayland connection")]
+    ForeignActivationSerial,
+    #[error("surface {0:?} is not an activatable toplevel")]
+    InvalidActivationTarget(SurfaceId),
+    #[error("surface {0:?} cannot have an xdg toplevel icon")]
+    InvalidToplevelIconTarget(SurfaceId),
     #[error("drag origin has no focused pointer seat with a current button serial")]
     InvalidDragSerial,
     #[error("clipboard selection has no focused seat with a current input serial")]
@@ -177,12 +196,18 @@ impl Runtime {
         let output_state = OutputState::new(&globals, &queue_handle);
         let seat_state = SeatState::new(&globals, &queue_handle);
         let background_effect_state = BackgroundEffectState::new(&globals, &queue_handle);
+        let xdg_activation = ActivationManager::bind(&globals, &queue_handle).ok();
+        let toplevel_icon_manager = ToplevelIconManager::bind(&globals, &queue_handle).ok();
+        let fractional_scale_manager = FractionalScaleManager::bind(&globals, &queue_handle).ok();
         let data_device_manager = DataDeviceManagerState::bind(&globals, &queue_handle)
             .map_err(|error| RuntimeError::MissingGlobal(error.to_string()))?;
         let capabilities = RuntimeCapabilities {
             xdg_dialog_v1: has_global(&globals, "xdg_wm_dialog_v1"),
+            xdg_activation_v1: xdg_activation.is_some(),
+            xdg_toplevel_icon_v1: toplevel_icon_manager.is_some(),
             popup_reposition: xdg_shell.xdg_wm_base().version() >= 3,
             ext_background_effect: false,
+            fractional_scale: fractional_scale_manager.is_some(),
             cursor_shape: has_global(&globals, "wp_cursor_shape_manager_v1"),
         };
 
@@ -195,6 +220,9 @@ impl Runtime {
             compositor,
             shm,
             xdg_shell,
+            xdg_activation,
+            toplevel_icon_manager,
+            fractional_scale_manager,
             surfaces: HashMap::new(),
             surface_ids: HashMap::new(),
             children: HashMap::new(),
@@ -204,16 +232,20 @@ impl Runtime {
             active_dnd_by_device: HashMap::new(),
             outgoing_dnd: HashMap::new(),
             selection_sources: HashMap::new(),
+            pending_attention: HashSet::new(),
             events: VecDeque::with_capacity(options.event_capacity),
             next_surface_id: 1,
             next_dnd_id: 1,
             next_button_order: 1,
+            next_activation_request_id: 1,
         };
 
         // ext-background-effect-v1 advertises effect support in an event after
         // binding. Complete one roundtrip so capabilities are accurate when
         // `from_connection` returns.
-        if has_global(&globals, "ext_background_effect_manager_v1") {
+        if has_global(&globals, "ext_background_effect_manager_v1")
+            || state.toplevel_icon_manager.is_some()
+        {
             event_queue
                 .roundtrip(&mut state)
                 .map_err(|error| RuntimeError::Registry(error.to_string()))?;
@@ -239,6 +271,17 @@ impl Runtime {
         capabilities.ext_background_effect =
             supports_ext_background_blur(self.state.background_effect_state.capabilities());
         capabilities
+    }
+
+    /// Preferred square icon sizes advertised by the compositor, in logical
+    /// pixels. An empty list means the compositor has no size preference or
+    /// does not support xdg-toplevel-icon-v1.
+    pub fn preferred_toplevel_icon_sizes(&self) -> Vec<u32> {
+        self.state
+            .toplevel_icon_manager
+            .as_ref()
+            .map(ToplevelIconManager::preferred_sizes)
+            .unwrap_or_default()
     }
 
     pub fn connection(&self) -> &Connection {
@@ -341,8 +384,9 @@ impl Runtime {
                 .state
                 .seats
                 .get(&serial.seat.id().protocol_id())
-                .and_then(|objects| objects.latest_button_serial)
-                .is_some_and(|value| value.serial == serial.serial);
+                .is_some_and(|objects| {
+                    is_current_popup_grab(objects, serial.source(), serial.serial)
+                });
             if !same_connection || !current {
                 return Err(RuntimeError::ForeignOrStalePopupGrab);
             }
@@ -414,6 +458,77 @@ impl Runtime {
         Ok(())
     }
 
+    /// Request a compositor activation token associated with `surface`.
+    ///
+    /// Completion is asynchronous and reported as
+    /// [`Event::Activation`] carrying [`ActivationEvent::TokenDone`].
+    /// Supplying a recent input serial generally gives the compositor enough
+    /// context to issue an effective token, but all request attributes are
+    /// optional in the protocol.
+    pub fn request_activation_token(
+        &mut self,
+        surface: SurfaceId,
+        attributes: ActivationTokenAttributes,
+    ) -> Result<ActivationRequestId, RuntimeError> {
+        self.activation_manager()?;
+        let shared = self.surface_shared(surface)?;
+        if let Some(serial) = attributes.serial.as_ref() {
+            self.validate_activation_serial(serial)?;
+        }
+
+        let request = take_activation_request_id(&mut self.state.next_activation_request_id);
+        self.state
+            .xdg_activation
+            .as_ref()
+            .expect("activation support checked above")
+            .request_token(
+                &self.queue_handle,
+                ActivationTokenPurpose::Export { request, surface },
+                shared.wl_surface(),
+                attributes,
+            );
+        Ok(request)
+    }
+
+    /// Activate `surface` with a token received from this runtime or through
+    /// an external channel such as `XDG_ACTIVATION_TOKEN`.
+    pub fn activate_surface(
+        &self,
+        surface: SurfaceId,
+        token: ActivationToken,
+    ) -> Result<(), RuntimeError> {
+        let activation = self.activation_manager()?;
+        let shared = self.surface_shared(surface)?;
+        validate_activation_target(surface, shared.kind)?;
+        activation.activate(shared.wl_surface(), token);
+        Ok(())
+    }
+
+    /// Ask the compositor to draw attention to `surface`.
+    ///
+    /// This mirrors winit's Wayland path: request a surface-associated token
+    /// and activate the same surface when the token arrives. Repeated requests
+    /// are coalesced while one is pending.
+    pub fn request_user_attention(&mut self, surface: SurfaceId) -> Result<(), RuntimeError> {
+        self.activation_manager()?;
+        let shared = self.surface_shared(surface)?;
+        validate_activation_target(surface, shared.kind)?;
+        if !begin_attention_request(&mut self.state.pending_attention, surface) {
+            return Ok(());
+        }
+        self.state
+            .xdg_activation
+            .as_ref()
+            .expect("activation support checked above")
+            .request_token(
+                &self.queue_handle,
+                ActivationTokenPurpose::Attention { surface },
+                shared.wl_surface(),
+                ActivationTokenAttributes::default(),
+            );
+        Ok(())
+    }
+
     pub fn set_window_geometry(
         &self,
         surface: SurfaceId,
@@ -465,6 +580,36 @@ impl Runtime {
         Ok(())
     }
 
+    /// Set or clear the icon for an individual toplevel.
+    ///
+    /// Named icons follow the active XDG icon theme. Pixel icons are copied
+    /// into immutable premultiplied ARGB8888 SHM buffers. The assignment is
+    /// double-buffered and becomes visible on the next surface commit.
+    pub fn set_toplevel_icon(
+        &self,
+        surface: SurfaceId,
+        icon: Option<ToplevelIcon>,
+    ) -> Result<(), RuntimeError> {
+        let manager = self
+            .state
+            .toplevel_icon_manager
+            .as_ref()
+            .ok_or(RuntimeError::Unsupported("xdg-toplevel-icon-v1"))?;
+        let shared = self.surface_shared(surface)?;
+        let toplevel = shared
+            .protocol
+            .xdg_toplevel()
+            .ok_or(RuntimeError::InvalidToplevelIconTarget(surface))?;
+        let applied = manager
+            .set_icon(&self.queue_handle, &self.state.shm, toplevel, icon)
+            .map_err(RuntimeError::Protocol)?;
+        *shared
+            .toplevel_icon
+            .lock()
+            .expect("toplevel icon mutex poisoned") = applied;
+        Ok(())
+    }
+
     pub fn set_min_size(
         &self,
         surface: SurfaceId,
@@ -497,14 +642,30 @@ impl Runtime {
 
     /// Set the integer buffer scale used to interpret attached renderer buffers.
     pub fn set_buffer_scale(&self, surface: SurfaceId, factor: i32) -> Result<(), RuntimeError> {
-        if factor < 1 {
-            return Err(RuntimeError::Protocol(
-                "buffer scale must be at least one".to_string(),
-            ));
-        }
-        self.surface_shared(surface)?
-            .wl_surface()
-            .set_buffer_scale(factor);
+        let shared = self.surface_shared(surface)?;
+        validate_buffer_scale(factor, shared.fractional_scale.is_some())?;
+        shared.wl_surface().set_buffer_scale(factor);
+        Ok(())
+    }
+
+    /// Set the surface-local destination size used by wp-viewporter.
+    ///
+    /// Fractional-scale clients should keep `wl_surface.buffer_scale` at one,
+    /// render a buffer sized from the preferred scale, and set this destination
+    /// to the unscaled logical surface size. The change takes effect on the
+    /// next surface commit. `None` unsets the destination.
+    pub fn set_viewport_destination(
+        &self,
+        surface: SurfaceId,
+        size: Option<LogicalSize>,
+    ) -> Result<(), RuntimeError> {
+        validate_viewport_destination(size)?;
+        let shared = self.surface_shared(surface)?;
+        let fractional_scale = shared
+            .fractional_scale
+            .as_ref()
+            .ok_or(RuntimeError::Unsupported("wp-viewporter"))?;
+        fractional_scale.set_destination(size);
         Ok(())
     }
 
@@ -608,8 +769,15 @@ impl Runtime {
         self.state.next_surface_id += 1;
         let protocol_id = protocol.wl_surface().id();
         let parent_id = parent.as_ref().map(|parent| parent.id);
+        let fractional_scale = self
+            .state
+            .fractional_scale_manager
+            .as_ref()
+            .map(|manager| manager.create_surface(protocol.wl_surface(), &self.queue_handle));
         let shared = Arc::new(SurfaceShared {
             blur: Default::default(),
+            fractional_scale,
+            toplevel_icon: Default::default(),
             protocol,
             parent,
             connection: self.connection.clone(),
@@ -630,6 +798,23 @@ impl Runtime {
             .get(&surface)
             .cloned()
             .ok_or(RuntimeError::SurfaceNotFound(surface))
+    }
+
+    fn activation_manager(&self) -> Result<&ActivationManager, RuntimeError> {
+        self.state
+            .xdg_activation
+            .as_ref()
+            .ok_or(RuntimeError::Unsupported("xdg-activation-v1"))
+    }
+
+    fn validate_activation_serial(&self, serial: &InputSerial) -> Result<(), RuntimeError> {
+        let same_connection =
+            serial.seat.backend().upgrade().as_ref() == Some(&self.connection.backend());
+        if same_connection {
+            Ok(())
+        } else {
+            Err(RuntimeError::ForeignActivationSerial)
+        }
     }
 
     fn parent_toplevel(&self, parent: SurfaceId) -> Result<Arc<SurfaceShared>, RuntimeError> {
@@ -678,6 +863,46 @@ fn supports_ext_background_blur(capabilities: Option<BackgroundEffectCapability>
     capabilities.is_some_and(|value| value.contains(BackgroundEffectCapability::Blur))
 }
 
+fn validate_buffer_scale(factor: i32, fractional_scale: bool) -> Result<(), RuntimeError> {
+    if factor < 1 {
+        return Err(RuntimeError::Protocol(
+            "buffer scale must be at least one".to_string(),
+        ));
+    }
+    if fractional_scale && factor != 1 {
+        return Err(RuntimeError::Protocol(
+            "buffer scale must remain one while fractional scaling is active".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_viewport_destination(size: Option<LogicalSize>) -> Result<(), RuntimeError> {
+    if size.is_some_and(LogicalSize::is_empty) {
+        return Err(RuntimeError::Protocol(
+            "viewport destination must have non-zero dimensions".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_activation_target(surface: SurfaceId, kind: SurfaceKind) -> Result<(), RuntimeError> {
+    match kind {
+        SurfaceKind::Toplevel | SurfaceKind::Dialog => Ok(()),
+        SurfaceKind::Popup => Err(RuntimeError::InvalidActivationTarget(surface)),
+    }
+}
+
+fn take_activation_request_id(next: &mut u64) -> ActivationRequestId {
+    let request = ActivationRequestId(*next);
+    *next = next.wrapping_add(1).max(1);
+    request
+}
+
+fn begin_attention_request(pending: &mut HashSet<SurfaceId>, surface: SurfaceId) -> bool {
+    pending.insert(surface)
+}
+
 struct RuntimeState {
     registry_state: RegistryState,
     output_state: OutputState,
@@ -687,6 +912,9 @@ struct RuntimeState {
     compositor: CompositorState,
     shm: Shm,
     xdg_shell: XdgShell,
+    xdg_activation: Option<ActivationManager>,
+    toplevel_icon_manager: Option<ToplevelIconManager>,
+    fractional_scale_manager: Option<FractionalScaleManager>,
     surfaces: HashMap<SurfaceId, Arc<SurfaceShared>>,
     surface_ids: HashMap<ObjectId, SurfaceId>,
     children: HashMap<SurfaceId, Vec<SurfaceId>>,
@@ -696,10 +924,12 @@ struct RuntimeState {
     active_dnd_by_device: HashMap<ObjectId, DndOfferId>,
     outgoing_dnd: HashMap<ObjectId, OutgoingDndSource>,
     selection_sources: HashMap<ObjectId, SelectionSource>,
+    pending_attention: HashSet<SurfaceId>,
     events: VecDeque<Event>,
     next_surface_id: u64,
     next_dnd_id: u64,
     next_button_order: u64,
+    next_activation_request_id: u64,
 }
 
 struct IncomingDndOffer {
@@ -757,6 +987,7 @@ impl RuntimeState {
             return;
         };
         self.surface_ids.remove(&shared.wl_surface().id());
+        self.pending_attention.remove(&id);
         self.children.remove(&id);
         if let Some(parent) = shared.parent.as_ref()
             && let Some(children) = self.children.get_mut(&parent.id)
@@ -771,6 +1002,7 @@ impl RuntimeState {
             if objects.keyboard_focus == Some(id) {
                 objects.keyboard_focus = None;
             }
+            objects.touch_points.remove_surface(id);
         }
     }
 
@@ -823,6 +1055,16 @@ impl RuntimeState {
     }
 }
 
+fn is_current_popup_grab(objects: &SeatObjects, source: InputSerialSource, serial: u32) -> bool {
+    match source {
+        InputSerialSource::PointerPress => objects
+            .latest_button_serial
+            .is_some_and(|value| value.serial == serial),
+        InputSerialSource::TouchDown => objects.touch_points.contains_serial(serial),
+        _ => false,
+    }
+}
+
 fn collect_post_order(
     children: &HashMap<SurfaceId, Vec<SurfaceId>>,
     id: SurfaceId,
@@ -855,11 +1097,13 @@ fn select_drag_seat(
 struct SeatObjects {
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<ThemedPointer>,
+    touch: Option<wl_touch::WlTouch>,
     data_device: Option<DataDevice>,
     pointer_focus: Option<SurfaceId>,
     latest_button_serial: Option<ButtonSerial>,
     latest_selection_serial: Option<SelectionSerial>,
     keyboard_focus: Option<SurfaceId>,
+    touch_points: TouchPoints,
 }
 
 impl SeatObjects {
@@ -876,10 +1120,61 @@ impl Drop for SeatObjects {
             keyboard.release();
         }
         self.pointer.take();
+        if let Some(touch) = self.touch.take()
+            && touch.version() >= 3
+        {
+            touch.release();
+        }
     }
 }
 
 include!("runtime_handlers.rs");
+
+impl ActivationHandler for RuntimeState {
+    fn activation_token_done(&mut self, purpose: ActivationTokenPurpose, token: String) {
+        match purpose {
+            ActivationTokenPurpose::Export { request, surface } => {
+                self.events
+                    .push_back(Event::Activation(ActivationEvent::TokenDone {
+                        request,
+                        requesting_surface: surface,
+                        token: ActivationToken::from_raw(token),
+                    }));
+            }
+            ActivationTokenPurpose::Attention { surface } => {
+                self.pending_attention.remove(&surface);
+                if let Some(shared) = self.surfaces.get(&surface)
+                    && let Some(activation) = self.xdg_activation.as_ref()
+                {
+                    activation.activate(shared.wl_surface(), ActivationToken::from_raw(token));
+                }
+            }
+        }
+    }
+}
+
+impl FractionalScaleHandler for RuntimeState {
+    fn preferred_scale(&mut self, surface: &wl_surface::WlSurface, factor: f64) {
+        if let Some(surface) = self.surface_id(surface) {
+            self.events
+                .push_back(Event::Surface(SurfaceEvent::ScaleFactorChanged {
+                    surface,
+                    factor,
+                }));
+        }
+    }
+}
+
+impl TouchHandler for RuntimeState {
+    fn touch_frame_event(&mut self, seat: &wl_seat::WlSeat, event: wl_touch::Event) {
+        self.dispatch_touch_event(seat, event);
+    }
+
+    fn touch_cancelled(&mut self, seat: &wl_seat::WlSeat) {
+        self.touch_cancel(seat);
+    }
+}
+
 delegate_registry!(RuntimeState);
 smithay_client_toolkit::delegate_dispatch2!(RuntimeState);
 

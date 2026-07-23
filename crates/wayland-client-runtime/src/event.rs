@@ -1,6 +1,8 @@
 use bitflags::bitflags;
 
-use crate::{DndEvent, InputSerial, LogicalPosition, LogicalSize, SuggestedSize, SurfaceId};
+use crate::{
+    ActivationEvent, DndEvent, InputSerial, LogicalPosition, LogicalSize, SuggestedSize, SurfaceId,
+};
 
 bitflags! {
     /// State flags reported by an xdg-toplevel configure.
@@ -52,7 +54,9 @@ pub enum SurfaceEvent {
     },
     ScaleFactorChanged {
         surface: SurfaceId,
-        factor: i32,
+        /// Preferred compositor scale. Fractional values are reported when
+        /// wp-fractional-scale-v1 is active for the surface.
+        factor: f64,
     },
 }
 
@@ -163,6 +167,8 @@ pub enum TouchEventKind {
 
 #[derive(Clone, Debug)]
 pub struct TouchEvent {
+    /// Surface associated with this point or cancellation. This is `None` only
+    /// for an unmatched up or a cancellation with no tracked live point.
     pub surface: Option<SurfaceId>,
     pub kind: TouchEventKind,
 }
@@ -170,6 +176,7 @@ pub struct TouchEvent {
 #[derive(Clone, Debug)]
 pub enum Event {
     Surface(SurfaceEvent),
+    Activation(ActivationEvent),
     Pointer(PointerEvent),
     Keyboard(KeyboardEvent),
     Touch(TouchEvent),

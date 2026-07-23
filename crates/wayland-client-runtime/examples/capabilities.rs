@@ -4,10 +4,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = Runtime::connect(RuntimeOptions::default())?;
     let capabilities = runtime.capabilities();
     println!(
-        "xdg_dialog_v1={} popup_reposition={} ext_background_effect={} cursor_shape={}",
+        "xdg_dialog_v1={} xdg_activation_v1={} xdg_toplevel_icon_v1={} popup_reposition={} ext_background_effect={} fractional_scale={} cursor_shape={}",
         capabilities.xdg_dialog_v1,
+        capabilities.xdg_activation_v1,
+        capabilities.xdg_toplevel_icon_v1,
         capabilities.popup_reposition,
         capabilities.ext_background_effect,
+        capabilities.fractional_scale,
         capabilities.cursor_shape
     );
     Ok(())

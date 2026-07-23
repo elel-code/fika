@@ -106,6 +106,12 @@ impl EventLoop {
                         RuntimeError::Unsupported(_) => Ok(()),
                         error => Err(error),
                     }),
+                RuntimeCommand::RequestUserAttention(surface) => runtime
+                    .request_user_attention(surface)
+                    .or_else(|error| match error {
+                        RuntimeError::Unsupported(_) => Ok(()),
+                        error => Err(error),
+                    }),
                 RuntimeCommand::ArmFrame(surface) => runtime
                     .request_frame(surface)
                     .and_then(|()| runtime.commit(surface)),
@@ -129,6 +135,7 @@ impl EventLoop {
     ) -> Result<(), RuntimeError> {
         match event {
             Event::Surface(event) => self.dispatch_surface_event(app, event),
+            Event::Activation(_) => Ok(()),
             Event::Pointer(event) => {
                 let Some(window) = self.window(event.surface) else {
                     return Ok(());
@@ -397,6 +404,12 @@ impl EventLoop {
                 let Some(window) = self.window(surface) else {
                     return Ok(());
                 };
+                let fractional_scale = self
+                    .active
+                    .runtime
+                    .borrow()
+                    .capabilities()
+                    .fractional_scale;
                 let (physical, logical, changed) = {
                     let mut state = window
                         .state
@@ -406,11 +419,7 @@ impl EventLoop {
                         suggested_size.width.unwrap_or(state.logical_size.width),
                         suggested_size.height.unwrap_or(state.logical_size.height),
                     );
-                    let factor = state.scale_factor.max(1) as u32;
-                    let physical = PhysicalSize::new(
-                        logical.width.saturating_mul(factor),
-                        logical.height.saturating_mul(factor),
-                    );
+                    let physical = logical_to_physical_rounded(logical, state.scale_factor);
                     let changed = !state.configured || physical != state.physical_size;
                     state.logical_size = logical;
                     state.physical_size = physical;
@@ -421,6 +430,17 @@ impl EventLoop {
                 {
                     let runtime = self.active.runtime.borrow();
                     runtime.set_window_geometry(surface, LogicalPosition::ZERO, logical)?;
+                    if fractional_scale {
+                        runtime.set_buffer_scale(surface, 1)?;
+                        runtime.set_viewport_destination(surface, Some(logical))?;
+                    } else {
+                        let scale_factor = window
+                            .state
+                            .lock()
+                            .expect("Wayland window state mutex poisoned")
+                            .scale_factor;
+                        runtime.set_buffer_scale(surface, integer_buffer_scale(scale_factor))?;
+                    }
                     runtime.commit(surface)?;
                 }
                 if changed {
@@ -436,34 +456,33 @@ impl EventLoop {
                 let Some(window) = self.window(surface) else {
                     return Ok(());
                 };
-                {
+                let factor = normalize_wayland_scale_factor(factor);
+                let logical = {
                     let mut state = window
                         .state
                         .lock()
                         .expect("Wayland window state mutex poisoned");
-                    state.scale_factor = factor.max(1);
-                    state.physical_size = PhysicalSize::new(
-                        state
-                            .logical_size
-                            .width
-                            .saturating_mul(state.scale_factor as u32),
-                        state
-                            .logical_size
-                            .height
-                            .saturating_mul(state.scale_factor as u32),
-                    );
+                    state.scale_factor = factor;
+                    state.physical_size =
+                        logical_to_physical_rounded(state.logical_size, state.scale_factor);
                     state.redraw_requested = true;
-                }
+                    state.logical_size
+                };
                 {
                     let runtime = self.active.runtime.borrow();
-                    runtime.set_buffer_scale(surface, factor.max(1))?;
+                    if runtime.capabilities().fractional_scale {
+                        runtime.set_buffer_scale(surface, 1)?;
+                        runtime.set_viewport_destination(surface, Some(logical))?;
+                    } else {
+                        runtime.set_buffer_scale(surface, integer_buffer_scale(factor))?;
+                    }
                     runtime.commit(surface)?;
                 }
                 app.window_event(
                     &self.active,
                     surface,
                     WindowEvent::ScaleFactorChanged {
-                        scale_factor: factor.max(1) as f64,
+                        scale_factor: factor,
                     },
                 );
                 Ok(())
