@@ -37,6 +37,17 @@ mod tests {
     }
 
     #[test]
+    fn ext_background_effect_requires_the_dynamic_blur_capability() {
+        assert!(!supports_ext_background_blur(None));
+        assert!(!supports_ext_background_blur(Some(
+            BackgroundEffectCapability::empty()
+        )));
+        assert!(supports_ext_background_blur(Some(
+            BackgroundEffectCapability::Blur
+        )));
+    }
+
+    #[test]
     fn nested_popups_are_removed_before_their_parents() {
         let root = SurfaceId(1);
         let popup = SurfaceId(2);

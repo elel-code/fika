@@ -1,6 +1,8 @@
 use std::time::{Duration, Instant};
 
-use wayland_client_runtime::{Event, Runtime, RuntimeOptions, SurfaceEvent, ToplevelAttributes};
+use wayland_client_runtime::{
+    BlurRegion, BlurState, Event, Runtime, RuntimeOptions, SurfaceEvent, ToplevelAttributes,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = Runtime::connect(RuntimeOptions::default())?;
@@ -9,6 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         app_id: "dev.fika.WaylandClientRuntimeSmoke".into(),
         ..Default::default()
     })?;
+    if runtime.capabilities().ext_background_effect {
+        runtime.set_blur(surface, BlurState::Enabled(BlurRegion::EntireSurface))?;
+        runtime.commit(surface)?;
+    }
     let deadline = Instant::now() + Duration::from_secs(2);
 
     while Instant::now() < deadline {

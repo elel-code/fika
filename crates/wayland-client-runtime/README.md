@@ -17,7 +17,7 @@ general-purpose and contains no Fika-specific model or renderer dependency.
 | Popups | Exposes the complete xdg-positioner anchor, gravity, constraint, offset, reactive and reposition state; accepts only opaque press/down serials for grabs |
 | Lifetimes | Owns a surface tree, removes descendants child-first, and makes every renderer lease retain its ancestors |
 | Rendering | `SurfaceHandle` implements raw-window-handle 0.6 for both wgpu and direct Vulkan use |
-| Blur | Supports disabled, complete-surface, and arbitrary surface-local rectangle regions through `org_kde_kwin_blur_manager` |
+| Blur | Uses `ext-background-effect-v1` and preserves complete-surface or arbitrary surface-local rectangle regions |
 | Data transfer | Clipboard and DnD share one MIME-content model, runtime connection, seat/serial state, data devices and pipe I/O; application-specific formats stay in the application |
 | Drag and drop | Handles incoming/outgoing offers, action negotiation and lifecycle events; optional RGBA previews use owned SHM drag-icon surfaces |
 | Input | Translates keyboard and pointer events into crate-owned values; uses cursor-shape when available and automatically falls back to the system cursor theme |
@@ -72,8 +72,15 @@ runtime.set_blur(
 # }
 ```
 
-Applications should inspect `Runtime::capabilities().kde_blur`; compositors
-without the KDE-compatible extension return `RuntimeError::Unsupported`.
+Applications should inspect
+`Runtime::capabilities().ext_background_effect`. The capability becomes true
+only when the compositor advertises the protocol's dynamic `blur` bit;
+compositors without it return `RuntimeError::Unsupported`.
+
+ext-background-effect-v1 state is double-buffered with `wl_surface`. Call
+`Runtime::commit` after changing blur, or let the next renderer buffer commit
+apply it. This keeps blur updates inside the same explicit surface commit
+boundary as geometry, scale, and renderer state.
 
 ## Drag icons and cursors
 

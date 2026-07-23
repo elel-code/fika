@@ -17,6 +17,9 @@ use crate::{
     BlurRegion, BlurState, CursorIcon, DialogAttributes, LogicalPosition, LogicalSize,
     PopupAttributes, SuggestedSize, ToplevelAttributes,
 };
+use smithay_client_toolkit::background_effect::{
+    BackgroundEffectHandler, BackgroundEffectState,
+};
 use smithay_client_toolkit::compositor::{
     CompositorHandler, CompositorState, FrameCallbackData, Region,
 };
@@ -26,7 +29,6 @@ use smithay_client_toolkit::data_device_manager::data_source::{
     CopyPasteSource, DataSourceHandler, DragSource,
 };
 use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
-use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::error::GlobalError;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::{EventLoop as CalloopEventLoop, LoopSignal};
@@ -41,6 +43,7 @@ use smithay_client_toolkit::reexports::client::{Connection, Proxy, QueueHandle};
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::{
     xdg_positioner, xdg_toplevel,
 };
+use smithay_client_toolkit::reexports::protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::Capability as BackgroundEffectCapability;
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::keyboard::{
     KeyEvent, KeyboardData, KeyboardHandler, Modifiers as SctkModifiers, RawModifiers,
@@ -62,8 +65,6 @@ use smithay_client_toolkit::shell::xdg::{XdgPositioner, XdgShell};
 use smithay_client_toolkit::shm::slot::{Buffer as ShmBuffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
-use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
-use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 
 #[derive(Clone, Debug)]
 pub struct RuntimeOptions {
@@ -83,7 +84,8 @@ impl Default for RuntimeOptions {
 pub struct RuntimeCapabilities {
     pub xdg_dialog_v1: bool,
     pub popup_reposition: bool,
-    pub kde_blur: bool,
+    /// The compositor currently advertises the ext-background-effect-v1 blur capability.
+    pub ext_background_effect: bool,
     pub cursor_shape: bool,
 }
 
@@ -160,7 +162,7 @@ impl Runtime {
         connection: Connection,
         options: RuntimeOptions,
     ) -> Result<Self, RuntimeError> {
-        let (globals, event_queue) = registry_queue_init(&connection)
+        let (globals, mut event_queue) = registry_queue_init(&connection)
             .map_err(|error| RuntimeError::Registry(error.to_string()))?;
         let queue_handle = event_queue.handle();
         let event_loop = CalloopEventLoop::<RuntimeState>::try_new()
@@ -174,29 +176,25 @@ impl Runtime {
             .map_err(|error| RuntimeError::MissingGlobal(error.to_string()))?;
         let output_state = OutputState::new(&globals, &queue_handle);
         let seat_state = SeatState::new(&globals, &queue_handle);
+        let background_effect_state = BackgroundEffectState::new(&globals, &queue_handle);
         let data_device_manager = DataDeviceManagerState::bind(&globals, &queue_handle)
             .map_err(|error| RuntimeError::MissingGlobal(error.to_string()))?;
-        let blur_manager = globals
-            .bind(&queue_handle, 1..=1, BlurManagerData)
-            .ok()
-            .map(|manager| KdeBlurManager { manager });
-
         let capabilities = RuntimeCapabilities {
             xdg_dialog_v1: has_global(&globals, "xdg_wm_dialog_v1"),
             popup_reposition: xdg_shell.xdg_wm_base().version() >= 3,
-            kde_blur: blur_manager.is_some(),
+            ext_background_effect: false,
             cursor_shape: has_global(&globals, "wp_cursor_shape_manager_v1"),
         };
 
-        let state = RuntimeState {
+        let mut state = RuntimeState {
             registry_state: RegistryState::new(&globals),
             output_state,
             seat_state,
+            background_effect_state,
             data_device_manager,
             compositor,
             shm,
             xdg_shell,
-            blur_manager,
             surfaces: HashMap::new(),
             surface_ids: HashMap::new(),
             children: HashMap::new(),
@@ -211,6 +209,15 @@ impl Runtime {
             next_dnd_id: 1,
             next_button_order: 1,
         };
+
+        // ext-background-effect-v1 advertises effect support in an event after
+        // binding. Complete one roundtrip so capabilities are accurate when
+        // `from_connection` returns.
+        if has_global(&globals, "ext_background_effect_manager_v1") {
+            event_queue
+                .roundtrip(&mut state)
+                .map_err(|error| RuntimeError::Registry(error.to_string()))?;
+        }
 
         WaylandSource::new(connection.clone(), event_queue)
             .insert(event_loop.handle())
@@ -228,7 +235,10 @@ impl Runtime {
     }
 
     pub fn capabilities(&self) -> RuntimeCapabilities {
-        self.capabilities
+        let mut capabilities = self.capabilities;
+        capabilities.ext_background_effect =
+            supports_ext_background_blur(self.state.background_effect_state.capabilities());
+        capabilities
     }
 
     pub fn connection(&self) -> &Connection {
@@ -498,47 +508,56 @@ impl Runtime {
         Ok(())
     }
 
+    /// Set the surface-local compositor background blur request.
+    ///
+    /// ext-background-effect-v1 must advertise its dynamic blur capability.
+    /// Effect state is double-buffered with `wl_surface`; call
+    /// [`Runtime::commit`] (or commit the renderer's next buffer) to make the
+    /// change visible.
     pub fn set_blur(&self, surface: SurfaceId, state: BlurState) -> Result<(), RuntimeError> {
-        let manager = self
-            .state
-            .blur_manager
-            .as_ref()
-            .ok_or(RuntimeError::Unsupported("org_kde_kwin_blur_manager"))?;
         let shared = self.surface_shared(surface)?;
         let wl_surface = shared.wl_surface();
         let mut current = shared.blur.lock().expect("blur state mutex poisoned");
 
         match state {
             BlurState::Disabled => {
-                if current.is_some() {
-                    manager.manager.unset(wl_surface);
-                    current.take();
-                }
+                current.take();
             }
             BlurState::Enabled(region) => {
-                if current.is_none() {
-                    let blur = manager
-                        .manager
-                        .create(wl_surface, &self.queue_handle, BlurData);
-                    *current = Some(ManagedBlur(blur));
+                if !self.capabilities().ext_background_effect {
+                    return Err(RuntimeError::Unsupported("ext-background-effect-v1 blur"));
                 }
-                let blur = &current.as_ref().expect("blur was initialized").0;
+                if current.is_none() {
+                    *current = Some(ManagedBlur(
+                        self.state
+                            .background_effect_state
+                            .get_background_effect(wl_surface, &self.queue_handle)?,
+                    ));
+                }
+
+                let blur_region = Region::new(&self.state.compositor)?;
                 match region {
-                    BlurRegion::EntireSurface => blur.set_region(None),
+                    BlurRegion::EntireSurface => {
+                        // NULL explicitly disables blur in this protocol, so
+                        // use an oversized region clipped by the compositor.
+                        blur_region.add(0, 0, i32::MAX, i32::MAX);
+                    }
                     BlurRegion::Rectangles(rectangles) => {
-                        let region = Region::new(&self.state.compositor)?;
                         for rectangle in rectangles.into_iter().filter(|rect| !rect.is_empty()) {
-                            region.add(
+                            blur_region.add(
                                 rectangle.origin.x,
                                 rectangle.origin.y,
                                 u32_to_i32(rectangle.size.width),
                                 u32_to_i32(rectangle.size.height),
                             );
                         }
-                        blur.set_region(Some(region.wl_region()));
                     }
                 }
-                blur.commit();
+                current
+                    .as_ref()
+                    .expect("blur was initialized")
+                    .0
+                    .set_blur_region(Some(blur_region.wl_region()));
             }
         }
         Ok(())
@@ -654,15 +673,20 @@ impl Runtime {
 
 include!("runtime_data_transfer.rs");
 include!("runtime_helpers.rs");
+
+fn supports_ext_background_blur(capabilities: Option<BackgroundEffectCapability>) -> bool {
+    capabilities.is_some_and(|value| value.contains(BackgroundEffectCapability::Blur))
+}
+
 struct RuntimeState {
     registry_state: RegistryState,
     output_state: OutputState,
     seat_state: SeatState,
+    background_effect_state: BackgroundEffectState,
     data_device_manager: DataDeviceManagerState,
     compositor: CompositorState,
     shm: Shm,
     xdg_shell: XdgShell,
-    blur_manager: Option<KdeBlurManager>,
     surfaces: HashMap<SurfaceId, Arc<SurfaceShared>>,
     surface_ids: HashMap<ObjectId, SurfaceId>,
     children: HashMap<SurfaceId, Vec<SurfaceId>>,
@@ -856,43 +880,6 @@ impl Drop for SeatObjects {
 }
 
 include!("runtime_handlers.rs");
-#[derive(Clone, Debug)]
-struct KdeBlurManager {
-    manager: OrgKdeKwinBlurManager,
-}
-
-#[derive(Debug)]
-struct BlurManagerData;
-
-impl Dispatch2<OrgKdeKwinBlurManager, RuntimeState> for BlurManagerData {
-    fn event(
-        &self,
-        _: &mut RuntimeState,
-        _: &OrgKdeKwinBlurManager,
-        _: <OrgKdeKwinBlurManager as Proxy>::Event,
-        _: &Connection,
-        _: &QueueHandle<RuntimeState>,
-    ) {
-        unreachable!("org_kde_kwin_blur_manager has no events");
-    }
-}
-
-#[derive(Debug)]
-struct BlurData;
-
-impl Dispatch2<OrgKdeKwinBlur, RuntimeState> for BlurData {
-    fn event(
-        &self,
-        _: &mut RuntimeState,
-        _: &OrgKdeKwinBlur,
-        _: <OrgKdeKwinBlur as Proxy>::Event,
-        _: &Connection,
-        _: &QueueHandle<RuntimeState>,
-    ) {
-        unreachable!("org_kde_kwin_blur has no events");
-    }
-}
-
 delegate_registry!(RuntimeState);
 smithay_client_toolkit::delegate_dispatch2!(RuntimeState);
 

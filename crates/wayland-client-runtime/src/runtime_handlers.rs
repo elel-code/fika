@@ -16,6 +16,14 @@ impl OutputHandler for RuntimeState {
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
+impl BackgroundEffectHandler for RuntimeState {
+    fn background_effect_state(&mut self) -> &mut BackgroundEffectState {
+        &mut self.background_effect_state
+    }
+
+    fn update_capabilities(&mut self) {}
+}
+
 impl CompositorHandler for RuntimeState {
     fn scale_factor_changed(
         &mut self,

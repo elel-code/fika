@@ -50,11 +50,17 @@ also routes clipboard selections through the main runtime connection.
 
 ## Blur protocol
 
-The region-capable implementation uses the generated MIT-licensed bindings in
-`wayland-protocols-plasma` for `org_kde_kwin_blur_manager` and
-`org_kde_kwin_blur`. It preserves the protocol's nullable region, arbitrary
-`wl_region`, update/commit and unset operations instead of reducing them to a
-single whole-surface boolean.
+The preferred implementation uses the standardized staging
+`ext-background-effect-v1` protocol exposed by SCTK 0.21, matching winit main
+at `d84ec647d80d9ef76c5a42b948c852b8e0db9210`. Unlike winit's initial global
+selection, this runtime consumes the protocol's dynamic capability event and
+enables blur only while its `blur` bit is advertised. The legacy KDE blur
+protocol is intentionally not supported.
+
+Arbitrary `wl_region` requests are preserved. Whole-surface blur uses an
+oversized region clipped by the compositor because a NULL region means
+"disable", while updates remain double-buffered until the next
+`wl_surface.commit`.
 
 ## Core data-device and cursor behavior
 
@@ -74,4 +80,4 @@ Cursor selection uses SCTK's themed-pointer path. It prefers
 `wp_cursor_shape_manager_v1` and falls back to the system XCursor theme without
 changing the crate-owned cursor vocabulary.
 
-Last reviewed: 2026-07-22.
+Last reviewed: 2026-07-23.

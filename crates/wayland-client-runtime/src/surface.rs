@@ -9,12 +9,12 @@ use raw_window_handle::{
 };
 use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 use smithay_client_toolkit::reexports::client::{Connection, Proxy};
+use smithay_client_toolkit::reexports::protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::xdg::XdgSurface;
 use smithay_client_toolkit::shell::xdg::dialog::Dialog;
 use smithay_client_toolkit::shell::xdg::popup::Popup;
 use smithay_client_toolkit::shell::xdg::window::Window;
-use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 
 use crate::{InputSerial, LogicalPosition, LogicalRect, LogicalSize};
 
@@ -187,12 +187,12 @@ impl ProtocolSurface {
     }
 }
 
-pub(crate) struct ManagedBlur(pub(crate) OrgKdeKwinBlur);
+pub(crate) struct ManagedBlur(pub(crate) ExtBackgroundEffectSurfaceV1);
 
 impl Drop for ManagedBlur {
     fn drop(&mut self) {
         if self.0.is_alive() {
-            self.0.release();
+            self.0.destroy();
         }
     }
 }
