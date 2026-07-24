@@ -445,7 +445,8 @@ impl ShellScene {
             self.queue_thumbnail_read_ahead_for_projection(projection, icons);
         }
         if let Some(overlay_text) = overlay_text {
-            self.push_drag_preview_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
+            // Drag preview is a Wayland DnD icon (compositor surface), not an
+            // in-window overlay. Only drop/context menus paint into this layer.
             self.push_drop_menu_overlay(&mut overlay_vertices, overlay_text, theme, size);
             self.push_context_menu_overlay(&mut overlay_vertices, overlay_text, icons, theme, size);
         }

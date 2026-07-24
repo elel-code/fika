@@ -654,8 +654,10 @@ fn push_internal_drag(values: &mut Vec<u64>, drag: Option<&ShellInternalDrag>) {
                 push_hash(values, path);
             }
             push_hash(values, &drag.label);
+            // Pointer motion no longer repaints an in-window drag overlay; the
+            // compositor owns the Wayland DnD icon. Only source identity and
+            // active state affect the window surface.
             push_view_point(values, drag.start);
-            push_view_point(values, drag.current);
             push_bool(values, drag.active);
         }
         None => push_bool(values, false),

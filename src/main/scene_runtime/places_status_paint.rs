@@ -195,17 +195,6 @@ impl ShellScene {
         true
     }
 
-    fn push_drag_preview_overlay(
-        &self,
-        vertices: &mut Vec<QuadVertex>,
-        text: &mut TextFrameBuilder<'_>,
-        icons: &mut IconFrameBuilder<'_>,
-        theme: ShellTheme,
-        size: PhysicalSize<u32>,
-    ) {
-        shell::drag_preview::push_drag_preview_overlay(self, vertices, text, icons, theme, size);
-    }
-
     fn push_drop_menu_overlay(
         &self,
         vertices: &mut Vec<QuadVertex>,

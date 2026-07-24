@@ -15,7 +15,6 @@ pub(crate) enum DragPreviewLabelStyle {
 pub(crate) enum DragPreviewBackgroundStyle {
     SelectedItem,
     HoveredPlace,
-    None,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,6 +111,13 @@ pub(crate) fn multi_drag_preview_layout(count: usize, scale: f32) -> MultiDragPr
 /// `item_layout` is the layout already used by the live view. Keeping it as
 /// the input means a drag preview cannot silently drift from the item the user
 /// just dragged when zoom, view mode, or compact-column widths change.
+///
+/// Pane drag hotspot matches Dolphin `KItemListController::startDragging`:
+/// `(pixmap.width / devicePixelRatio) / 2`, `0` — top centre of the pixmap.
+/// (Places uses press-relative hotspot via [`place_single_drag_preview_layout`].)
+///
+/// `press_point` is accepted for API symmetry with the places path but is not
+/// used for pane items; Dolphin never anchors pane previews to the grab point.
 pub(crate) fn pane_single_drag_preview_layout(
     view_mode: ShellViewMode,
     item_layout: Option<ItemLayout>,
@@ -119,6 +125,7 @@ pub(crate) fn pane_single_drag_preview_layout(
     natural_text_width: f32,
     text_line_height: f32,
     scale: f32,
+    _press_point: Option<ViewPoint>,
 ) -> SingleDragPreviewLayout {
     let scale = scale.max(1.0);
     let item = item_layout.unwrap_or_else(|| {
@@ -130,9 +137,15 @@ pub(crate) fn pane_single_drag_preview_layout(
             scale,
         )
     });
+    // Crop to the painted content, not the layout slot:
+    // - Icons: full cell (`item_rect`)
+    // - Compact: per-name `visual_rect` (column `item_rect` is wider than the
+    //   icon+label chip; using the slot width misplaces the top-centre hotspot)
+    // - Details: name-column crop (icon + natural text width)
     let crop = match view_mode {
         ShellViewMode::Details => details_drag_crop(item, natural_text_width, scale),
-        ShellViewMode::Icons | ShellViewMode::Compact => item.item_rect,
+        ShellViewMode::Compact => item.visual_rect,
+        ShellViewMode::Icons => item.item_rect,
     };
     let bounds = ViewRect {
         x: 0.0,
@@ -155,6 +168,11 @@ pub(crate) fn pane_single_drag_preview_layout(
         ShellViewMode::Icons | ShellViewMode::Details => item.item_rect,
         ShellViewMode::Compact => item.visual_rect,
     };
+    // Dolphin: setHotSpot(QPoint(pixmap.width()/dpr/2, 0))
+    let hotspot = ViewPoint {
+        x: bounds.width / 2.0,
+        y: 0.0,
+    };
     SingleDragPreviewLayout {
         bounds,
         icon,
@@ -166,10 +184,7 @@ pub(crate) fn pane_single_drag_preview_layout(
         } else {
             5.0 * scale
         },
-        hotspot: ViewPoint {
-            x: bounds.width / 2.0,
-            y: 0.0,
-        },
+        hotspot,
         view_mode: Some(view_mode),
     }
 }
@@ -412,6 +427,7 @@ mod tests {
             80.0,
             18.0,
             1.0,
+            None,
         );
         assert_eq!(layout.bounds, rect(0.0, 0.0, 140.0, 86.0));
         assert_eq!(layout.icon, rect(42.0, 4.0, 48.0, 48.0));
@@ -425,7 +441,8 @@ mod tests {
             model_index: 0,
             column: 0,
             row: 0,
-            item_rect: rect(10.0, 20.0, 180.0, 40.0),
+            // Column slot is wider than the painted chip (visual_rect).
+            item_rect: rect(10.0, 20.0, 240.0, 40.0),
             visual_rect: rect(12.0, 22.0, 176.0, 36.0),
             icon_rect: rect(14.0, 26.0, 28.0, 28.0),
             text_rect: rect(50.0, 30.0, 128.0, 18.0),
@@ -437,9 +454,86 @@ mod tests {
             80.0,
             18.0,
             1.0,
+            None,
         );
         assert!(layout.label.unwrap().rect.x > layout.icon.right());
-        assert_eq!(layout.background, rect(2.0, 2.0, 176.0, 36.0));
+        // Pixmap bounds follow per-item visual width, not the column slot.
+        assert_eq!(layout.bounds, rect(0.0, 0.0, 176.0, 36.0));
+        assert_eq!(layout.background, rect(0.0, 0.0, 176.0, 36.0));
+        assert_eq!(layout.icon, rect(2.0, 4.0, 28.0, 28.0));
+        // Dolphin pane hotspot is top-centre of the pixmap (visual width / 2).
+        assert_eq!(layout.hotspot, ViewPoint { x: 88.0, y: 0.0 });
+    }
+
+    #[test]
+    fn compact_preview_hotspot_is_dolphin_top_centre_even_with_press() {
+        let compact_item = ItemLayout {
+            model_index: 0,
+            column: 0,
+            row: 0,
+            item_rect: rect(10.0, 20.0, 240.0, 40.0),
+            visual_rect: rect(12.0, 22.0, 176.0, 36.0),
+            icon_rect: rect(14.0, 26.0, 28.0, 28.0),
+            text_rect: rect(50.0, 30.0, 128.0, 18.0),
+        };
+        // Press point is ignored for pane items (Dolphin never uses it).
+        let layout = pane_single_drag_preview_layout(
+            ShellViewMode::Compact,
+            Some(compact_item),
+            28.0,
+            80.0,
+            18.0,
+            1.0,
+            Some(ViewPoint { x: 120.0, y: 42.0 }),
+        );
+        assert_eq!(layout.bounds.width, 176.0);
+        assert_eq!(layout.hotspot, ViewPoint { x: 88.0, y: 0.0 });
+        // Must not use half the column slot width (240/2 = 120).
+        assert_ne!(layout.hotspot.x, compact_item.item_rect.width / 2.0);
+    }
+
+    #[test]
+    fn compact_preview_uses_per_item_visual_width_not_column_slot() {
+        let short = ItemLayout {
+            model_index: 0,
+            column: 0,
+            row: 0,
+            item_rect: rect(0.0, 0.0, 200.0, 40.0),
+            visual_rect: rect(2.0, 2.0, 60.0, 36.0),
+            icon_rect: rect(4.0, 6.0, 28.0, 28.0),
+            text_rect: rect(40.0, 10.0, 18.0, 18.0),
+        };
+        let long = ItemLayout {
+            model_index: 1,
+            column: 0,
+            row: 1,
+            item_rect: rect(0.0, 40.0, 200.0, 40.0),
+            visual_rect: rect(2.0, 42.0, 180.0, 36.0),
+            icon_rect: rect(4.0, 46.0, 28.0, 28.0),
+            text_rect: rect(40.0, 50.0, 138.0, 18.0),
+        };
+        let short_layout = pane_single_drag_preview_layout(
+            ShellViewMode::Compact,
+            Some(short),
+            28.0,
+            20.0,
+            18.0,
+            1.0,
+            None,
+        );
+        let long_layout = pane_single_drag_preview_layout(
+            ShellViewMode::Compact,
+            Some(long),
+            28.0,
+            120.0,
+            18.0,
+            1.0,
+            None,
+        );
+        assert_eq!(short_layout.bounds.width, 60.0);
+        assert_eq!(long_layout.bounds.width, 180.0);
+        assert_eq!(short_layout.hotspot.x, 30.0);
+        assert_eq!(long_layout.hotspot.x, 90.0);
     }
 
     #[test]
@@ -451,6 +545,7 @@ mod tests {
             40.0,
             18.0,
             1.0,
+            None,
         );
         assert!(layout.bounds.width < item().item_rect.width);
         assert!(layout.label.unwrap().rect.right() <= layout.bounds.right());

@@ -322,7 +322,9 @@
     }
 
     #[test]
-    fn render_damage_bounds_internal_drag_preview_transition() {
+    fn render_damage_bounds_ignore_internal_drag_pointer_motion() {
+        // No in-window drag overlay: pointer motion during an internal drag
+        // should not produce window damage by itself.
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         scene.internal_drag = Some(ShellInternalDrag {
@@ -362,18 +364,8 @@
         );
 
         let damage = ShellRenderDamage::between(Some(&initial), &moved, false);
-        let bounds = damage.bounds.unwrap();
-        let previous_rect = initial.drag_preview_rect.unwrap();
-        let current_rect = moved.drag_preview_rect.unwrap();
-
-        assert_eq!(damage.kind, ShellRenderDamageKind::Bounded);
-        assert_eq!(damage.rect_count, 2);
-        assert!(damage.area_px > 0.0);
-        assert!(damage.area_px < rect_area(full_surface_rect(size)));
-        assert!(bounds.x <= previous_rect.x);
-        assert!(bounds.y <= previous_rect.y);
-        assert!(bounds.right() >= current_rect.right());
-        assert!(bounds.bottom() >= current_rect.bottom());
+        assert_eq!(damage.kind, ShellRenderDamageKind::Clean);
+        assert!(damage.bounds.is_none());
     }
 
     #[test]

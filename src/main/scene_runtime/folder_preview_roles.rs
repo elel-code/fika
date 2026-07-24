@@ -426,23 +426,9 @@ impl ShellScene {
                     width: icon_size,
                     height: icon_size,
                 };
-                if hovered && !active {
-                    let icon_slot_size = (icon_size + self.scale_metric(8.0)).min(row.height);
-                    let slot_colors = theme.toolbar_button(false);
-                    push_clipped_rounded_rect(
-                        vertices,
-                        ViewRect {
-                            x: icon.x + (icon.width - icon_slot_size) / 2.0,
-                            y: row.y + (row.height - icon_slot_size) / 2.0,
-                            width: icon_slot_size,
-                            height: icon_slot_size,
-                        },
-                        panel,
-                        self.scale_metric(7.0),
-                        slot_colors.fill,
-                        size,
-                    );
-                }
+                // Hover uses the row background only (Breeze / Dolphin places).
+                // Do not draw a separate icon-slot chip; it reads as a white tile
+                // under theme icons and the geometric fallback glyphs.
                 let trash_has_items = self.trash_place_has_items(place);
                 let icon_name = if trash_has_items {
                     "user-trash-full"

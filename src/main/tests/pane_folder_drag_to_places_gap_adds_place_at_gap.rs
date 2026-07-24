@@ -368,6 +368,7 @@
             y: own_gap.y + own_gap.height / 2.0,
         };
         assert!(scene.begin_internal_drag_for_place(0, start));
+        // First move activates the drag (threshold); may return true.
         assert!(scene.set_pointer(own_gap_point, size));
         assert_eq!(scene.dnd_hover_target, None);
 
@@ -376,7 +377,9 @@
             x: after_gap.x + after_gap.width / 2.0,
             y: after_gap.y + after_gap.height / 2.0,
         };
-        assert!(scene.set_pointer(after_gap_point, size));
+        // Adjacent self-gaps stay without a drop target; motion alone does not
+        // dirty the window once the drag is already active.
+        let _ = scene.set_pointer(after_gap_point, size);
         assert_eq!(scene.dnd_hover_target, None);
     }
 
@@ -399,7 +402,9 @@
         };
 
         assert!(scene.begin_internal_drag_for_place(0, start));
-        assert!(scene.set_pointer(self_hover, size));
+        // Motion over the source row does not set a drop target and need not
+        // request a window redraw (preview is a Wayland DnD icon).
+        let _ = scene.set_pointer(self_hover, size);
         let drag = scene
             .internal_drag
             .as_ref()
@@ -408,46 +413,6 @@
         assert_eq!(scene.active_place_drag_source_index(), Some(0));
         assert_eq!(scene.hovered_place, None);
         assert_eq!(scene.dnd_hover_target, None);
-        let mut vertices = Vec::new();
-        let mut font_system = FontSystem::new();
-        let mut swash_cache = SwashCache::new();
-        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
-        let mut label_cache = LabelRasterCache::new(1024 * 1024);
-        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
-        let mut atlas_cache = TextAtlasFrameCache::default();
-        let mut icon_resolver = FileIconResolver::new();
-        let mut thumbnails = ThumbnailRasterResolver::new();
-        let mut icon_rasters = IconRasterResolver::new();
-        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
-        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
-        let mut text = TextFrameBuilder::new(
-            TextFrameResources::new(
-                &mut font_system,
-                &mut swash_cache,
-                &mut text_buffer,
-                &mut label_cache,
-                &mut metrics_cache,
-                &mut atlas_cache,
-            ),
-            size,
-            scene.ui_scale(),
-            Vec::new(),
-        );
-        let mut icons = IconFrameBuilder::new_for_test(
-            &mut icon_resolver,
-            &mut thumbnails,
-            &mut icon_rasters,
-            &mut raster_cache,
-            &mut role_raster_cache,
-            size,
-        );
-        scene.push_drag_preview_overlay(&mut vertices, &mut text, &mut icons, scene.theme(), size);
-        assert!(!vertices.is_empty());
-        assert!(
-            !vertices
-                .iter()
-                .any(|vertex| vertex.color == [1.000, 1.000, 1.000, 0.94])
-        );
 
         let valid_gap = scene.place_row_rects(size)[1].1;
         let valid_gap_point = ViewPoint {
@@ -466,64 +431,4 @@
         );
     }
 
-    #[test]
-    fn pane_drag_preview_uses_ready_thumbnail_on_overlay_layer() {
-        let mut scene = test_scene(
-            vec![test_entry_with_mime_and_modified(
-                "photo.png",
-                false,
-                "image/png",
-                Some(7),
-            )],
-            ShellViewMode::Icons,
-        );
-        let size = PhysicalSize::new(700, 360);
-        let start = ViewPoint { x: 220.0, y: 120.0 };
-        assert!(scene.begin_internal_drag_for_pane_item(ShellPaneId::SLOT_0, 0, start));
-        assert!(scene.set_pointer(ViewPoint { x: 230.0, y: 132.0 }, size));
 
-        let mut vertices = Vec::new();
-        let mut font_system = FontSystem::new();
-        let mut swash_cache = SwashCache::new();
-        let mut text_buffer = Buffer::new_empty(Metrics::new(TEXT_FONT_SIZE, TEXT_LINE_HEIGHT));
-        let mut label_cache = LabelRasterCache::new(1024 * 1024);
-        let mut metrics_cache = LabelMetricsCache::new(TEXT_LABEL_METRICS_CACHE_MAX_ENTRIES);
-        let mut atlas_cache = TextAtlasFrameCache::default();
-        let mut icon_resolver = FileIconResolver::new();
-        let mut thumbnails = ThumbnailRasterResolver::new();
-        let mut icon_rasters = IconRasterResolver::new();
-        let mut raster_cache = IconRasterCache::new(ICON_CACHE_MAX_BYTES);
-        let mut role_raster_cache = IconRoleRasterCache::new(ICON_ROLE_RASTER_CACHE_MAX_BYTES);
-        let thumbnail_size = icon_cache_size(scene.dolphin_zoom_icon_size_for_step(0));
-        thumbnails.insert_ready(
-            IconRasterCacheKey::thumbnail(PathBuf::from("/tmp/photo.png"), thumbnail_size, 7),
-            test_icon_raster(8, 3),
-        );
-        let mut text = TextFrameBuilder::new(
-            TextFrameResources::new(
-                &mut font_system,
-                &mut swash_cache,
-                &mut text_buffer,
-                &mut label_cache,
-                &mut metrics_cache,
-                &mut atlas_cache,
-            ),
-            size,
-            scene.ui_scale(),
-            Vec::new(),
-        );
-        let mut icons = IconFrameBuilder::new_for_test(
-            &mut icon_resolver,
-            &mut thumbnails,
-            &mut icon_rasters,
-            &mut raster_cache,
-            &mut role_raster_cache,
-            size,
-        );
-        scene.push_drag_preview_overlay(&mut vertices, &mut text, &mut icons, scene.theme(), size);
-        let frame = icons.finish();
-
-        assert_eq!(frame.stats.thumbnail_quads, 1);
-        assert!(!frame.overlay_vertices.is_empty());
-        assert!(frame.vertices.is_empty());
-    }

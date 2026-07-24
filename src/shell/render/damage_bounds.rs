@@ -163,11 +163,6 @@ fn hover_damage_rects(
     }
     push_changed_damage_rect(
         &mut rects,
-        previous.drag_preview_rect,
-        current.drag_preview_rect,
-    );
-    push_changed_damage_rect(
-        &mut rects,
         previous.rubber_band_rect,
         current.rubber_band_rect,
     );

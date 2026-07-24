@@ -339,7 +339,10 @@ impl<'a> IconFrameBuilder<'a> {
         clip: ViewRect,
         layer: IconDrawLayer,
     ) -> bool {
-        if rect.width.max(rect.height) < 32.0 {
+        // Dolphin still shows previews in Details / Compact at SizeSmall (16px).
+        // Only skip below the smallest icon-cache bucket so list mode does not
+        // fall back to MIME icons while read-ahead already has a thumbnail.
+        if rect.width.max(rect.height) < 16.0 {
             return false;
         }
         let path = entry_path_for_thumbnail(directory, entry);

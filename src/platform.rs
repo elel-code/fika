@@ -715,8 +715,11 @@ fn logical_key(keysym: u32, text: Option<&str>) -> Key {
 }
 
 fn physical_key(raw_code: u32) -> PhysicalKey {
-    let evdev = raw_code.saturating_sub(8);
-    let code = match evdev {
+    // SCTK / wl_keyboard deliver Linux evdev keycodes. Do not subtract 8 here:
+    // that offset is only used when converting *to* XKB keycodes (see SCTK's
+    // `KeyCode::new(raw_code + 8)`). Subtracting maps Ctrl+C (46) to KeyL (38)
+    // and steals the address-bar shortcut.
+    let code = match raw_code {
         1 => KeyCode::Escape,
         2 => KeyCode::Digit1,
         3 => KeyCode::Digit2,
@@ -755,6 +758,21 @@ fn physical_key(raw_code: u32) -> PhysicalKey {
 #[cfg(test)]
 mod scaling_tests {
     use super::*;
+
+    #[test]
+    fn physical_key_uses_linux_evdev_codes_without_xkb_offset() {
+        // wl_keyboard / SCTK raw_code values are already Linux keycodes.
+        assert_eq!(physical_key(46), PhysicalKey::Code(KeyCode::KeyC));
+        assert_eq!(physical_key(38), PhysicalKey::Code(KeyCode::KeyL));
+        assert_eq!(physical_key(30), PhysicalKey::Code(KeyCode::KeyA));
+        assert_eq!(physical_key(47), PhysicalKey::Code(KeyCode::KeyV));
+        assert_eq!(physical_key(45), PhysicalKey::Code(KeyCode::KeyX));
+        // X11-style keycodes (evdev + 8) must not silently remap onto neighbors.
+        assert!(matches!(
+            physical_key(54),
+            PhysicalKey::Unidentified(_)
+        ));
+    }
 
     #[test]
     fn fractional_scale_rounds_toplevel_sizes_half_away_from_zero() {

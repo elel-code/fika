@@ -25,11 +25,12 @@ use crate::shell::icon_roles::{
 };
 use crate::shell::tasks::ShellTaskStatus;
 use crate::{
-    FikaWgpuApp, FolderPreviewReady, IconRaster, IconRasterCacheKey, IncomingDndTransfer,
-    ItemPixmapLayout, OutgoingDndTransfer, ShellInternalDragPreviewSource, ShellViewMode, ViewRect,
-    decode_file_clipboard_text, entry_path_for_thumbnail, folder_preview_role_draw_rect,
-    icon_emblem_kinds_for_path, icon_emblem_rects, normalized_scale_factor, path_uri_from_path,
-    rasterize_icon, thumbnail_request_may_have_preview, view_point_from_physical_position,
+    FikaWgpuApp, FolderPreviewReady, IconRaster, IconRasterCacheKey, IconRasterStyle,
+    IncomingDndTransfer, ItemPixmapLayout, OutgoingDndTransfer, ShellInternalDragPreviewSource,
+    ShellViewMode, ViewRect, decode_file_clipboard_text, entry_path_for_thumbnail,
+    folder_preview_role_draw_rect, icon_emblem_kinds_for_path, icon_emblem_rects,
+    normalized_scale_factor, path_uri_from_path, rasterize_icon, thumbnail_request_may_have_preview,
+    view_point_from_physical_position,
 };
 
 const ACCEPTED_DND_ACTIONS: [DndAction; 3] = [DndAction::Ask, DndAction::Move, DndAction::Copy];
@@ -106,7 +107,7 @@ impl FikaWgpuApp {
         let preview_rasters = self.outgoing_dnd_preview_rasters(
             preview_source.as_ref(),
             &paths,
-            preview_metrics.icon_size,
+            preview_metrics.cache_icon_size,
             preview_metrics.buffer_scale as f32,
             preview_metrics.visible_icon_count(),
         );
@@ -150,14 +151,15 @@ impl FikaWgpuApp {
         &mut self,
         source: Option<&ShellInternalDragPreviewSource>,
         paths: &[PathBuf],
-        icon_size: u32,
+        cache_icon_size: f32,
         scale: f32,
         visible_count: usize,
     ) -> OutgoingDndPreviewRasters {
         let Some(renderer) = self.renderer.as_mut() else {
             return OutgoingDndPreviewRasters { icons: Vec::new() };
         };
-        let icon_size_px = icon_cache_size(icon_size as f32);
+        // Use scene-space icon size so thumbnail cache keys match the live view.
+        let icon_size_px = icon_cache_size(cache_icon_size);
         let icons = paths
             .iter()
             .take(visible_count)
@@ -166,7 +168,7 @@ impl FikaWgpuApp {
                     renderer,
                     source,
                     path,
-                    icon_size,
+                    cache_icon_size,
                     icon_size_px,
                     scale,
                 )
@@ -584,7 +586,6 @@ fn outgoing_dnd_preview_colors(
             true,
             DolphinItemPalette::from_shell_theme(theme),
         ),
-        DragPreviewBackgroundStyle::None => [0.0, 0.0, 0.0, 0.0],
     };
     let label_color = match source {
         ShellInternalDragPreviewSource::PaneItem { .. } => {
@@ -616,7 +617,7 @@ fn outgoing_dnd_preview_raster_for_path(
     renderer: &mut crate::WgpuState,
     source: Option<&ShellInternalDragPreviewSource>,
     path: &Path,
-    icon_size: u32,
+    cache_icon_size: f32,
     icon_size_px: u16,
     scale: f32,
 ) -> Option<IconRaster> {
@@ -643,16 +644,16 @@ fn outgoing_dnd_preview_raster_for_path(
                         folder_preview: item_folder_preview,
                         view_mode: *view_mode,
                     },
-                    icon_size,
+                    cache_icon_size,
                     scale,
                 );
             }
-            rasterize_path_drag_icon(renderer, path, icon_size, icon_size_px, scale)
+            rasterize_path_drag_icon(renderer, path, cache_icon_size, icon_size_px, scale)
         }
         Some(ShellInternalDragPreviewSource::Place { icon_name, .. }) => {
             rasterize_named_drag_icon(renderer, icon_name, icon_size_px)
         }
-        _ => rasterize_path_drag_icon(renderer, path, icon_size, icon_size_px, scale),
+        _ => rasterize_path_drag_icon(renderer, path, cache_icon_size, icon_size_px, scale),
     }
 }
 
@@ -667,7 +668,7 @@ struct DragPreviewEntryRasterSource<'a> {
 fn rasterize_entry_drag_icon(
     renderer: &mut crate::WgpuState,
     source: DragPreviewEntryRasterSource<'_>,
-    icon_size: u32,
+    cache_icon_size: f32,
     scale: f32,
 ) -> Option<IconRaster> {
     let DragPreviewEntryRasterSource {
@@ -677,12 +678,12 @@ fn rasterize_entry_drag_icon(
         folder_preview,
         view_mode,
     } = source;
-    let icon_size_px = icon_cache_size(icon_size as f32);
+    let icon_size_px = icon_cache_size(cache_icon_size);
     let base = if entry.is_dir {
         let resolved = renderer.icon_renderer.resolver.resolve_entry_visible_fast(
             directory,
             entry,
-            icon_size as f32,
+            cache_icon_size,
         );
         let base = rasterize_resolved_drag_icon(renderer, resolved.path, icon_size_px)?;
         apply_folder_preview_to_drag_icon(base, folder_preview, view_mode)
@@ -698,7 +699,7 @@ fn rasterize_entry_drag_icon(
         let resolved = renderer.icon_renderer.resolver.resolve_entry_visible_fast(
             directory,
             entry,
-            icon_size as f32,
+            cache_icon_size,
         );
         rasterize_resolved_drag_icon(renderer, resolved.path, icon_size_px)?
     };
@@ -708,11 +709,11 @@ fn rasterize_entry_drag_icon(
 fn rasterize_path_drag_icon(
     renderer: &mut crate::WgpuState,
     path: &Path,
-    icon_size: u32,
+    cache_icon_size: f32,
     icon_size_px: u16,
     scale: f32,
 ) -> Option<IconRaster> {
-    let key = file_icon_path_cache_key(path, path.is_dir(), None, true, icon_size as f32);
+    let key = file_icon_path_cache_key(path, path.is_dir(), None, true, cache_icon_size);
     let resolved = renderer
         .icon_renderer
         .resolver
@@ -733,11 +734,57 @@ fn ready_drag_thumbnail(
     if !thumbnail_request_may_have_preview(&path, entry.mime_type.as_deref()) {
         return None;
     }
-    let key = IconRasterCacheKey::thumbnail(path, size_px, modified_secs);
-    if let Some(raster) = raster_cache.get(&key) {
+    // Prefer the exact live-view size, then any ready neighboring size so the
+    // outgoing drag surface still shows the item's thumbnail (Dolphin reads
+    // model "iconPixmap", which already holds the preview when available).
+    let exact = IconRasterCacheKey::thumbnail(path.clone(), size_px, modified_secs);
+    if let Some(raster) = raster_cache.get(&exact) {
         return Some(raster);
     }
     thumbnails.drain_results();
+    if let Some(entry) = thumbnails.ready.get_mut(&exact) {
+        thumbnails.ready_frame = thumbnails.ready_frame.wrapping_add(1);
+        entry.last_used_frame = thumbnails.ready_frame;
+        return Some(raster_cache.insert(exact, entry.raster.clone()));
+    }
+    if let Some(raster) = closest_ready_thumbnail(raster_cache, &path, modified_secs, size_px) {
+        return Some(raster);
+    }
+    closest_ready_thumbnail_from_resolver(thumbnails, raster_cache, &path, modified_secs, size_px)
+}
+
+fn closest_ready_thumbnail(
+    raster_cache: &mut crate::IconRasterCache,
+    path: &Path,
+    modified_secs: u64,
+    size_px: u16,
+) -> Option<IconRaster> {
+    let key = raster_cache
+        .entries
+        .keys()
+        .filter(|key| {
+            key.stamp == Some(modified_secs)
+                && key.path == path
+                && key.style == IconRasterStyle::Original
+        })
+        .min_by_key(|key| key.size_px.abs_diff(size_px))
+        .cloned()?;
+    raster_cache.get(&key)
+}
+
+fn closest_ready_thumbnail_from_resolver(
+    thumbnails: &mut crate::ThumbnailRasterResolver,
+    raster_cache: &mut crate::IconRasterCache,
+    path: &Path,
+    modified_secs: u64,
+    size_px: u16,
+) -> Option<IconRaster> {
+    let key = thumbnails
+        .ready
+        .keys()
+        .filter(|key| key.stamp == Some(modified_secs) && key.path == path)
+        .min_by_key(|key| key.size_px.abs_diff(size_px))
+        .cloned()?;
     let entry = thumbnails.ready.get_mut(&key)?;
     thumbnails.ready_frame = thumbnails.ready_frame.wrapping_add(1);
     entry.last_used_frame = thumbnails.ready_frame;
@@ -887,12 +934,14 @@ fn outgoing_dnd_drag_icon(
     let pixels =
         outgoing_dnd_preview_pixels_with_label(paths, metrics, rasters, label, label_color);
     let icon = RgbaIcon::new(pixels, metrics.canvas_width, metrics.canvas_height).ok()?;
-    let buffer_scale = metrics.buffer_scale;
+    // Runtime `DndIcon` offset is logical surface coords relative to the drag
+    // hotspot (wayland-client-runtime::dnd). Metrics store that as
+    // `hotspot_logical_*` (scene hotspot / ui_scale).
     Some(DragIcon {
         icon,
-        buffer_scale,
-        offset_x: -(metrics.hotspot_x / buffer_scale),
-        offset_y: -(metrics.hotspot_y / buffer_scale),
+        buffer_scale: metrics.buffer_scale,
+        offset_x: -metrics.hotspot_logical_x,
+        offset_y: -metrics.hotspot_logical_y,
     })
 }
 

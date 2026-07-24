@@ -476,7 +476,9 @@
             },
             size,
         ));
-        assert!(scene.set_pointer(end, size));
+        // Sub-threshold motion tracks the press but does not activate a drag
+        // and need not dirty the window (no in-window drag overlay).
+        let _ = scene.set_pointer(end, size);
         assert!(!scene.internal_drag.as_ref().is_some_and(|drag| drag.active));
         assert!(!scene.end_pane_pointer(end, size));
         assert!(scene.pending_drop_request.is_none());

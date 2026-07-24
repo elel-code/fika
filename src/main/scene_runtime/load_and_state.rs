@@ -185,16 +185,6 @@ impl ShellScene {
         Ok(true)
     }
 
-    #[cfg(test)]
-    fn load_path_for_pane(
-        &mut self,
-        pane: ShellPaneId,
-        path: PathBuf,
-        size: PhysicalSize<u32>,
-    ) -> Result<bool, String> {
-        self.load_path_in_pane(self.normalized_pane_id(pane), path, size, true)
-    }
-
     fn reload_current_path(&mut self, size: PhysicalSize<u32>) -> Result<bool, String> {
         self.reload_pane_path(self.active_pane(), size)
     }

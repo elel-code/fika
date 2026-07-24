@@ -251,7 +251,9 @@
     }
 
     #[test]
-    fn render_dirty_key_tracks_internal_drag_preview_state() {
+    fn render_dirty_key_ignores_internal_drag_pointer_motion() {
+        // Wayland owns the DnD icon; pointer motion during an active internal
+        // drag must not dirty the window surface by itself.
         let mut scene = test_scene(vec![test_entry("alpha.txt", false)], ShellViewMode::Icons);
         let size = PhysicalSize::new(700, 320);
         scene.internal_drag = Some(ShellInternalDrag {
@@ -274,7 +276,7 @@
         let moved = ShellRenderDirtyKey::from_scene(&scene, size);
         let moved_hoverless = ShellRenderDirtyKey::from_scene_ignoring_hover(&scene, size);
 
-        assert_ne!(initial, moved);
+        assert_eq!(initial, moved);
         assert_eq!(initial_hoverless, moved_hoverless);
     }
 

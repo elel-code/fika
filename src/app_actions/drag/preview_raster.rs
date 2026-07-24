@@ -15,15 +15,25 @@ const DND_FALLBACK_LABEL_HEIGHT: f32 = 24.0;
 struct OutgoingDndPreviewMetrics {
     canvas_width: u32,
     canvas_height: u32,
+    /// Physical pixel size used when painting the drag surface.
     icon_size: u32,
+    /// Scene/logical icon size used for thumbnail and theme-icon cache keys.
+    /// Matches the live item view so ready thumbnails are reused (Dolphin's
+    /// `iconPixmap` path) instead of falling back to a MIME icon.
+    cache_icon_size: f32,
     buffer_scale: i32,
     icon_rect: PixelRect,
     label_rect: Option<PixelRect>,
     background_rect: Option<PixelRect>,
     background_radius: i32,
     label_style: Option<DragPreviewLabelStyle>,
+    /// Hotspot in buffer pixels (for debugging / scale checks).
     hotspot_x: i32,
     hotspot_y: i32,
+    /// Drag-icon offset in logical surface coordinates (negated hotspot).
+    /// Matches `wayland-client-runtime::DndIcon` / `wl_surface.offset`.
+    hotspot_logical_x: i32,
+    hotspot_logical_y: i32,
     kind: OutgoingDndPreviewKind,
     background_color: [u8; 4],
 }
@@ -81,18 +91,31 @@ fn outgoing_dnd_preview_metrics_for_layout(
         .label
         .map(|label| map_preview_rect(label.rect, factor));
     let background_rect = Some(map_preview_rect(layout.background, factor));
+    // Pane items: Dolphin `setHotSpot((pixmap.width()/dpr)/2, 0)` after the
+    // final pixmap exists. Places: Qt `QAbstractItemView` press-relative hotspot
+    // (`pressedPosition - rect.topLeft()`), converted to surface-local units.
+    let (hotspot_x, hotspot_y, hotspot_logical_x, hotspot_logical_y) =
+        if layout.view_mode.is_some() {
+            dolphin_pane_hotspot(canvas_width, buffer_scale)
+        } else {
+            places_press_hotspot(layout.hotspot, logical_scale, buffer_scale)
+        };
     OutgoingDndPreviewMetrics {
         canvas_width,
         canvas_height,
         icon_size: icon_rect.width.max(icon_rect.height) as u32,
+        // Layout icon size is already in scene units (same as the live item).
+        cache_icon_size: layout.icon.width.max(layout.icon.height).clamp(16.0, 256.0),
         buffer_scale,
         icon_rect,
         label_rect,
         background_rect,
         background_radius: (layout.radius * factor).round() as i32,
         label_style: layout.label.map(|label| label.style),
-        hotspot_x: (layout.hotspot.x * factor).floor() as i32,
-        hotspot_y: (layout.hotspot.y * factor).floor() as i32,
+        hotspot_x,
+        hotspot_y,
+        hotspot_logical_x,
+        hotspot_logical_y,
         kind: OutgoingDndPreviewKind::DolphinItem,
         background_color: [0, 0, 0, 0],
     }
@@ -114,18 +137,25 @@ fn outgoing_dnd_preview_metrics_for_multi_layout(
         .map(|cell| map_preview_rect(cell, factor))
         .unwrap_or_else(|| PixelRect::new(0, 0, buffer_scale, buffer_scale));
     let stride = ((layout.icon_size + layout.gap) * factor).round().max(1.0) as i32;
+    // Multi-item path also uses Dolphin top-centre on the final grid pixmap.
+    let (hotspot_x, hotspot_y, hotspot_logical_x, hotspot_logical_y) =
+        dolphin_pane_hotspot(canvas_width, buffer_scale);
     OutgoingDndPreviewMetrics {
         canvas_width,
         canvas_height,
         icon_size: icon_rect.width.max(icon_rect.height) as u32,
+        // Multi-item grid keeps Dolphin's fixed logical cell size for cache keys.
+        cache_icon_size: layout.icon_size.clamp(16.0, 256.0),
         buffer_scale,
         icon_rect,
         label_rect: None,
         background_rect: None,
         background_radius: 0,
         label_style: None,
-        hotspot_x: (layout.hotspot.x * factor).floor() as i32,
-        hotspot_y: (layout.hotspot.y * factor).floor() as i32,
+        hotspot_x,
+        hotspot_y,
+        hotspot_logical_x,
+        hotspot_logical_y,
         kind: OutgoingDndPreviewKind::DolphinGrid {
             columns: layout.columns,
             item_count: layout.item_count,
@@ -133,6 +163,39 @@ fn outgoing_dnd_preview_metrics_for_multi_layout(
         },
         background_color: [0, 0, 0, 0],
     }
+}
+
+/// Dolphin `KItemListController::startDragging`:
+/// `hotSpot = QPoint((pixmap.width() / dpr) / 2, 0)`.
+///
+/// `pixmap.width` is buffer pixels; `dpr` is the pixmap device pixel ratio
+/// (`buffer_scale` here). Result is surface-local logical coords; Qt Wayland
+/// then applies `addAttachOffset(-hotSpot)`.
+fn dolphin_pane_hotspot(canvas_width: u32, buffer_scale: i32) -> (i32, i32, i32, i32) {
+    let scale = buffer_scale.max(1);
+    let logical_width = canvas_width as i32 / scale;
+    let hotspot_logical_x = logical_width / 2;
+    let hotspot_x = hotspot_logical_x * scale;
+    (hotspot_x, 0, hotspot_logical_x, 0)
+}
+
+/// Places / `QAbstractItemView::startDrag`:
+/// `setHotSpot(pressedPosition - rect.topLeft())` in widget (logical) pixels.
+///
+/// Our place row layout is in scene/window-physical units, so convert with
+/// `ui_scale` into surface-local logical coords for `wl_surface.offset`.
+fn places_press_hotspot(
+    hotspot: fika_core::ViewPoint,
+    logical_scale: f32,
+    buffer_scale: i32,
+) -> (i32, i32, i32, i32) {
+    let scale = buffer_scale.max(1) as f32;
+    let factor = scale / logical_scale.max(1.0);
+    let hotspot_logical_x = (hotspot.x / logical_scale.max(1.0)).round() as i32;
+    let hotspot_logical_y = (hotspot.y / logical_scale.max(1.0)).round() as i32;
+    let hotspot_x = (hotspot.x * factor).round() as i32;
+    let hotspot_y = (hotspot.y * factor).round() as i32;
+    (hotspot_x, hotspot_y, hotspot_logical_x, hotspot_logical_y)
 }
 
 fn map_preview_rect(rect: fika_core::ViewRect, factor: f32) -> PixelRect {
@@ -163,7 +226,12 @@ fn outgoing_dnd_fallback_preview_metrics(scale: f32) -> OutgoingDndPreviewMetric
         metrics.buffer_scale,
     );
     metrics.label_style = Some(DragPreviewLabelStyle::PlainSingleLine);
-    metrics.hotspot_x = metrics.canvas_width as i32 / 2;
+    let (hotspot_x, hotspot_y, hotspot_logical_x, hotspot_logical_y) =
+        dolphin_pane_hotspot(metrics.canvas_width, metrics.buffer_scale);
+    metrics.hotspot_x = hotspot_x;
+    metrics.hotspot_y = hotspot_y;
+    metrics.hotspot_logical_x = hotspot_logical_x;
+    metrics.hotspot_logical_y = hotspot_logical_y;
     metrics
 }
 
@@ -173,10 +241,13 @@ fn outgoing_dnd_preview_metrics(icon_size: u32, scale: f32) -> OutgoingDndPrevie
     let logical_icon_size = (icon_size as f32 / logical_scale).clamp(16.0, 256.0);
     let icon_size = scaled_preview_dimension(logical_icon_size, buffer_scale);
     let canvas_width = align_preview_dimension(icon_size, buffer_scale);
+    let (hotspot_x, hotspot_y, hotspot_logical_x, hotspot_logical_y) =
+        dolphin_pane_hotspot(canvas_width, buffer_scale);
     OutgoingDndPreviewMetrics {
         canvas_width,
         canvas_height: canvas_width,
         icon_size,
+        cache_icon_size: logical_icon_size,
         buffer_scale,
         icon_rect: PixelRect::new(
             0,
@@ -188,8 +259,10 @@ fn outgoing_dnd_preview_metrics(icon_size: u32, scale: f32) -> OutgoingDndPrevie
         background_rect: None,
         background_radius: 0,
         label_style: None,
-        hotspot_x: canvas_width as i32 / 2,
-        hotspot_y: 0,
+        hotspot_x,
+        hotspot_y,
+        hotspot_logical_x,
+        hotspot_logical_y,
         kind: OutgoingDndPreviewKind::DolphinItem,
         background_color: [0, 0, 0, 0],
     }

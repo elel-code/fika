@@ -32,7 +32,6 @@ pub(crate) struct ShellRenderDamageSnapshot {
     pub(super) places_scroll_y: f32,
     pub(crate) context_menu: Option<ContextMenuDamageState>,
     pub(crate) drop_menu: Option<DropMenuDamageState>,
-    pub(crate) drag_preview_rect: Option<ViewRect>,
     pub(crate) rubber_band_rect: Option<ViewRect>,
     pub(crate) location_draft_rect: Option<ViewRect>,
     pub(crate) task_area_rect: Option<ViewRect>,
@@ -123,7 +122,6 @@ impl ShellRenderDamageSnapshot {
             .drop_menu
             .as_ref()
             .map(|menu| drop_menu_damage_state(menu, size, scene.ui_scale()));
-        let drag_preview_rect = drag_preview_damage_rect(scene, size);
         let rubber_band_rect = rubber_band_damage_rect(scene, size, projections);
         let location_draft_rect = scene
             .location_draft_pane()
@@ -154,7 +152,6 @@ impl ShellRenderDamageSnapshot {
             places_scroll_y: scene.places_scroll_y,
             context_menu,
             drop_menu,
-            drag_preview_rect,
             rubber_band_rect,
             location_draft_rect,
             task_area_rect,
@@ -319,10 +316,6 @@ fn drop_menu_damage_state(
         overlay_rect,
         row_rects,
     }
-}
-
-fn drag_preview_damage_rect(scene: &ShellScene, size: PhysicalSize<u32>) -> Option<ViewRect> {
-    crate::shell::drag_preview::drag_preview_damage_rect(scene, size)
 }
 
 fn rubber_band_damage_rect(

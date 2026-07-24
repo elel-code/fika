@@ -494,14 +494,19 @@ impl ShellScene {
     }
 
     fn update_internal_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {
-        let drag_changed = {
+        let activation_changed = {
             let Some(drag) = self.internal_drag.as_mut() else {
                 return false;
             };
-            drag.update(point)
+            // Track pointer for the activation threshold and drop hit tests.
+            // The compositor paints the Wayland DnD icon, so pointer motion
+            // after activation must not dirty the window by itself.
+            let was_active = drag.active;
+            let _ = drag.update(point);
+            drag.active != was_active
         };
         if !self.internal_drag.as_ref().is_some_and(|drag| drag.active) {
-            return drag_changed;
+            return activation_changed;
         }
         let hover_cleared = if self
             .internal_drag
@@ -524,7 +529,7 @@ impl ShellScene {
             false
         };
         let hover_changed = self.update_dnd_hover_target(point, size);
-        drag_changed || hover_cleared || hover_changed
+        activation_changed || hover_cleared || hover_changed
     }
 
     fn finish_internal_drag(&mut self, point: ViewPoint, size: PhysicalSize<u32>) -> bool {

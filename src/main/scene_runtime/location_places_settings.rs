@@ -390,12 +390,6 @@ impl ShellScene {
         true
     }
 
-    #[cfg(test)]
-    fn context_target_split_pane_path(&self) -> Option<PathBuf> {
-        self.context_target_split_pane_request()
-            .map(|(path, _pane)| path)
-    }
-
     fn context_target_split_pane_request(&self) -> Option<(PathBuf, ShellPaneId)> {
         match self.context_target.as_ref()? {
             ShellContextTarget::Item {

@@ -55,6 +55,7 @@ fn outgoing_preview_metrics_follow_item_icon_size() {
     let metrics = outgoing_dnd_preview_metrics(64, 1.0);
 
     assert_eq!(metrics.icon_size, 64);
+    assert_eq!(metrics.cache_icon_size, 64.0);
     assert_eq!(metrics.icon_rect, PixelRect::new(0, 0, 64, 64));
     assert_eq!(metrics.canvas_width, 64);
 }
@@ -72,8 +73,28 @@ fn outgoing_preview_layout_preserves_scaled_source_size() {
     let metrics = outgoing_dnd_preview_metrics_for_layout(layout, 2.0);
 
     assert_eq!(metrics.icon_size, 44);
+    // Scene-space icon size is what thumbnail/theme caches key on.
+    assert_eq!(metrics.cache_icon_size, 44.0);
     assert_eq!(metrics.canvas_width, 424);
     assert_eq!(metrics.canvas_height, 60);
+}
+
+#[test]
+fn outgoing_preview_cache_size_stays_scene_space_under_fractional_scale() {
+    let layout = crate::shell::drag_preview_layout::pane_single_drag_preview_layout(
+        crate::shell::options::ShellViewMode::Icons,
+        None,
+        96.0,
+        80.0,
+        20.0,
+        1.5,
+        None,
+    );
+    let metrics = outgoing_dnd_preview_metrics_for_layout(layout, 1.5);
+
+    // Physical paint size grows with buffer scale; cache key stays scene-sized.
+    assert!(metrics.icon_size >= 96);
+    assert_eq!(metrics.cache_icon_size, 96.0);
 }
 
 #[test]
